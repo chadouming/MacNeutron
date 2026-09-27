@@ -27,7 +27,7 @@ struct MenuContent: View {
             Button("Finish setup…") { show("setup", with: openWindow) }
         }
         Button("Games…") {
-            model.refresh()
+            Task { await model.refresh() }
             show("games", with: openWindow)
         }
         Button("Open Steam") { try? model.mode.process.launch() }

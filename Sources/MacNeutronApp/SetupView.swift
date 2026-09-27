@@ -63,7 +63,7 @@ struct SetupView: View {
             if case .success(let dmg) = result { Task { await model.importGPTK(from: dmg) } }
         }
         .onAppear {
-            model.refresh()
+            Task { await model.refresh() }
             raiseWindows()  // a menu-bar app isn't active on its own, so the window would open behind everything
         }
     }

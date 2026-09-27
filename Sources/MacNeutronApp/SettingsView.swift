@@ -1,4 +1,5 @@
 import MacNeutronCore
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -9,6 +10,12 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Toggle("Open MacNeutron at login", isOn: Binding(get: { model.launchesAtLogin }, set: { model.setLaunchAtLogin($0) }))
+            if model.loginItemStatus == .requiresApproval {
+                LabeledContent("Allow MacNeutron under Login Items in System Settings") {
+                    Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                }
+                .foregroundStyle(.orange)
+            }
             LabeledContent("Runtime") {
                 Button("Repair runtime") { Task { await model.installRuntime() } }
             }
@@ -56,7 +63,8 @@ struct CleanupView: View {
             HStack {
                 Spacer()
                 Button("Delete selected", role: .destructive) {
-                    model.cleanUp(model.orphans.filter { selected.contains($0.appID) })
+                    let chosen = model.orphans.filter { selected.contains($0.appID) }
+                    Task { await model.cleanUp(chosen) }
                     selected.removeAll()
                 }
                 .disabled(selected.isEmpty)

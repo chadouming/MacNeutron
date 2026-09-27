@@ -15,6 +15,26 @@ struct GameRow: Identifiable, Equatable {
     var runsWithMacNeutron: Bool { !app.oslist.contains("macos") || (isDualPlatform && settings.runAs == .windows) }
 }
 
+/// The app's login item; a seam so tests don't register the real app with macOS.
+struct LoginItem: Sendable {
+    var status: @Sendable () -> SMAppService.Status = { SMAppService.mainApp.status }
+    var register: @Sendable () throws -> Void = { try SMAppService.mainApp.register() }
+    var unregister: @Sendable () throws -> Void = { try SMAppService.mainApp.unregister() }
+}
+
+/// Everything `refresh()` reads from disk, built off the main thread (parsing the app list and sizing
+/// leftover prefixes can take a while; checking Steam spawns a process).
+struct Snapshot: Sendable {
+    var runtimeVersion: String?
+    var gptkVersion: String?
+    var apps: [AppInfo]
+    var appInfoError: String?
+    var installed: Set<UInt32>
+    var settings: [String: GameSettings]
+    var orphans: [OrphanPrefix]
+    var status: SteamPlayStatus
+}
+
 /// Everything the menu, setup, games and settings views show, and every action they take.
 @Observable @MainActor
 final class AppModel {
@@ -22,6 +42,7 @@ final class AppModel {
     let layout: ToolLayout
     let mode: SteamPlayMode
     let store: GameSettingsStore
+    let loginItem: LoginItem
 
     private(set) var runtimeVersion: String?
     private(set) var gptkVersion: String?
@@ -29,6 +50,7 @@ final class AppModel {
     private(set) var games: [GameRow] = []
     private(set) var orphans: [OrphanPrefix] = []
     private(set) var appInfoError: String?
+    private(set) var loginItemStatus: SMAppService.Status = .notRegistered
     var busy: String?
     var errorMessage: String?
 
@@ -37,14 +59,16 @@ final class AppModel {
     private var pollTask: Task<Void, Never>?
 
     init(steam: SteamLocation = SteamLocation(), layout: ToolLayout = ToolLayout(root: ToolLayout.defaultRoot),
-         mode: SteamPlayMode = SteamPlayMode(), store: GameSettingsStore = GameSettingsStore()) {
+         mode: SteamPlayMode = SteamPlayMode(), store: GameSettingsStore = GameSettingsStore(),
+         loginItem: LoginItem = LoginItem()) {
         self.steam = steam
         self.layout = layout
         self.mode = mode
         self.store = store
+        self.loginItem = loginItem
         // Keep the passthrough script current across app updates (it's only rewritten here and on enable).
         if mode.isWanted { try? mode.installNativeTool() }
-        refresh()
+        Task { await refresh() }
         startWatchingSteam()
     }
 
@@ -60,23 +84,36 @@ final class AppModel {
             ? bundled : executable.deletingLastPathComponent().appending(path: "macneutron")
     }
 
-    func refresh() {
-        runtimeVersion = layout.runtimeVersion
-        gptkVersion = layout.gptkVersion
-        do {
-            apps = try AppInfoReader.read(steam.appInfo)
-            appInfoError = nil
-        } catch {
-            // Keep the last good list: an empty one would plan away every Mac game's protection.
-            appInfoError = "\(error)"
-        }
-        let installed = steam.installedAppIDs()
-        let settings = store.all()
-        games = apps.filter { MappingPlanner.mappableTypes.contains($0.type) && !$0.oslist.isDisjoint(with: ["windows", "macos"]) }
-            .map { GameRow(app: $0, installed: installed.contains($0.appID), settings: settings[String($0.appID)] ?? GameSettings()) }
+    func refresh() async {
+        let (steam, layout, store, mode, fallback) = (self.steam, self.layout, self.store, self.mode, apps)
+        let snapshot = await Task.detached {
+            Self.loadSnapshot(steam: steam, layout: layout, store: store, mode: mode, fallbackApps: fallback)
+        }.value
+        runtimeVersion = snapshot.runtimeVersion
+        gptkVersion = snapshot.gptkVersion
+        apps = snapshot.apps
+        appInfoError = snapshot.appInfoError
+        games = snapshot.apps
+            .filter { MappingPlanner.mappableTypes.contains($0.type) && !$0.oslist.isDisjoint(with: ["windows", "macos"]) }
+            .map { GameRow(app: $0, installed: snapshot.installed.contains($0.appID),
+                           settings: snapshot.settings[String($0.appID)] ?? GameSettings()) }
             .sorted { ($0.installed ? 0 : 1, $0.name.lowercased()) < ($1.installed ? 0 : 1, $1.name.lowercased()) }
-        orphans = OrphanPrefixes.find(in: steam)
-        status = mode.status(plan: plan())
+        orphans = snapshot.orphans
+        status = snapshot.status
+        loginItemStatus = loginItem.status()
+    }
+
+    /// Reads everything from disk. On an unreadable app list it keeps `fallbackApps`: an empty list
+    /// would plan away every Mac game's protection.
+    nonisolated static func loadSnapshot(steam: SteamLocation, layout: ToolLayout, store: GameSettingsStore,
+                                         mode: SteamPlayMode, fallbackApps: [AppInfo]) -> Snapshot {
+        var apps = fallbackApps
+        var appInfoError: String?
+        do { apps = try AppInfoReader.read(steam.appInfo) } catch { appInfoError = "\(error)" }
+        let plan = MappingPlanner.plan(apps: apps, runAs: store.runAsOverrides())
+        return Snapshot(runtimeVersion: layout.runtimeVersion, gptkVersion: layout.gptkVersion, apps: apps,
+                        appInfoError: appInfoError, installed: steam.installedAppIDs(), settings: store.all(),
+                        orphans: OrphanPrefixes.find(in: steam), status: mode.status(plan: plan))
     }
 
     func plan() -> [String: ToolMapping] {
@@ -108,7 +145,7 @@ final class AppModel {
         await run("Turning on Steam Play mode and restarting Steam…") { [mode] in
             // Steam rewrites its app list on exit, so plan only after it has quit.
             try await mode.process.quit(timeout: .seconds(30))
-            self.refresh()
+            await self.refresh()
             if let error = self.appInfoError { throw AppInfoUnreadable(detail: error) }
             try await mode.enable(plan: self.plan())
         }
@@ -126,7 +163,7 @@ final class AppModel {
         }
         await run("Restarting Steam…") { [mode] in
             try await mode.process.quit(timeout: .seconds(30))
-            self.refresh()
+            await self.refresh()
             if self.appInfoError == nil { try mode.sync(plan: self.plan()) }
             try mode.process.launch()
         }
@@ -134,7 +171,9 @@ final class AppModel {
 
     // MARK: Games
 
-    func update(_ appID: UInt32, _ change: (inout GameSettings) -> Void) {
+    /// Saves a game's settings. A "Runs as" change is written to Steam right away when Steam is closed;
+    /// otherwise it waits for a restart ("restart needed").
+    func update(_ appID: UInt32, _ change: (inout GameSettings) -> Void) async {
         guard let index = games.firstIndex(where: { $0.id == appID }) else { return }
         change(&games[index].settings)
         do {
@@ -142,24 +181,35 @@ final class AppModel {
         } catch {
             errorMessage = "Couldn't save settings for \(games[index].name): \(error.localizedDescription)"
         }
-        status = mode.status(plan: plan())
+        let (mode, plan, readable) = (self.mode, plan(), appInfoError == nil)
+        let result = await Task.detached { () -> (SteamPlayStatus, String?) in
+            var failure: String?
+            if readable, !mode.process.isRunning() {
+                do { try mode.sync(plan: plan) } catch { failure = "\(error)" }
+            }
+            return (mode.status(plan: plan), failure)
+        }.value
+        status = result.0
+        if let failure = result.1 { errorMessage = failure }
     }
 
-    func cleanUp(_ selected: [OrphanPrefix]) {
+    func cleanUp(_ selected: [OrphanPrefix]) async {
         do { try OrphanPrefixes.delete(selected) } catch { errorMessage = error.localizedDescription }
-        orphans = OrphanPrefixes.find(in: steam)
+        await refresh()
     }
 
     // MARK: Settings
 
-    var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }
+    /// On, or waiting for the user's approval in System Settings.
+    var launchesAtLogin: Bool { loginItemStatus == .enabled || loginItemStatus == .requiresApproval }
 
     func setLaunchAtLogin(_ on: Bool) {
         do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            if on { try loginItem.register() } else { try loginItem.unregister() }
         } catch {
             errorMessage = "Couldn't change the login item: \(error.localizedDescription)"
         }
+        loginItemStatus = loginItem.status()
     }
 
     // MARK: Plumbing
@@ -170,28 +220,31 @@ final class AppModel {
         errorMessage = nil
         do { try await work() } catch { errorMessage = "\(error)" }
         busy = nil
-        refresh()
+        await refresh()
     }
 
     /// Every 3 s: when Steam quits, bring its mappings up to date; 20 s after it starts, re-check the files.
     /// Once a minute, re-read Steam's app list so games bought meanwhile show up as "restart needed".
+    /// The Steam check and the disk reads run off the main thread.
     private func startWatchingSteam() {
         pollTask = Task { [weak self] in
             var ticks = 0
             while !Task.isCancelled {
                 ticks += 1
-                if ticks % 20 == 0, self?.busy == nil { self?.refresh() }
                 guard let self else { return }
-                switch self.watcher.observe(running: self.mode.process.isRunning()) {
+                if ticks % 20 == 0, self.busy == nil { await self.refresh() }
+                let mode = self.mode
+                let running = await Task.detached { mode.process.isRunning() }.value
+                switch self.watcher.observe(running: running) {
                 case .quit?:
-                    self.refresh()  // Steam rewrites its app list on exit
+                    await self.refresh()  // Steam rewrites its app list on exit
                     if self.busy == nil, self.appInfoError == nil {
                         do { try self.mode.sync(plan: self.plan()) } catch { self.errorMessage = "\(error)" }
+                        await self.refresh()
                     }
-                    self.status = self.mode.status(plan: self.plan())
                 case .launched?:
                     try? await Task.sleep(for: .seconds(20))
-                    self.refresh()
+                    await self.refresh()
                 case nil:
                     break
                 }

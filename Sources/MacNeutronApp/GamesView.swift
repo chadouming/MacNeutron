@@ -23,7 +23,7 @@ struct GamesView: View {
                     if row.isDualPlatform {
                         Picker("", selection: Binding(
                             get: { row.settings.runAs ?? .mac },
-                            set: { value in model.update(row.id) { $0.runAs = value == .mac ? nil : value } })) {
+                            set: { value in Task { await model.update(row.id) { $0.runAs = value == .mac ? nil : value } } })) {
                             Text("Mac version").tag(RunAs.mac)
                             Text("Windows version").tag(RunAs.windows)
                         }
@@ -36,7 +36,7 @@ struct GamesView: View {
                     if row.runsWithMacNeutron {
                         Picker("", selection: Binding(
                             get: { row.settings.graphics ?? "" },
-                            set: { value in model.update(row.id) { $0.graphics = value.isEmpty ? nil : value } })) {
+                            set: { value in Task { await model.update(row.id) { $0.graphics = value.isEmpty ? nil : value } } })) {
                             Text("Default (\(model.gptkVersion == nil ? "DXMT" : "D3DMetal"))").tag("")
                             Text("D3DMetal").tag("d3dmetal")
                             Text("DXMT").tag("dxmt")
@@ -87,6 +87,6 @@ struct GamesView: View {
 
     private func binding(_ row: GameRow, _ key: WritableKeyPath<GameSettings, Bool?>, default value: Bool) -> Binding<Bool> {
         Binding(get: { row.settings[keyPath: key] ?? value },
-                set: { newValue in model.update(row.id) { $0[keyPath: key] = newValue == value ? nil : newValue } })
+                set: { newValue in Task { await model.update(row.id) { $0[keyPath: key] = newValue == value ? nil : newValue } } })
     }
 }
