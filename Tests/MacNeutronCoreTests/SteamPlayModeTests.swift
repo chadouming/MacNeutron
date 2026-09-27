@@ -192,3 +192,13 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     #expect(failingFake.launchesWithIntent == [true, false])
     #expect(!failing.isWanted)
 }
+
+@Test func appsMappedToAnotherToolDontCountAsPending() async throws {
+    // The fixture maps 440 to proton_9; a plan that also wants 440 must neither replace it nor stay "pending".
+    let (mode, _) = try makeMode()
+    var plan = samplePlan
+    plan["440"] = ToolMapping(tool: "macneutron", priority: 250)
+    try await mode.enable(plan: plan)
+    #expect(try String(contentsOf: mode.steam.configVDF, encoding: .utf8).contains("\"proton_9\""))
+    #expect(mode.status(plan: plan) == .on)
+}

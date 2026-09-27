@@ -16,3 +16,10 @@ import Testing
     #expect(OrphanPrefixes.find(in: steam).isEmpty)
     #expect(FileManager.default.fileExists(atPath: compatdata.appending(path: "1062090").path(percentEncoded: false)))
 }
+
+@Test func nonSteamShortcutsAreNeverListed() throws {
+    // Shortcut IDs have the high bit set and never get an appmanifest; their prefix holds real games and saves.
+    let (steam, _) = try makeFakeSteam()
+    try write("save", to: steam.root.appending(path: "steamapps/compatdata/3141592653/pfx/drive_c/save.dat"))
+    #expect(OrphanPrefixes.find(in: steam).isEmpty)
+}

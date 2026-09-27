@@ -53,13 +53,23 @@ public enum MappingPlanner {
         return result
     }
 
-    /// The new `CompatToolMapping` block: other tools' entries kept, ours replaced by `plan`,
-    /// sorted by app ID for a stable file.
+    /// App IDs mapped to a tool other than MacNeutron's: the user's explicit choice, left alone (spec §5).
+    public static func claimedByOtherTools(in mappingBlock: [KVNode]) -> Set<String> {
+        Set(mappingBlock.compactMap { entry in
+            let tool = entry.children.node(at: ["name"])?.stringValue ?? ""
+            return tool.isEmpty || isOurs(tool) ? nil : KeyValues.unescape(entry.key)
+        })
+    }
+
+    /// The new `CompatToolMapping` block: other tools' entries kept untouched, ours replaced by `plan`
+    /// (except for apps another tool claims), sorted by app ID for a stable file.
     public static func merged(_ mappingBlock: [KVNode], with plan: [String: ToolMapping]) -> [KVNode] {
+        let claimed = claimedByOtherTools(in: mappingBlock)
         let others = mappingBlock.filter { entry in
-            !isOurs(entry.children.node(at: ["name"])?.stringValue ?? "") && plan[KeyValues.unescape(entry.key)] == nil
+            let key = KeyValues.unescape(entry.key)
+            return claimed.contains(key) || (!isOurs(entry.children.node(at: ["name"])?.stringValue ?? "") && plan[key] == nil)
         }
-        let ours = plan.map { appID, mapping in
+        let ours = plan.filter { !claimed.contains($0.key) }.map { appID, mapping in
             KVNode.block(appID, [
                 .string("name", mapping.tool),
                 .string("config", ""),

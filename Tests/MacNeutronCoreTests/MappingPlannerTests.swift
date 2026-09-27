@@ -47,9 +47,10 @@ func routesByPlatform(oslist: Set<String>, tool: String) {
     #expect(merged.node(at: ["440", "name"])?.stringValue == "proton_9")
 }
 
-@Test func planWinsOverAnotherToolForTheSameApp() {
+@Test func anotherToolsEntryIsNeverReplaced() {
+    // Spec §5: entries naming another tool are the user's explicit choice and are left alone.
     let existing = [KVNode.block("20", [.string("name", "proton_9"), .string("priority", "250")])]
     let merged = MappingPlanner.merged(existing, with: ["20": ToolMapping(tool: "macneutron", priority: 250)])
     #expect(merged.count == 1)
-    #expect(merged.node(at: ["20", "name"])?.stringValue == "macneutron")
+    #expect(merged.node(at: ["20", "name"])?.stringValue == "proton_9")
 }

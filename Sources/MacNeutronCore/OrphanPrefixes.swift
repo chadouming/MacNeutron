@@ -15,7 +15,8 @@ public enum OrphanPrefixes {
             let compatdata = library.appending(path: "compatdata", directoryHint: .isDirectory)
             let names = (try? FileManager.default.contentsOfDirectory(atPath: compatdata.path(percentEncoded: false))) ?? []
             for name in names.sorted() {
-                guard let id = UInt32(name), id != 0, !installed.contains(id) else { continue }
+                // Non-Steam shortcuts (IDs with the high bit set) never have an appmanifest.
+                guard let id = UInt32(name), id != 0, id < 0x8000_0000, !installed.contains(id) else { continue }
                 let url = compatdata.appending(path: name, directoryHint: .isDirectory)
                 result.append(OrphanPrefix(appID: name, url: url, bytes: size(of: url)))
             }

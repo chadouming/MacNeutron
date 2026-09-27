@@ -76,7 +76,7 @@ Paths: `B = SteamLocation.bundleMacOS`; `T = ~/Library/Application Support/MacNe
 3. **Quit Steam** after asking the user, via `SteamProcess.quit()`. If the user declines, stop with nothing changed.
 4. **Back up** `config/config.vdf` to `~/Library/Application Support/MacNeutron/backups/config-<ISO8601>.vdf`, keeping the newest 10.
 5. **Write, in this order:**
-   1. install `T/macneutron-native` (`compatibilitytool.vdf`, `toolmanifest.vdf`, and `passthrough.sh` containing `shift; exec "$@"`);
+   1. install `T/macneutron-native`: `compatibilitytool.vdf`, `toolmanifest.vdf`, and `passthrough.sh`. The script resolves an `.app` target to its `CFBundleExecutable` and execs through `arch -arm64e -arm64 -x86_64`, because Steam starts tools preferring x86_64. The app rewrites it at every launch;
    2. symlink `B/compatibilitytools.d/macneutron` → `T/macneutron` and `B/compatibilitytools.d/macneutron-native` → `T/macneutron-native`;
    3. `applyMappings(plan)`;
    4. **`B/steam_dev.cfg` last**, containing `@sSteamCmdForcePlatformType linux`.
@@ -113,7 +113,7 @@ Inputs:
 
 - **Priorities:** per-app mappings use `250` and `"0"` uses `75`. Valve's own automatic mappings use 100, so explicit per-app entries always win.
 - **Why Windows-only apps get explicit entries** (not just `"0"`): Valve maps some appids to its Linux Protons at priority 100, which beats `"0"`.
-- **`applyMappings`** replaces only the entries whose tool name starts with `macneutron`. Any entry naming another tool is left alone.
+- **`applyMappings`** replaces only the entries whose tool name starts with `macneutron`. Any entry naming another tool is left alone. Apps claimed by another tool are also left out of "restart needed" counts. A game switched in Steam's own Compatibility dropdown to one of MacNeutron's tools is overwritten by the plan at the next sync; the Games window's "Runs as" is the supported control.
 
 ## 6. UI
 

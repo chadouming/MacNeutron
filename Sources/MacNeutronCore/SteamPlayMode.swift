@@ -131,8 +131,10 @@ public struct SteamPlayMode: Sendable {
     // MARK: Building blocks
 
     public func pendingChanges(plan: [String: ToolMapping]) throws -> Int {
-        let current = try currentMappings()
-        let keys = Set(current.keys).union(plan.keys)
+        let block = try readConfig().node(at: Self.mappingPath)?.children ?? []
+        let current = MappingPlanner.current(in: block)
+        let claimed = MappingPlanner.claimedByOtherTools(in: block)
+        let keys = Set(current.keys).union(plan.keys).subtracting(claimed)
         return keys.filter { current[$0] != plan[$0] }.count
     }
 
