@@ -17,17 +17,48 @@ public enum GPTKDiskImageError: Error, Equatable, CustomStringConvertible {
 /// image) read-only, runs `GPTKImporter`, then unmounts everything.
 public enum GPTKDiskImage {
     public static func importGPTK(from dmg: URL, into layout: ToolLayout) throws -> GPTKManifest {
-        let outer = try attach(dmg)
-        defer { detach(outer) }
+        let (outer, attachedOuter) = try mount(dmg)
+        defer { if attachedOuter { detach(outer) } }
         if GPTKImporter.locateLib(from: outer) != nil { return try GPTKImporter.importGPTK(from: outer, into: layout) }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: outer.path(percentEncoded: false))) ?? []
         guard let nested = names.first(where: { $0.hasPrefix("Evaluation environment") && $0.hasSuffix(".dmg") }) else {
             throw GPTKDiskImageError.noRedist
         }
-        let inner = try attach(outer.appending(path: nested))
-        defer { detach(inner) }
+        let (inner, attachedInner) = try mount(outer.appending(path: nested))
+        defer { if attachedInner { detach(inner) } }
         guard GPTKImporter.locateLib(from: inner) != nil else { throw GPTKDiskImageError.noRedist }
         return try GPTKImporter.importGPTK(from: inner, into: layout)
+    }
+
+    /// The image's existing mount point if it's already attached (e.g. opened in Finder), otherwise a new
+    /// read-only mount. Only mounts made here are detached afterwards.
+    static func mount(_ image: URL) throws -> (URL, attachedHere: Bool) {
+        if let existing = mountPoint(of: image) { return (existing, false) }
+        return (try attach(image), true)
+    }
+
+    static func mountPoint(of image: URL) -> URL? {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/hdiutil")
+        process.arguments = ["info", "-plist"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let wanted = image.resolvingSymlinksInPath().path(percentEncoded: false)
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let images = plist["images"] as? [[String: Any]] else { return nil }
+        for entry in images {
+            guard let path = entry["image-path"] as? String,
+                  URL(filePath: path).resolvingSymlinksInPath().path(percentEncoded: false) == wanted,
+                  let entities = entry["system-entities"] as? [[String: Any]],
+                  let mount = entities.compactMap({ $0["mount-point"] as? String }).first
+            else { continue }
+            return URL(filePath: mount, directoryHint: .isDirectory)
+        }
+        return nil
     }
 
     /// `hdiutil attach` with stdin closed, so a license prompt fails instead of being accepted for the user.

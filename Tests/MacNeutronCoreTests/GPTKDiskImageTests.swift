@@ -12,7 +12,8 @@ private func makeDMG(from folder: URL, named name: String, in dir: URL) throws -
     return dmg
 }
 
-@Test func importsFromTheNestedEvaluationImage() throws {
+/// Apple's layout: an outer .dmg holding "Evaluation environment….dmg", which holds redist/lib.
+private func makeGPTKImage() throws -> URL {
     let work = try makeTempDir()
     let inner = work.appending(path: "inner", directoryHint: .isDirectory)
     for file in GPTKImporter.requiredFiles where !file.hasSuffix(".framework") {
@@ -25,12 +26,22 @@ private func makeDMG(from folder: URL, named name: String, in dir: URL) throws -
     let outer = work.appending(path: "outer", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: outer, withIntermediateDirectories: true)
     _ = try makeDMG(from: inner, named: "Evaluation environment for Windows games 4.0 beta 2.dmg", in: outer)
-    let gptk = try makeDMG(from: outer, named: "Game_Porting_Toolkit.dmg", in: work)
+    return try makeDMG(from: outer, named: "Game_Porting_Toolkit.dmg", in: work)
+}
 
+@Test func importsFromTheNestedEvaluationImage() throws {
     let layout = try makeToolLayout()
-    let manifest = try GPTKDiskImage.importGPTK(from: gptk, into: layout)
+    let manifest = try GPTKDiskImage.importGPTK(from: try makeGPTKImage(), into: layout)
     #expect(manifest.version == "4.0b2")
     #expect(layout.gptkVersion == "4.0b2")
+}
+
+@Test func leavesAnImageTheUserAlreadyOpenedMounted() throws {
+    let gptk = try makeGPTKImage()
+    let userMount = try GPTKDiskImage.attach(gptk)  // as if opened in Finder
+    defer { GPTKDiskImage.detach(userMount) }
+    _ = try GPTKDiskImage.importGPTK(from: gptk, into: try makeToolLayout())
+    #expect(FileManager.default.fileExists(atPath: userMount.path(percentEncoded: false)))
 }
 
 @Test func rejectsImagesWithoutGPTK() throws {
