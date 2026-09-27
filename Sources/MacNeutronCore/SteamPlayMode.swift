@@ -5,6 +5,8 @@ public enum SteamPlayStatus: Equatable, Sendable {
     case on
     case restartNeeded(Int)
     case lost
+    /// Something MacNeutron needs can't be read; the message says what.
+    case problem(String)
 }
 
 /// Turns Steam Play mode on and off and keeps Steam's mappings current (spec §4).
@@ -71,8 +73,12 @@ public struct SteamPlayMode: Sendable {
            Self.verify(log: Self.lastSession(of: log)) != nil {
             return .lost
         }
-        let pending = (try? pendingChanges(plan: plan)) ?? 0
-        return pending > 0 ? .restartNeeded(pending) : .on
+        do {
+            let pending = try pendingChanges(plan: plan)
+            return pending > 0 ? .restartNeeded(pending) : .on
+        } catch {
+            return .problem("\(error)")
+        }
     }
 
     // MARK: Flows

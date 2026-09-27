@@ -238,3 +238,14 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     try await mode.enable(plan: samplePlan)
     #expect(mode.isWanted)
 }
+
+@Test func statusReportsAnUnreadableConfig() async throws {
+    let (mode, _) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    try write("\"InstallConfigStore\"\n{\n", to: mode.steam.configVDF)
+    guard case .problem(let message) = mode.status(plan: samplePlan) else {
+        Issue.record("expected .problem, got \(mode.status(plan: samplePlan))")
+        return
+    }
+    #expect(message.contains("couldn't be read"))
+}

@@ -213,6 +213,7 @@ extension SteamPlayStatus {
         case .on: "Steam Play mode on"
         case .restartNeeded(let count): "Restart Steam to apply \(count) \(count == 1 ? "change" : "changes")"
         case .lost: "Steam Play mode was turned off by a Steam update"
+        case .problem(let message): message
         }
     }
 
@@ -221,7 +222,7 @@ extension SteamPlayStatus {
         case .off: "atom"
         case .on: "atom"
         case .restartNeeded: "exclamationmark.circle"
-        case .lost: "exclamationmark.triangle"
+        case .lost, .problem: "exclamationmark.triangle"
         }
     }
 }
