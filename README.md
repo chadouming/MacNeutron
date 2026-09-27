@@ -15,7 +15,19 @@ make test    # unit tests
 make smoke   # real Wine; needs `brew install mingw-w64`
 ```
 
-## Install the runtime
+## The app
+
+```sh
+make app                    # build/MacNeutron.app, ad-hoc signed, with the CLI inside
+open build/MacNeutron.app
+```
+
+The first launch opens a setup window: install the runtime, optionally import Apple's Game
+Porting Toolkit (drop its `.dmg`), then turn on Steam Play mode. After that, MacNeutron lives
+in the menu bar. It keeps Steam's mappings current so your Mac games stay native, and its
+Games window sets the graphics backend and options per game.
+
+## Install the runtime from the command line
 
 ```sh
 .build/release/macneutron install-runtime                  # downloads the pinned Wine runtime (461 MB)
@@ -24,7 +36,9 @@ make smoke   # real Wine; needs `brew install mingw-w64`
 
 MacNeutron never ships Apple's files; `import-gptk` copies D3DMetal from the GPTK you downloaded.
 
-## Per-game options (Steam launch options)
+## Per-game options
+
+Use the app's Games window, or Steam launch options:
 
 Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell, so the Linux-style
 `VAR=value %command%` fails to launch.
