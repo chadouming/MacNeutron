@@ -58,6 +58,14 @@ struct GamesView: View {
                 }
                 .padding(10)
             }
+            if let error = model.errorMessage {
+                HStack {
+                    Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    Spacer()
+                    Button("Dismiss") { model.errorMessage = nil }
+                }
+                .padding(10)
+            }
             if case .restartNeeded = model.status {
                 HStack {
                     Text(model.status.menuTitle).foregroundStyle(.orange)

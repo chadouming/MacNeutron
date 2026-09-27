@@ -42,6 +42,8 @@ final class AppModel {
         self.layout = layout
         self.mode = mode
         self.store = store
+        // Keep the passthrough script current across app updates (it's only rewritten here and on enable).
+        if mode.isWanted { try? mode.installNativeTool() }
         refresh()
         startWatchingSteam()
     }
@@ -65,7 +67,7 @@ final class AppModel {
             apps = try AppInfoReader.read(steam.appInfo)
             appInfoError = nil
         } catch {
-            apps = []
+            // Keep the last good list: an empty one would plan away every Mac game's protection.
             appInfoError = "\(error)"
         }
         let installed = steam.installedAppIDs()
@@ -104,6 +106,10 @@ final class AppModel {
             return
         }
         await run("Turning on Steam Play mode and restarting Steam…") { [mode] in
+            // Steam rewrites its app list on exit, so plan only after it has quit.
+            try await mode.process.quit(timeout: .seconds(30))
+            self.refresh()
+            if let error = self.appInfoError { throw AppInfoUnreadable(detail: error) }
             try await mode.enable(plan: self.plan())
         }
     }
@@ -120,7 +126,8 @@ final class AppModel {
         }
         await run("Restarting Steam…") { [mode] in
             try await mode.process.quit(timeout: .seconds(30))
-            try mode.sync(plan: self.plan())
+            self.refresh()
+            if self.appInfoError == nil { try mode.sync(plan: self.plan()) }
             try mode.process.launch()
         }
     }
@@ -158,6 +165,7 @@ final class AppModel {
     // MARK: Plumbing
 
     private func run(_ message: String, _ work: @escaping () async throws -> Void) async {
+        guard busy == nil else { return }  // one Steam-changing action at a time
         busy = message
         errorMessage = nil
         do { try await work() } catch { errorMessage = "\(error)" }
@@ -176,8 +184,11 @@ final class AppModel {
                 guard let self else { return }
                 switch self.watcher.observe(running: self.mode.process.isRunning()) {
                 case .quit?:
-                    if self.busy == nil { _ = try? self.mode.sync(plan: self.plan()) }
-                    self.refresh()
+                    self.refresh()  // Steam rewrites its app list on exit
+                    if self.busy == nil, self.appInfoError == nil {
+                        do { try self.mode.sync(plan: self.plan()) } catch { self.errorMessage = "\(error)" }
+                    }
+                    self.status = self.mode.status(plan: self.plan())
                 case .launched?:
                     try? await Task.sleep(for: .seconds(20))
                     self.refresh()
@@ -188,6 +199,11 @@ final class AppModel {
             }
         }
     }
+}
+
+struct AppInfoUnreadable: Error, CustomStringConvertible {
+    let detail: String
+    var description: String { "MacNeutron can't read Steam's app list, so it can't protect your Mac games: \(detail)" }
 }
 
 extension SteamPlayStatus {

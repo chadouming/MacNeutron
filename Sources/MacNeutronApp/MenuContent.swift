@@ -10,6 +10,10 @@ struct MenuContent: View {
         Text(model.status.menuTitle)
         Text("Runtime \(model.runtimeVersion ?? "not installed") · D3DMetal \(model.gptkVersion ?? "not imported")")
         if let busy = model.busy { Text(busy) }
+        if let error = model.errorMessage {
+            Text(error)
+            Button("Dismiss error") { model.errorMessage = nil }
+        }
         switch model.status {
         case .restartNeeded, .lost:
             Button(model.status == .lost ? "Restore Steam Play mode" : "Restart Steam") {
