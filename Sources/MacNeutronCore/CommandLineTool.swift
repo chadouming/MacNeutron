@@ -32,7 +32,8 @@ public enum CommandLineTool {
             let tarballPath = option("--tarball", in: &rest)
             guard rest.isEmpty else { return usageError() }
             do {
-                let tarball = if let tarballPath { URL(filePath: tarballPath) } else { try await cachedDownload(.current) }
+                if tarballPath == nil { print("Downloading \(RuntimePin.current.url.absoluteString) (first time only)") }
+                let tarball = if let tarballPath { URL(filePath: tarballPath) } else { try await RuntimeInstaller.cachedDownload(.current) }
                 try RuntimeInstaller.install(tarball: tarball, pin: .current, layout: layout, launcherBinary: executable)
                 print("Installed \(RuntimePin.current.version) into \(layout.root.path(percentEncoded: false))")
                 return 0
@@ -54,18 +55,6 @@ public enum CommandLineTool {
 
     static func toolLayout(_ dir: String?) -> ToolLayout {
         ToolLayout(root: dir.map { URL(filePath: $0, directoryHint: .isDirectory) } ?? ToolLayout.defaultRoot)
-    }
-
-    static func cachedDownload(_ pin: RuntimePin) async throws -> URL {
-        let cache = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Caches/MacNeutron", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        let tarball = cache.appending(path: "\(pin.version).tar.gz")
-        if !FileManager.default.fileExists(atPath: tarball.path(percentEncoded: false)) {
-            print("Downloading \(pin.url.absoluteString)")
-            try await RuntimeInstaller.download(pin, to: tarball)
-        }
-        return tarball
     }
 
     // ponytail: global signal sources for the process's single launch; never mutated after setup.

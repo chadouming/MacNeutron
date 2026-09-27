@@ -115,6 +115,18 @@ public enum RuntimeInstaller {
         }
     }
 
+    /// The pinned tarball in `~/Library/Caches/MacNeutron`, downloading it on first use.
+    public static func cachedDownload(_ pin: RuntimePin) async throws -> URL {
+        let cache = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Caches/MacNeutron", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let tarball = cache.appending(path: "\(pin.version).tar.gz")
+        if !FileManager.default.fileExists(atPath: tarball.path(percentEncoded: false)) {
+            try await download(pin, to: tarball)
+        }
+        return tarball
+    }
+
     /// Downloads to a temporary file first, so an interrupted download never lands at `destination`.
     public static func download(_ pin: RuntimePin, to destination: URL) async throws {
         let (temporary, response) = try await URLSession.shared.download(from: pin.url)
