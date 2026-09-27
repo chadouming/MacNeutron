@@ -13,7 +13,7 @@ import Testing
 }
 
 @Test func honorsRequestCaseInsensitively() {
-    #expect(GraphicsBackend.select(requested: " DXVK ", gptkImported: true).backend == .dxvk)
+    #expect(GraphicsBackend.select(requested: " DXVK ", gptkImported: false).backend == .dxvk)
 }
 
 @Test func unknownRequestFallsBackWithNote() {
@@ -56,4 +56,12 @@ import Testing
     #expect(dlls.contains { $0.source.path(percentEncoded: false) == "/t/Libraries/DXMT/x32/dxgi.dll"
         && $0.destination == "drive_c/windows/syswow64/dxgi.dll" })
     #expect(GraphicsBackend.d3dmetal.prefixDLLs(layout: layout).isEmpty)
+}
+
+@Test func dxvkFallsBackToD3DMetalWhenGPTKIsImported() {
+    // The GPTK overlay replaces the Wine dxgi this DXVK build runs on; the pair crashes.
+    let choice = GraphicsBackend.select(requested: "dxvk", gptkImported: true)
+    #expect(choice.backend == .d3dmetal)
+    #expect(choice.note == "dxvk does not work while GPTK is imported, using d3dmetal")
+    #expect(GraphicsBackend.select(requested: "dxvk", gptkImported: false).backend == .dxvk)
 }

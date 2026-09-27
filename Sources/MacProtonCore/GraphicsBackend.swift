@@ -17,6 +17,11 @@ public enum GraphicsBackend: String, Sendable, CaseIterable {
         if backend == .d3dmetal && !gptkImported {
             return (.dxmt, "d3dmetal requested but GPTK is not imported, using dxmt")
         }
+        // ponytail: the GPTK overlay replaces the Wine dxgi this DXVK build needs. Upgrade path: keep Wine's
+        // original dxgi.dll (builtin marker stripped) from before the overlay and deploy it for dxvk.
+        if backend == .dxvk && gptkImported {
+            return (.d3dmetal, "dxvk does not work while GPTK is imported, using d3dmetal")
+        }
         return (backend, nil)
     }
 

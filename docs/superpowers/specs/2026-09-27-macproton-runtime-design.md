@@ -84,7 +84,7 @@ D3DMetal runs only on CrossOver-derived Wine, which is why upstream Wine is not 
 |---|---|---|---|---|
 | `d3dmetal` | GPTK imported | D3D10/11/12 (D3D9 via Wine's builtin) | `dxgi,d3d9,d3d10,d3d10core,d3d11,d3d12=b` | none |
 | `dxmt` | GPTK absent, or `d3dmetal` requested without GPTK | D3D10/11 | `dxgi,d3d10core,d3d11=n,b;d3d9,d3d10,d3d12=b` | DXMT `d3d11`, `d3d10core`, `dxgi` |
-| `dxvk` | never | D3D10/11 through MoltenVK | `d3d10core,d3d11=n,b;dxgi,d3d9,d3d10,d3d12=b` | DXVK `d3d10core`, `d3d11` (the pinned DXVK-macOS ships only these and runs on Wine's own `dxgi`) |
+| `dxvk` | never; **unavailable while GPTK is imported** (falls back to `d3dmetal` with a log note: the overlay replaces the Wine `dxgi` it runs on) | D3D10/11 through MoltenVK | `d3d10core,d3d11=n,b;dxgi,d3d9,d3d10,d3d12=b` | DXVK `d3d10core`, `d3d11` (the pinned DXVK-macOS ships only these and runs on Wine's own `dxgi`) |
 
 Every backend names all six D3D DLLs, so DLLs a previous backend left in the prefix cannot leak into a launch; a runtime DLL missing at deploy time is an error, never skipped. D3D9 goes through Wine's builtin `d3d9` (wined3d) on every backend: GPTK has no d3d9 forwarder and the pinned DXVK has no `d3d9.dll`. The prefix copies go into `system32` (x64) and `syswow64` (x32). User-supplied `WINEDLLOVERRIDES` are merged by DLL name, the user winning, with no name repeated.
 
@@ -114,6 +114,7 @@ Steam invokes `proton <verb> <exe> [args…]` with the variables listed in §2.4
 2. If the prefix is missing, or `version` is older than the runtime, run `wineboot -u`, then write `version`.
 3. A lock file (`$STEAM_COMPAT_DATA_PATH/macproton.lock`, via `flock`) is held **only during prefix preparation**, never while the game runs, so concurrent launches cannot race `wineboot` and `runinprefix` still works during a session.
 4. Upgrades only touch Wine's own files. `drive_c/users` is never modified.
+   Creating or upgrading a prefix also sets `HKCU\Software\Wine\WineDbg` `ShowCrashDialog=0`, so a crashing game exits (with its backtrace in the output) instead of waiting behind Wine's crash window while Steam shows it running.
 5. There is no `destroyprefix` verb. **Correction, observed 2026-09-27:** after uninstalling a game (via `app_uninstall` from Steam's console), macOS Steam left `compatdata/<appid>` in place (590 MB for a Unity game). Removing prefixes of uninstalled games moves to sub-project 3's app. Whether uninstalling through Steam's UI behaves differently is untested.
 6. The bridge (sub-project 2) adds its prefix setup (lsteamclient DLL, `steam.exe` stub, Steam registry keys) between preparation and launch. Sub-project 1 adds no placeholder for it.
 

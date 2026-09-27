@@ -31,7 +31,7 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 
 | Launch options | Effect |
 |---|---|
-| `/usr/bin/env MACPROTON_GRAPHICS=d3dmetal\|dxmt\|dxvk %command%` | Pick the Direct3D backend |
+| `/usr/bin/env MACPROTON_GRAPHICS=d3dmetal\|dxmt\|dxvk %command%` | Pick the Direct3D backend (`dxvk` is unavailable while GPTK is imported and falls back to `d3dmetal`) |
 | `/usr/bin/env MACPROTON_LOG=1 %command%` | Wine log in `~/Library/Logs/MacProton/steam-<appid>.log` |
 | `/usr/bin/env MACPROTON_NO_AVX=1 %command%` | Don't advertise AVX through Rosetta |
 | `/usr/bin/env MACPROTON_NO_MSYNC=1 %command%` | Turn off msync |
