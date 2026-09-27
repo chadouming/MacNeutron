@@ -39,6 +39,7 @@ public struct SteamPlayMode: Sendable {
     public let process: any SteamControlling
     public var verifyTimeout: Duration = .seconds(60)
     public var quitTimeout: Duration = .seconds(30)
+    public var rosettaAvailable: @Sendable () -> Bool = { Preflight().rosettaAvailable() }
 
     public init(steam: SteamLocation = SteamLocation(), root: URL = MacNeutronPaths.root,
                 process: any SteamControlling = SteamProcess()) {
@@ -83,11 +84,15 @@ public struct SteamPlayMode: Sendable {
     /// Builds the plan only once Steam has quit: Steam rewrites its app list on exit.
     public func enable(planAfterQuit makePlan: () throws -> [String: ToolMapping]) async throws {
         guard steam.isInstalled else { throw SteamPlayError.steamNotInstalled }
+        guard rosettaAvailable() else { throw SteamPlayError.rosettaMissing }
+        _ = try readConfig()  // before touching Steam: an unreadable file must leave it running
+        let wasRunning = process.isRunning()
         try await process.quit(timeout: quitTimeout)
-        let plan = try makePlan()
-        _ = try readConfig()
-        let backup = try backupConfig()
+        var backup: URL?
         do {
+            let plan = try makePlan()
+            _ = try readConfig()  // Steam may have rewritten it on exit
+            backup = try backupConfig()
             try installNativeTool()
             try linkTools()
             try applyMappings(plan)
@@ -95,6 +100,7 @@ public struct SteamPlayMode: Sendable {
         } catch {
             try? FileManager.default.removeItem(at: steam.steamDevConfig)
             unlinkTools()
+            if wasRunning { try? process.launch() }  // back in Mac mode, as the user had it
             throw error
         }
         // Recorded before Steam starts in Linux mode, so a crash during verification can't hide that it's on.

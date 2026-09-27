@@ -202,3 +202,26 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     #expect(try String(contentsOf: mode.steam.configVDF, encoding: .utf8).contains("\"proton_9\""))
     #expect(mode.status(plan: plan) == .on)
 }
+
+@Test func unreadableConfigLeavesSteamRunning() async throws {
+    let (mode, fake) = try makeMode(config: "\"InstallConfigStore\"\n{\n", running: true)
+    await #expect(throws: SteamPlayError.self) { try await mode.enable(plan: samplePlan) }
+    #expect(fake.isRunning())
+    #expect(fake.launchesWithDevConfig.isEmpty)
+}
+
+@Test func failureBeforeLaunchRestartsSteamInMacMode() async throws {
+    let (mode, fake) = try makeMode(running: true)
+    try write("not a folder", to: mode.steam.bundleCompatTools)  // makes linking the tools fail
+    await #expect(throws: (any Error).self) { try await mode.enable(plan: samplePlan) }
+    #expect(fake.isRunning())
+    #expect(fake.launchesWithDevConfig == [false])
+    #expect(!FileManager.default.fileExists(atPath: mode.steam.steamDevConfig.path(percentEncoded: false)))
+}
+
+@Test func enableRequiresRosetta() async throws {
+    var (mode, fake) = try makeMode(running: true)
+    mode.rosettaAvailable = { false }
+    await #expect(throws: SteamPlayError.rosettaMissing) { try await mode.enable(plan: samplePlan) }
+    #expect(fake.isRunning())
+}

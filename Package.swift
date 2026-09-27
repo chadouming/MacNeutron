@@ -13,6 +13,6 @@ let package = Package(
         .target(name: "MacNeutronCore"),
         .executableTarget(name: "macneutron", dependencies: ["MacNeutronCore"]),
         .executableTarget(name: "MacNeutronApp", dependencies: ["MacNeutronCore"]),
-        .testTarget(name: "MacNeutronCoreTests", dependencies: ["MacNeutronCore"]),
+        .testTarget(name: "MacNeutronCoreTests", dependencies: ["MacNeutronCore", "MacNeutronApp"]),
     ]
 )
