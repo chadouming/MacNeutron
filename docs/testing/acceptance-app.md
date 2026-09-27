@@ -20,3 +20,4 @@ Record results at the bottom.
 
 | Date | Steps passed | Notes |
 |---|---|---|
+| 2026-09-27 | 1–8 pass; 9 not run (no uninstalled game with a leftover prefix; covered by unit tests); 10 skipped on purpose (it would remove the user's installed SMITE 2, 26 GB; disable is unit-tested) | Windows game: SMITE 2 (app 2437170) instead of Cats. It runs on D3DMetal but slowly and can't log in ("can't find Steam"), which needs the Steam API bridge (sub-project 2). Found and fixed during the run: `.app` launch targets gave exit 126, and universal games ran under Rosetta (commit `1c308f3`). Timberborn was never unmounted and launches natively from Play. |

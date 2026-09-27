@@ -190,7 +190,7 @@ Mockups were reviewed in brainstorming. Every visible string uses sentence case 
 
 **Developer-only test** (skipped unless `MACNEUTRON_REAL_STEAM=1`): parse the real `appinfo.vdf` read-only and assert that it contains Timberborn (1062090) with `windows,macos`.
 
-**Manual acceptance** on the developer's Mac, with Timberborn installed and GPTK imported:
+**Manual acceptance** on the developer's Mac, with Timberborn installed and GPTK imported: *(2026-09-27: steps 1–5 pass. Steps 3–4 were done with SMITE 2 and Bongo Cat. Step 6 was skipped so the user's Windows games stay installed. See `docs/testing/acceptance-app.md`.)*
 1. Setup runs end to end.
 2. Timberborn stays installed with no redownload and launches natively.
 3. "Cats" installs and plays on D3DMetal.
