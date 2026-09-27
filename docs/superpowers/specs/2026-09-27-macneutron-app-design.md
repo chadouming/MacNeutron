@@ -41,7 +41,7 @@ The existing install on the developer's Mac is migrated by hand once: move the f
 ## 3. Architecture
 
 ```
-MacNeutron.app (SwiftUI, Xcode project in repo)
+MacNeutron.app (SwiftUI; SwiftPM executable target, assembled by `make app`)
  ├─ MenuBarExtra ─┐
  ├─ SetupWindow ──┼── AppModel (@Observable, @MainActor) ── NSWorkspace launch/quit observer for Steam
  ├─ GamesWindow ──┤         │
@@ -64,7 +64,7 @@ New units in `MacNeutronCore`:
 
 The existing units (`Launcher`, `RuntimeInstaller`, `GPTKImporter`, …) are renamed and otherwise unchanged, apart from the `GameSettings` hook in `Launcher` (§7).
 
-**App bundle.** Bundle identifier `io.github.chadouming.MacNeutron`; `LSUIElement = YES` (menu-bar app, no Dock icon). `MacNeutron.app` embeds the release `macneutron` CLI in `Contents/Helpers/`. Setup and "Repair runtime" call `RuntimeInstaller` in-process, passing that path as `launcherBinary`, so the tool folder receives the same binary. The bundle is signed ad-hoc; Developer ID signing and notarization are a release task, out of scope here.
+**App bundle.** Built without an Xcode project: the SwiftPM executable target `MacNeutronApp` is assembled by `make app` into `build/MacNeutron.app` with `App/Info.plist`, so there is no project file to maintain. Bundle identifier `io.github.chadouming.MacNeutron`; `LSUIElement = YES` (menu-bar app, no Dock icon). `MacNeutron.app` embeds the release `macneutron` CLI in `Contents/Helpers/`. Setup and "Repair runtime" call `RuntimeInstaller` in-process, passing that path as `launcherBinary`, so the tool folder receives the same binary. The bundle is signed ad-hoc; Developer ID signing and notarization are a release task, out of scope here.
 
 ## 4. Steam Play mode lifecycle
 
@@ -205,6 +205,7 @@ Mockups were reviewed in brainstorming. Every visible string uses sentence case 
    - **If it registers:** keep B.
    - **If not:** switch §4 step 5.2 to C, `~/Library/LaunchAgents/io.github.chadouming.macneutron.env.plist` running `launchctl setenv STEAM_EXTRA_COMPAT_TOOLS_PATHS` at load. Record the result in this spec.
 2. **appinfo v29 layout.** Parse the real file with the prototype reader. Confirm that `common/oslist` and `common/type` are where the planner expects them, and count the mappable apps. If more than 5,000, restrict the planner to installed apps plus apps listed in `localconfig.vdf`, and record that here.
+   - **Resolved 2026-09-27:** magic `0x07564429` (v29). `common/type` and `common/oslist` are where the planner expects them (Timberborn: `game`, `windows,macos`). Of 517 apps, 117 are mappable, so no restriction is needed.
 
 ## 11. Risks
 
