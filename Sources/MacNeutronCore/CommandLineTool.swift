@@ -1,12 +1,12 @@
 import Dispatch
 import Foundation
 
-/// `macproton` subcommands. Kept out of main.swift so they can be tested.
+/// `macneutron` subcommands. Kept out of main.swift so they can be tested.
 public enum CommandLineTool {
     public static let usage = """
-        usage: macproton launch <verb> <target> [args...]
-               macproton import-gptk [--tool-dir <dir>] <GPTK volume | redist | redist/lib>
-               macproton install-runtime [--tool-dir <dir>] [--tarball <Libraries.tar.gz>]
+        usage: macneutron launch <verb> <target> [args...]
+               macneutron import-gptk [--tool-dir <dir>] <GPTK volume | redist | redist/lib>
+               macneutron install-runtime [--tool-dir <dir>] [--tarball <Libraries.tar.gz>]
         """
 
     public static func run(_ args: [String], environment: [String: String], executable: URL) async -> Int32 {
@@ -58,7 +58,7 @@ public enum CommandLineTool {
 
     static func cachedDownload(_ pin: RuntimePin) async throws -> URL {
         let cache = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Caches/MacProton", directoryHint: .isDirectory)
+            .appending(path: "Library/Caches/MacNeutron", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         let tarball = cache.appending(path: "\(pin.version).tar.gz")
         if !FileManager.default.fileExists(atPath: tarball.path(percentEncoded: false)) {
@@ -91,7 +91,7 @@ public enum CommandLineTool {
     }
 
     private static func failure(_ error: any Error) -> Int32 {
-        FileHandle.standardError.write(Data("macproton: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("macneutron: \(error)\n".utf8))
         return 1
     }
 }

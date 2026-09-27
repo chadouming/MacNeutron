@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 /// A fake GPTK volume: `<volume>/redist/lib/...` with D3DMetal version `version`.
 private func makeGPTKVolume(version: String = "3.0", omit: String? = nil) throws -> URL {

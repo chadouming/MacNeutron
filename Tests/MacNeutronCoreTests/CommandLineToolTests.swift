@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 @Test func unknownCommandPrintsUsage() async {
     #expect(await CommandLineTool.run(["frobnicate"], environment: [:], executable: URL(filePath: "/x")) == 2)

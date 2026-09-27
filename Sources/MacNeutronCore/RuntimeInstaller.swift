@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// The Wine runtime release MacProton is tested against.
+/// The Wine runtime release MacNeutron is tested against.
 public struct RuntimePin: Equatable, Sendable {
     public let version: String
     public let url: URL
@@ -29,17 +29,17 @@ public enum RuntimeInstallError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Installs the Wine runtime and the Steam-facing tool files into a `macproton` tool folder.
+/// Installs the Wine runtime and the Steam-facing tool files into a `macneutron` tool folder.
 public enum RuntimeInstaller {
     static let compatibilityTool = """
         "compatibilitytools"
         {
           "compat_tools"
           {
-            "macproton"
+            "macneutron"
             {
               "install_path" "."
-              "display_name" "MacProton"
+              "display_name" "MacNeutron"
               "from_oslist"  "windows"
               "to_oslist"    "linux"
             }
@@ -57,7 +57,7 @@ public enum RuntimeInstaller {
         """
     static let protonStub = """
         #!/bin/sh
-        exec "$(dirname "$0")/bin/macproton" launch "$@"
+        exec "$(dirname "$0")/bin/macneutron" launch "$@"
 
         """
 

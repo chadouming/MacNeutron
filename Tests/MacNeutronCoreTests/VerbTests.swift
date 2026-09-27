@@ -1,5 +1,5 @@
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 @Test func parsesSteamInvocation() throws {
     let request = try LaunchRequest.parse(["waitforexitandrun", "/games/Cats/Cats.exe", "-windowed"])

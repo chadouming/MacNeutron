@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 @Test func readsSteamCompatEnvironment() throws {
     let context = try CompatContext(environment: [
@@ -11,7 +11,7 @@ import Testing
     #expect(context.prefix.path(percentEncoded: false)
         == "/Users/me/Library/Application Support/Steam/steamapps/compatdata/42/pfx/")
     #expect(context.versionFile.lastPathComponent == "version")
-    #expect(context.lockFile.lastPathComponent == "macproton.lock")
+    #expect(context.lockFile.lastPathComponent == "macneutron.lock")
 }
 
 @Test func appIDDefaultsToZero() throws {
@@ -26,17 +26,17 @@ import Testing
 }
 
 @Test func layoutPathsFollowTheRuntimeTarball() {
-    let layout = ToolLayout(root: URL(filePath: "/t/macproton", directoryHint: .isDirectory))
-    #expect(layout.wine.path(percentEncoded: false) == "/t/macproton/Libraries/Wine/bin/wine")
-    #expect(layout.wineserver.path(percentEncoded: false) == "/t/macproton/Libraries/Wine/bin/wineserver")
-    #expect(layout.wineLib.path(percentEncoded: false) == "/t/macproton/Libraries/Wine/lib/")
-    #expect(layout.dxmt.path(percentEncoded: false) == "/t/macproton/Libraries/DXMT/")
-    #expect(layout.gptkStore.path(percentEncoded: false) == "/t/macproton/gptk/")
+    let layout = ToolLayout(root: URL(filePath: "/t/macneutron", directoryHint: .isDirectory))
+    #expect(layout.wine.path(percentEncoded: false) == "/t/macneutron/Libraries/Wine/bin/wine")
+    #expect(layout.wineserver.path(percentEncoded: false) == "/t/macneutron/Libraries/Wine/bin/wineserver")
+    #expect(layout.wineLib.path(percentEncoded: false) == "/t/macneutron/Libraries/Wine/lib/")
+    #expect(layout.dxmt.path(percentEncoded: false) == "/t/macneutron/Libraries/DXMT/")
+    #expect(layout.gptkStore.path(percentEncoded: false) == "/t/macneutron/gptk/")
 }
 
 @Test func layoutFromExecutableIsTwoLevelsUp() {
-    let layout = ToolLayout(executable: URL(filePath: "/t/macproton/bin/macproton"))
-    #expect(layout.root.path(percentEncoded: false).hasSuffix("/t/macproton/"))
+    let layout = ToolLayout(executable: URL(filePath: "/t/macneutron/bin/macneutron"))
+    #expect(layout.root.path(percentEncoded: false).hasSuffix("/t/macneutron/"))
 }
 
 @Test func runtimeAndGPTKVersionsComeFromFiles() throws {

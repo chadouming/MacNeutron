@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 /// A tiny tarball shaped like winecx-gptk's `Libraries.tar.gz`, and a pin that matches it.
 private func makeRuntimeTarball(includeWineserver: Bool = true) throws -> (URL, RuntimePin) {
@@ -18,16 +18,16 @@ private func makeRuntimeTarball(includeWineserver: Bool = true) throws -> (URL, 
     return (tarball, RuntimePin(version: "runtime-test-1", url: tarball, sha256: try RuntimeInstaller.sha256(of: tarball)))
 }
 
-/// Stands in for bin/macproton: prints each argument on its own line.
+/// Stands in for bin/macneutron: prints each argument on its own line.
 private func makeEchoLauncher() throws -> URL {
-    let url = try makeTempDir().appending(path: "macproton")
+    let url = try makeTempDir().appending(path: "macneutron")
     try write("#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n", to: url, executable: true)
     return url
 }
 
 @Test func installsRuntimeAndToolFiles() throws {
     let (tarball, pin) = try makeRuntimeTarball()
-    let layout = ToolLayout(root: try makeTempDir().appending(path: "compatibilitytools.d/macproton"))
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "compatibilitytools.d/macneutron"))
     try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: try makeEchoLauncher())
     let fm = FileManager.default
     #expect(fm.isExecutableFile(atPath: layout.wine.path(percentEncoded: false)))
@@ -43,7 +43,7 @@ private func makeEchoLauncher() throws -> URL {
 
 @Test func protonStubForwardsArgumentsFromAPathWithSpaces() throws {
     let (tarball, pin) = try makeRuntimeTarball()
-    let layout = ToolLayout(root: try makeTempDir().appending(path: "Application Support/macproton"))
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "Application Support/macneutron"))
     try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: try makeEchoLauncher())
     let out = try makeTempDir().appending(path: "out.txt")
     let status = try SystemProcessRunner().run(layout.root.appending(path: "proton"),

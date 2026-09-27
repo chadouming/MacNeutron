@@ -9,7 +9,7 @@ public enum PreflightError: Error, Equatable, CustomStringConvertible {
         case .rosettaMissing:
             "Rosetta 2 is not installed. Run: softwareupdate --install-rosetta --agree-to-license"
         case .runtimeMissing:
-            "The MacProton runtime is missing or incomplete. Repair it with: macproton install-runtime"
+            "The MacNeutron runtime is missing or incomplete. Repair it with: macneutron install-runtime"
         }
     }
 }

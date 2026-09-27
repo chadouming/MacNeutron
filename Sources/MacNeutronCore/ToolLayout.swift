@@ -1,19 +1,19 @@
 import Foundation
 
-/// Where everything lives inside the `macproton` compatibility tool folder.
+/// Where everything lives inside the `macneutron` compatibility tool folder.
 public struct ToolLayout: Equatable, Sendable {
     public let root: URL
 
     public init(root: URL) { self.root = root }
 
-    /// `<root>/bin/macproton` → `<root>`.
+    /// `<root>/bin/macneutron` → `<root>`.
     public init(executable: URL) {
         root = executable.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
     }
 
     public static var defaultRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser.appending(
-            path: "Library/Application Support/MacProton/compatibilitytools.d/macproton",
+            path: "Library/Application Support/MacNeutron/compatibilitytools.d/macneutron",
             directoryHint: .isDirectory)
     }
 
@@ -28,7 +28,7 @@ public struct ToolLayout: Equatable, Sendable {
     public var gptkStore: URL { root.appending(path: "gptk", directoryHint: .isDirectory) }
     public var gptkManifest: URL { root.appending(path: "gptk.json") }
     public var runtimeVersionFile: URL { root.appending(path: "runtime-version") }
-    public var launcherBinary: URL { root.appending(path: "bin/macproton") }
+    public var launcherBinary: URL { root.appending(path: "bin/macneutron") }
 
     public var runtimeVersion: String? {
         (try? String(contentsOf: runtimeVersionFile, encoding: .utf8))?

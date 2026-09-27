@@ -33,9 +33,9 @@ public struct Launcher: Sendable {
             return fail(error.description, argv: argv, notify: true)
         }
 
-        let (backend, note) = GraphicsBackend.select(requested: environment["MACPROTON_GRAPHICS"],
+        let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"],
                                                      gptkImported: layout.gptkImported)
-        let logging = environment["MACPROTON_LOG"] == "1"
+        let logging = environment["MACNEUTRON_LOG"] == "1"
         let env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
         let gameLog = logging ? log.gameLog(appID: context.appID) : nil
         if let gameLog { writeHeader(to: gameLog, request: request, environment: env) }
@@ -101,8 +101,8 @@ public struct Launcher: Sendable {
 
     private func fail(_ message: String, argv: [String], notify: Bool) -> Int32 {
         log.append("error: \(message) argv=\(argv)")
-        FileHandle.standardError.write(Data("macproton: \(message)\n".utf8))
-        if notify { notifier.post(title: "MacProton", message: message) }
+        FileHandle.standardError.write(Data("macneutron: \(message)\n".utf8))
+        if notify { notifier.post(title: "MacNeutron", message: message) }
         return 1
     }
 }

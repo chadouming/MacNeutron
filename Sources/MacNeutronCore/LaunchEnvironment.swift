@@ -11,10 +11,10 @@ public enum LaunchEnvironment {
         if base["WINEDEBUG"] == nil {
             env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll" : "-all"
         }
-        if base["MACPROTON_NO_AVX"] != "1", base["ROSETTA_ADVERTISE_AVX"] == nil {
+        if base["MACNEUTRON_NO_AVX"] != "1", base["ROSETTA_ADVERTISE_AVX"] == nil {
             env["ROSETTA_ADVERTISE_AVX"] = "1"
         }
-        if base["MACPROTON_NO_MSYNC"] != "1", base["WINEMSYNC"] == nil {
+        if base["MACNEUTRON_NO_MSYNC"] != "1", base["WINEMSYNC"] == nil {
             env["WINEMSYNC"] = "1"
         }
         return env

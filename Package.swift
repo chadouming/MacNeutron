@@ -2,15 +2,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "MacProton",
+    name: "MacNeutron",
     platforms: [.macOS("26.0")],
     products: [
-        .executable(name: "macproton", targets: ["macproton"]),
-        .library(name: "MacProtonCore", targets: ["MacProtonCore"]),
+        .executable(name: "macneutron", targets: ["macneutron"]),
+        .library(name: "MacNeutronCore", targets: ["MacNeutronCore"]),
     ],
     targets: [
-        .target(name: "MacProtonCore"),
-        .executableTarget(name: "macproton", dependencies: ["MacProtonCore"]),
-        .testTarget(name: "MacProtonCoreTests", dependencies: ["MacProtonCore"]),
+        .target(name: "MacNeutronCore"),
+        .executableTarget(name: "macneutron", dependencies: ["MacNeutronCore"]),
+        .testTarget(name: "MacNeutronCoreTests", dependencies: ["MacNeutronCore"]),
     ]
 )

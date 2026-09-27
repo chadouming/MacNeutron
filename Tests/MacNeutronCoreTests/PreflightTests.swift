@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 @Test func passesWithRosettaAndRuntime() throws {
     try Preflight(rosettaAvailable: { true }).check(try makeToolLayout())

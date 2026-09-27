@@ -4,7 +4,7 @@ import Foundation
 public enum GraphicsBackend: String, Sendable, CaseIterable {
     case d3dmetal, dxmt, dxvk
 
-    /// Honors `MACPROTON_GRAPHICS` when valid; otherwise D3DMetal if GPTK is imported, else DXMT.
+    /// Honors `MACNEUTRON_GRAPHICS` when valid; otherwise D3DMetal if GPTK is imported, else DXMT.
     /// `note` explains any fallback so the launcher can log it.
     public static func select(requested: String?, gptkImported: Bool) -> (backend: GraphicsBackend, note: String?) {
         let fallback: GraphicsBackend = gptkImported ? .d3dmetal : .dxmt
@@ -12,7 +12,7 @@ public enum GraphicsBackend: String, Sendable, CaseIterable {
             return (fallback, nil)
         }
         guard let backend = GraphicsBackend(rawValue: raw) else {
-            return (fallback, "unknown MACPROTON_GRAPHICS '\(raw)', using \(fallback.rawValue)")
+            return (fallback, "unknown MACNEUTRON_GRAPHICS '\(raw)', using \(fallback.rawValue)")
         }
         if backend == .d3dmetal && !gptkImported {
             return (.dxmt, "d3dmetal requested but GPTK is not imported, using dxmt")

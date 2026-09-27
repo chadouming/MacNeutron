@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 @Test func defaultsToD3DMetalWhenGPTKIsImported() {
     let choice = GraphicsBackend.select(requested: nil, gptkImported: true)
@@ -19,7 +19,7 @@ import Testing
 @Test func unknownRequestFallsBackWithNote() {
     let choice = GraphicsBackend.select(requested: "vulkan", gptkImported: false)
     #expect(choice.backend == .dxmt)
-    #expect(choice.note == "unknown MACPROTON_GRAPHICS 'vulkan', using dxmt")
+    #expect(choice.note == "unknown MACNEUTRON_GRAPHICS 'vulkan', using dxmt")
 }
 
 @Test func d3dmetalWithoutGPTKFallsBackToDXMT() {

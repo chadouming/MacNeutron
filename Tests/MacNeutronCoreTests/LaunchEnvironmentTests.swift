@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 private let context = try! CompatContext(environment: ["STEAM_COMPAT_DATA_PATH": "/c/42", "SteamAppId": "42"])
 
@@ -29,7 +29,7 @@ private let context = try! CompatContext(environment: ["STEAM_COMPAT_DATA_PATH":
 }
 
 @Test func optOutsDropDefaults() {
-    let env = LaunchEnvironment.build(base: ["MACPROTON_NO_AVX": "1", "MACPROTON_NO_MSYNC": "1"],
+    let env = LaunchEnvironment.build(base: ["MACNEUTRON_NO_AVX": "1", "MACNEUTRON_NO_MSYNC": "1"],
                                       context: context, backend: .dxmt, logging: false)
     #expect(env["ROSETTA_ADVERTISE_AVX"] == nil)
     #expect(env["WINEMSYNC"] == nil)

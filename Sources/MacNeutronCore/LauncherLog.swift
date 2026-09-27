@@ -1,6 +1,6 @@
 import Foundation
 
-/// `~/Library/Logs/MacProton`: one line per launch in `launcher.log`, plus opt-in per-game Wine logs.
+/// `~/Library/Logs/MacNeutron`: one line per launch in `launcher.log`, plus opt-in per-game Wine logs.
 public struct LauncherLog: Sendable {
     public static let rotateBytes = 1_048_576
     public let directory: URL
@@ -9,7 +9,7 @@ public struct LauncherLog: Sendable {
 
     public static var standard: LauncherLog {
         LauncherLog(directory: FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Logs/MacProton", directoryHint: .isDirectory))
+            .appending(path: "Library/Logs/MacNeutron", directoryHint: .isDirectory))
     }
 
     public var launcherLog: URL { directory.appending(path: "launcher.log") }

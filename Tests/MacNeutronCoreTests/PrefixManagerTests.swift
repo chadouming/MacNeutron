@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String: String]) {
     let layout = try makeToolLayout()

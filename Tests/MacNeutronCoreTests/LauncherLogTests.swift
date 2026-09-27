@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 @Test func appendsTimestampedLines() throws {
     let log = LauncherLog(directory: try makeTempDir().appending(path: "Logs"))

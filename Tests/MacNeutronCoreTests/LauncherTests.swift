@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 final class RecordingNotifier: Notifier, @unchecked Sendable {
     private let lock = NSLock()
@@ -87,12 +87,12 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
 @Test func invalidGraphicsSettingStillLaunchesWithDefault() throws {
     let f = try makeFixture()
     var env = f.env
-    env["MACPROTON_GRAPHICS"] = "vulkan"
+    env["MACNEUTRON_GRAPHICS"] = "vulkan"
     #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: env) == 0)
     #expect(f.runner.calls.last?.environment["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)
     let logged = try String(contentsOf: f.launcher.log.launcherLog, encoding: .utf8)
     #expect(logged.contains("backend=dxmt"))
-    #expect(logged.contains("note=unknown MACPROTON_GRAPHICS 'vulkan'"))
+    #expect(logged.contains("note=unknown MACNEUTRON_GRAPHICS 'vulkan'"))
 }
 
 @Test func missingRosettaNotifiesAndFails() throws {
@@ -109,10 +109,10 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(f.notifier.posted.count == 1)
 }
 
-@Test func macprotonLogSendsGameOutputToPerGameLog() throws {
+@Test func macneutronLogSendsGameOutputToPerGameLog() throws {
     let f = try makeFixture()
     var env = f.env
-    env["MACPROTON_LOG"] = "1"
+    env["MACNEUTRON_LOG"] = "1"
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
     let gameLog = f.launcher.log.gameLog(appID: "42")
     #expect(f.runner.calls.last?.output == gameLog)

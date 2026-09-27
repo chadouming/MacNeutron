@@ -1,10 +1,10 @@
 import Foundation
-@testable import MacProtonCore
+@testable import MacNeutronCore
 
 /// A fresh temp directory whose path contains a space, like Steam's "Application Support".
 func makeTempDir() throws -> URL {
     let dir = FileManager.default.temporaryDirectory
-        .appending(path: "macproton tests/\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "macneutron tests/\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
@@ -55,7 +55,7 @@ func winebootCreatingPrefix(status: Int32 = 0, delay: TimeInterval = 0) -> FakeR
 
 /// A tool folder with a fake runtime: executable wine/wineserver, DXMT and DXVK DLLs, runtime-version.
 func makeToolLayout() throws -> ToolLayout {
-    let layout = ToolLayout(root: try makeTempDir().appending(path: "macproton", directoryHint: .isDirectory))
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron", directoryHint: .isDirectory))
     try write("#!/bin/sh\n", to: layout.wine, executable: true)
     try write("#!/bin/sh\n", to: layout.wineserver, executable: true)
     for arch in ["x64", "x32"] {

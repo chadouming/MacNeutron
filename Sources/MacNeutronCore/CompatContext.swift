@@ -5,7 +5,7 @@ public enum CompatContextError: Error, Equatable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .missing(let name): "\(name) is not set; macproton launch must be started by Steam"
+        case .missing(let name): "\(name) is not set; macneutron launch must be started by Steam"
         }
     }
 }
@@ -25,5 +25,5 @@ public struct CompatContext: Equatable, Sendable {
 
     public var prefix: URL { dataPath.appending(path: "pfx", directoryHint: .isDirectory) }
     public var versionFile: URL { dataPath.appending(path: "version") }
-    public var lockFile: URL { dataPath.appending(path: "macproton.lock") }
+    public var lockFile: URL { dataPath.appending(path: "macneutron.lock") }
 }
