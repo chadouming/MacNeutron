@@ -78,15 +78,15 @@ Tool directory `~/Library/Application Support/MacProton/compatibilitytools.d/mac
 
 D3DMetal runs only on CrossOver-derived Wine, which is why upstream Wine is not an option.
 
-**Graphics backend.** `MACPROTON_GRAPHICS` is read from the environment and is settable per game through Steam launch options, e.g. `MACPROTON_GRAPHICS=dxmt %command%`. An invalid value falls back to the default and is noted in the log.
+**Graphics backend.** `MACPROTON_GRAPHICS` is read from the environment and is settable per game through Steam launch options as `/usr/bin/env MACPROTON_GRAPHICS=dxmt %command%`. The `/usr/bin/env` prefix is required: macOS Steam runs launch options without a shell and treats their first word as the program to run, so the Linux-style `VAR=value %command%` fails with `OS Error 260` (verified 2026-09-27). An invalid value falls back to the default and is noted in the log.
 
 | Value | Default when | Covers | `WINEDLLOVERRIDES` | DLLs copied into the prefix |
 |---|---|---|---|---|
 | `d3dmetal` | GPTK imported | D3D10/11/12 (D3D9 via Wine's builtin) | `dxgi,d3d9,d3d10,d3d10core,d3d11,d3d12=b` | none |
 | `dxmt` | GPTK absent, or `d3dmetal` requested without GPTK | D3D10/11 | `dxgi,d3d10core,d3d11=n,b;d3d9,d3d10,d3d12=b` | DXMT `d3d11`, `d3d10core`, `dxgi` |
-| `dxvk` | never | D3D9/10/11 through MoltenVK | `dxgi,d3d9,d3d10core,d3d11=n,b;d3d10,d3d12=b` | DXVK `d3d9`, `d3d10core`, `d3d11`, `dxgi` |
+| `dxvk` | never | D3D10/11 through MoltenVK | `d3d10core,d3d11=n,b;dxgi,d3d9,d3d10,d3d12=b` | DXVK `d3d10core`, `d3d11` (the pinned DXVK-macOS ships only these and runs on Wine's own `dxgi`) |
 
-Every backend names all six D3D DLLs, so DLLs a previous backend left in the prefix cannot leak into a launch. The GPTK overlay replaces Wine's builtin D3D DLLs, which makes `wined3d` unreachable once GPTK is imported; DXVK is the D3D9 route instead. The prefix copies go into `system32` (x64) and `syswow64` (x32). User-supplied `WINEDLLOVERRIDES` are merged by DLL name, the user winning, with no name repeated.
+Every backend names all six D3D DLLs, so DLLs a previous backend left in the prefix cannot leak into a launch; a runtime DLL missing at deploy time is an error, never skipped. D3D9 goes through Wine's builtin `d3d9` (wined3d) on every backend: GPTK has no d3d9 forwarder and the pinned DXVK has no `d3d9.dll`. The prefix copies go into `system32` (x64) and `syswow64` (x32). User-supplied `WINEDLLOVERRIDES` are merged by DLL name, the user winning, with no name repeated.
 
 **Default environment:**
 - `ROSETTA_ADVERTISE_AVX=1`; `MACPROTON_NO_AVX=1` opts out.
@@ -103,7 +103,7 @@ Steam invokes `proton <verb> <exe> [args…]` with the variables listed in §2.4
 
 | Verb | Behaviour |
 |---|---|
-| `waitforexitandrun` | `wineserver -w` (wait for any prior session in this prefix, e.g. the redistributable installer), prepare the prefix, start Wine as a **child** process, then `wineserver -w` again so Steam sees the game running until every process in the prefix has exited (this covers launcher-then-game chains). Exit with the game's exit code |
+| `waitforexitandrun` | Prepare the prefix, then `wineserver -w` (wait for any other session in this prefix, e.g. the redistributable installers Steam starts with `run`), start Wine as a **child** process, then `wineserver -w` again so Steam sees the game running until every process in the prefix has exited (this covers launcher-then-game chains). This is Proton's order: a launch that queued on the prefix lock finds the other session's wineserver still alive. Exit with the game's exit code |
 | `run` | Prepare the prefix, start Wine as a child, exit when it exits. Steam uses this for `iscriptevaluator.exe` |
 | `runinprefix` | Run the given exe in the existing prefix with no prefix preparation |
 | `getcompatpath` / `getnativepath` | Path conversion via `winepath` |
@@ -126,7 +126,7 @@ Steam invokes `proton <verb> <exe> [args…]` with the variables listed in §2.4
 
 Wine's x86_64 binaries run under Rosetta automatically. The `exec`-to-keep-PID trick is used only by the passthrough tool.
 
-**Stop button.** Steam's Stop sends SIGTERM to the launcher. The launcher runs `wineserver -k` for the game's prefix and exits with 128 + the signal number. SIGINT is handled the same way.
+**Stop button.** On macOS, Steam's Stop asks the game to quit and it exits cleanly; the launcher's final `wineserver -w` then returns and it exits normally (verified 2026-09-27 with a Unity game). If the launcher itself receives SIGTERM or SIGINT, it runs `wineserver -k` for the game's prefix and exits with 128 + the signal number.
 
 ## 6. Sub-project 1: Errors and logging
 
@@ -143,7 +143,7 @@ Every failure is logged. Launch-blocking failures also post a macOS notification
 
 **Logging:**
 - **Always on:** `~/Library/Logs/MacProton/launcher.log`, one line per launch (timestamp, verb, appid, backend, runtime and GPTK versions, exit code), rotated at 1 MB.
-- **Opt-in per game:** `MACPROTON_LOG=1 %command%` writes `~/Library/Logs/MacProton/steam-<appid>.log` with `WINEDEBUG=+err,+warn,+loaddll` and the full launch environment. Bug reports attach this file.
+- **Opt-in per game:** `/usr/bin/env MACPROTON_LOG=1 %command%` writes `~/Library/Logs/MacProton/steam-<appid>.log` with `WINEDEBUG=+err,+warn,+loaddll` and the full launch environment. Bug reports attach this file.
 
 ## 7. Sub-project 1: Testing
 
