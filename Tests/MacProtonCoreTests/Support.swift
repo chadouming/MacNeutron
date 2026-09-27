@@ -16,3 +16,60 @@ func write(_ text: String, to url: URL, executable: Bool = false) throws {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path(percentEncoded: false))
     }
 }
+
+/// Records every process the code under test would start, and answers with `respond`.
+final class FakeRunner: ProcessRunner, @unchecked Sendable {
+    struct Call: Equatable {
+        let tool: String
+        let arguments: [String]
+        let environment: [String: String]
+        let output: URL?
+    }
+
+    private let lock = NSLock()
+    private var recorded: [Call] = []
+    private let respond: @Sendable (Call) -> Int32
+
+    init(respond: @escaping @Sendable (Call) -> Int32 = { _ in 0 }) { self.respond = respond }
+
+    var calls: [Call] { lock.withLock { recorded } }
+
+    func run(_ executable: URL, _ arguments: [String], environment: [String: String], output: URL?) throws -> Int32 {
+        let call = Call(tool: executable.lastPathComponent, arguments: arguments, environment: environment, output: output)
+        lock.withLock { recorded.append(call) }
+        return respond(call)
+    }
+}
+
+/// A FakeRunner whose `wineboot` creates the prefix like the real one does.
+func winebootCreatingPrefix(status: Int32 = 0, delay: TimeInterval = 0) -> FakeRunner {
+    FakeRunner { call in
+        if call.arguments.first == "wineboot", let prefix = call.environment["WINEPREFIX"] {
+            Thread.sleep(forTimeInterval: delay)
+            if status == 0 { try? FileManager.default.createDirectory(atPath: prefix, withIntermediateDirectories: true) }
+            return status
+        }
+        return 0
+    }
+}
+
+/// A tool folder with a fake runtime: executable wine/wineserver, DXMT and DXVK DLLs, runtime-version.
+func makeToolLayout() throws -> ToolLayout {
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macproton", directoryHint: .isDirectory))
+    try write("#!/bin/sh\n", to: layout.wine, executable: true)
+    try write("#!/bin/sh\n", to: layout.wineserver, executable: true)
+    for arch in ["x64", "x32"] {
+        for dll in ["d3d11.dll", "d3d10core.dll", "dxgi.dll"] {
+            try write("dxmt \(arch) \(dll)", to: layout.dxmt.appending(path: "\(arch)/\(dll)"))
+        }
+        for dll in ["d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"] {
+            try write("dxvk \(arch) \(dll)", to: layout.dxvk.appending(path: "\(arch)/\(dll)"))
+        }
+    }
+    try write("runtime-test", to: layout.runtimeVersionFile)
+    return layout
+}
+
+func steamEnvironment(dataPath: URL, appID: String = "3419430") -> [String: String] {
+    ["STEAM_COMPAT_DATA_PATH": dataPath.path(percentEncoded: false), "SteamAppId": appID, "PATH": "/usr/bin:/bin"]
+}
