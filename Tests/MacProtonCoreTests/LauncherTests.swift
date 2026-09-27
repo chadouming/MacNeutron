@@ -39,6 +39,7 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(status == 7)
     #expect(runner.calls.map { [$0.tool] + $0.arguments } == [
         ["wine", "wineboot", "-u"],
+        ["wine", "reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog", "/t", "REG_DWORD", "/d", "0", "/f"],
         ["wineserver", "-w"],
         ["wine", "/g/Game.exe", "-windowed"],
         ["wineserver", "-w"],

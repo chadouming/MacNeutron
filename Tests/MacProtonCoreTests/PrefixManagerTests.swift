@@ -14,10 +14,21 @@ private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String
     let runner = winebootCreatingPrefix()
     let (manager, env) = try makeManager(runner)
     try manager.prepare(backend: .dxmt, environment: env)
-    #expect(runner.calls.map(\.arguments) == [["wineboot", "-u"]])
+    #expect(runner.calls.map(\.arguments) == [["wineboot", "-u"], disableCrashDialog])
     #expect(runner.calls[0].environment["WINEPREFIX"] == manager.context.prefix.path(percentEncoded: false))
     #expect(try String(contentsOf: manager.context.versionFile, encoding: .utf8) == "runtime-test")
     #expect(!manager.needsPreparation)
+}
+
+/// A crashing game must exit, not wait forever behind Wine's crash window (Steam would show it running).
+private let disableCrashDialog = ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog",
+                                  "/t", "REG_DWORD", "/d", "0", "/f"]
+
+@Test func failedWinebootSkipsTheCrashDialogSetting() throws {
+    let runner = winebootCreatingPrefix(status: 3)
+    let (manager, env) = try makeManager(runner)
+    #expect(throws: PrefixError.winebootFailed(3)) { try manager.prepare(backend: .dxmt, environment: env) }
+    #expect(!runner.calls.contains { $0.arguments == disableCrashDialog })
 }
 
 @Test func upToDatePrefixSkipsWineboot() throws {
@@ -25,7 +36,7 @@ private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String
     let (manager, env) = try makeManager(runner)
     try manager.prepare(backend: .dxmt, environment: env)
     try manager.prepare(backend: .dxmt, environment: env)
-    #expect(runner.calls.count == 1)
+    #expect(runner.calls.filter { $0.arguments.first == "wineboot" }.count == 1)
 }
 
 @Test func runtimeChangeUpgradesPrefix() throws {
@@ -34,7 +45,7 @@ private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String
     try manager.prepare(backend: .dxmt, environment: env)
     try write("runtime-old", to: manager.context.versionFile)
     try manager.prepare(backend: .dxmt, environment: env)
-    #expect(runner.calls.count == 2)
+    #expect(runner.calls.filter { $0.arguments.first == "wineboot" }.count == 2)
 }
 
 @Test func failedWinebootKeepsPrefixAndVersion() throws {

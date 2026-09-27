@@ -45,6 +45,10 @@ public struct PrefixManager: Sendable {
             if needsPreparation {
                 let status = try runner.run(layout.wine, ["wineboot", "-u"], environment: environment, output: nil)
                 guard status == 0 else { throw PrefixError.winebootFailed(status) }
+                // A crashing game must exit, not wait behind Wine's crash window while Steam shows it running.
+                // ponytail: best effort; if reg fails, crashes still work, they just show the dialog.
+                _ = try runner.run(layout.wine, ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog",
+                                                 "/t", "REG_DWORD", "/d", "0", "/f"], environment: environment, output: nil)
                 try runtimeVersion.write(to: context.versionFile, atomically: true, encoding: .utf8)
             }
             try deployDLLs(for: backend)
