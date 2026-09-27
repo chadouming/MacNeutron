@@ -26,7 +26,8 @@ public enum GraphicsBackend: String, Sendable, CaseIterable {
         switch self {
         case .d3dmetal: "dxgi,d3d9,d3d10,d3d10core,d3d11,d3d12=b"
         case .dxmt: "dxgi,d3d10core,d3d11=n,b;d3d9,d3d10,d3d12=b"
-        case .dxvk: "dxgi,d3d9,d3d10core,d3d11=n,b;d3d10,d3d12=b"
+        // The pinned DXVK-macOS ships d3d10core/d3d11 only and runs on Wine's own dxgi.
+        case .dxvk: "d3d10core,d3d11=n,b;dxgi,d3d9,d3d10,d3d12=b"
         }
     }
 
@@ -36,7 +37,7 @@ public enum GraphicsBackend: String, Sendable, CaseIterable {
         let (dir, names): (URL, [String]) = switch self {
         case .d3dmetal: (layout.libraries, [])
         case .dxmt: (layout.dxmt, ["d3d11.dll", "d3d10core.dll", "dxgi.dll"])
-        case .dxvk: (layout.dxvk, ["d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"])
+        case .dxvk: (layout.dxvk, ["d3d10core.dll", "d3d11.dll"])
         }
         return names.flatMap { name in
             [

@@ -58,6 +58,13 @@ private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String
     #expect(try String(contentsOf: system32, encoding: .utf8) == "dxvk x64 d3d11.dll")
 }
 
+@Test func missingRuntimeDLLIsAnError() throws {
+    // Silently skipping it once left DXMT's dxgi in place under DXVK.
+    let (manager, env) = try makeManager(winebootCreatingPrefix())
+    try FileManager.default.removeItem(at: manager.layout.dxvk.appending(path: "x64/d3d11.dll"))
+    #expect(throws: PrefixError.self) { try manager.prepare(backend: .dxvk, environment: env) }
+}
+
 @Test func concurrentLaunchesRunWinebootOnce() async throws {
     // Steam starts iscriptevaluator (`run`) and the game close together on first launch.
     let runner = winebootCreatingPrefix(delay: 0.3)

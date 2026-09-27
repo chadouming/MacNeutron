@@ -39,6 +39,14 @@ import Testing
     }
 }
 
+@Test func dxvkUsesWinesDXGIAndOnlyTheDLLsTheRuntimeShips() {
+    // A native dxgi left behind by DXMT must never be paired with DXVK's d3d11.
+    #expect(GraphicsBackend.dxvk.dllOverrides == "d3d10core,d3d11=n,b;dxgi,d3d9,d3d10,d3d12=b")
+    let layout = ToolLayout(root: URL(filePath: "/t", directoryHint: .isDirectory))
+    let names = Set(GraphicsBackend.dxvk.prefixDLLs(layout: layout).map(\.source.lastPathComponent))
+    #expect(names == ["d3d10core.dll", "d3d11.dll"])
+}
+
 @Test func dxmtDeploysBothArchitectures() {
     let layout = ToolLayout(root: URL(filePath: "/t", directoryHint: .isDirectory))
     let dlls = GraphicsBackend.dxmt.prefixDLLs(layout: layout)

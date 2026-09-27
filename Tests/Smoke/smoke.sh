@@ -25,14 +25,14 @@ fail=0
 check() { # backend exe expected-exit [args...]
   backend=$1; exe=$2; want=$3; shift 3
   set +e
-  STEAM_COMPAT_DATA_PATH="$WORK/compatdata/$backend" SteamAppId=0 MACPROTON_GRAPHICS=$backend \
+  STEAM_COMPAT_DATA_PATH="$WORK/compatdata/shared" SteamAppId=0 MACPROTON_GRAPHICS=$backend \
     "$TOOL/proton" waitforexitandrun "$WORK/bin/$exe" "$@"
   got=$?
   set -e
   if [ "$got" -eq "$want" ]; then echo "PASS $backend $exe"; else echo "FAIL $backend $exe: exit $got, want $want"; fail=1; fi
 }
 
-backends="dxmt dxvk"
+backends="dxmt dxvk"   # one shared prefix, in this order: switching backends is the case that broke
 if [ -f "$TOOL/gptk.json" ]; then backends="d3dmetal $backends"; fi
 for backend in $backends; do
   check "$backend" exitcode.exe 2 "a b" "c"

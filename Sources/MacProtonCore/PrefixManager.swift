@@ -54,8 +54,10 @@ public struct PrefixManager: Sendable {
     func deployDLLs(for backend: GraphicsBackend) throws {
         let fm = FileManager.default
         for (source, destination) in backend.prefixDLLs(layout: layout) {
-            // ponytail: a runtime without a 32-bit build of a DLL just skips it.
-            guard fm.fileExists(atPath: source.path(percentEncoded: false)) else { continue }
+            // A missing file must fail loudly: skipping one once left DXMT's dxgi paired with DXVK.
+            guard fm.fileExists(atPath: source.path(percentEncoded: false)) else {
+                throw PrefixError.dllCopyFailed("\(destination): missing from the runtime (\(source.path(percentEncoded: false)))")
+            }
             let target = context.prefix.appending(path: destination)
             do {
                 try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)

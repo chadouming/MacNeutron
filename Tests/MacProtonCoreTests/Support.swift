@@ -62,7 +62,8 @@ func makeToolLayout() throws -> ToolLayout {
         for dll in ["d3d11.dll", "d3d10core.dll", "dxgi.dll"] {
             try write("dxmt \(arch) \(dll)", to: layout.dxmt.appending(path: "\(arch)/\(dll)"))
         }
-        for dll in ["d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"] {
+        // The pinned runtime's DXVK ships only these two; it relies on Wine's own dxgi.
+        for dll in ["d3d10core.dll", "d3d11.dll"] {
             try write("dxvk \(arch) \(dll)", to: layout.dxvk.appending(path: "\(arch)/\(dll)"))
         }
     }
