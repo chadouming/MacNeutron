@@ -114,7 +114,7 @@ Steam invokes `proton <verb> <exe> [args…]` with the variables listed in §2.4
 2. If the prefix is missing, or `version` is older than the runtime, run `wineboot -u`, then write `version`.
 3. A lock file (`$STEAM_COMPAT_DATA_PATH/macproton.lock`, via `flock`) is held **only during prefix preparation**, never while the game runs, so concurrent launches cannot race `wineboot` and `runinprefix` still works during a session.
 4. Upgrades only touch Wine's own files. `drive_c/users` is never modified.
-5. Steam deletes `compatdata/<appid>` on uninstall, so there is no `destroyprefix` verb.
+5. There is no `destroyprefix` verb. **Correction, observed 2026-09-27:** after uninstalling a game (via `app_uninstall` from Steam's console), macOS Steam left `compatdata/<appid>` in place (590 MB for a Unity game). Removing prefixes of uninstalled games moves to sub-project 3's app. Whether uninstalling through Steam's UI behaves differently is untested.
 6. The bridge (sub-project 2) adds its prefix setup (lsteamclient DLL, `steam.exe` stub, Steam registry keys) between preparation and launch. Sub-project 1 adds no placeholder for it.
 
 **Environment per launch:**
@@ -167,6 +167,7 @@ Every failure is logged. Launch-blocking failures also post a macOS notification
 2. **msync variable: resolved.** `WINEMSYNC` (winecx `server/msync.c`).
 3. **DXMT: resolved.** DXMT 0.80 ships inside the pinned runtime.
 4. **Acceptance game: open.** Pick a free, Windows-only D3D11 title on Steam whose executable does not import `steam_api64.dll`, checked by inspecting the downloaded depot's imports with `llvm-objdump -p`.
+   - **2026-09-27:** "Cats" (2977660) ran on DXMT and DXVK from Steam's Play button and stopped cleanly, but it ships Steamworks.NET, so it does not qualify. `SteamAPI_Init` fails without the bridge and the game keeps running. Results are in `docs/testing/acceptance-runtime.md`. A qualifying game is still needed.
 
 ## 9. Risks
 

@@ -77,3 +77,4 @@ with the expected backend.
 
 | Date | Game (appid) | GPTK | Run A | Run B | Run C | Run D | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-09-27 | Cats (2977660), Unity 2022.3 IL2CPP | none | ✅ DXMT: D3D 11.0 [11.1] on Apple M5 Pro, menu renders | ✅ DXVK after fix `490897a` (first try failed: DXMT's leftover dxgi) | ✅ log written via `/usr/bin/env` | ✅ game quits cleanly (exit 0); on DXVK after a delay of roughly 30 s | **Not a qualifying game**: ships Steamworks.NET (`SteamAPI_Init` fails, game keeps running). Found: launch options need `/usr/bin/env`; uninstall leaves `compatdata/<appid>` (590 MB) and `<Game>.dxvk-cache` behind |
