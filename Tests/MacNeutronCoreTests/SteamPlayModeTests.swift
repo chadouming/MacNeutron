@@ -5,7 +5,8 @@ import Testing
 func makeMode(session: String = okSession, config: String = steamConfigFixture,
               running: Bool = false) throws -> (SteamPlayMode, FakeSteam) {
     let (steam, root) = try makeFakeSteam(config: config)
-    let fake = FakeSteam(steam: steam, running: running, session: session)
+    let fake = FakeSteam(steam: steam, running: running, session: session,
+                         intentFile: root.appending(path: "steam-play-enabled"))
     var mode = SteamPlayMode(steam: steam, root: root, process: fake)
     mode.verifyTimeout = .seconds(2)
     return (mode, fake)
@@ -156,4 +157,38 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
                                                environment: [:], output: out)
     #expect(status == 0)
     #expect(try String(contentsOf: out, encoding: .utf8) == "arm64\n")
+}
+
+@Test func syncRefusesToDropMacGameProtection() async throws {
+    // An unreadable app list must never turn into "no Mac games" while Steam stays in Linux mode.
+    let (mode, fake) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    try await fake.quit(timeout: .seconds(1))
+    #expect(throws: SteamPlayError.planDropsMacGames(1)) {
+        try mode.sync(plan: ["0": ToolMapping(tool: "macneutron", priority: 75)])
+    }
+    #expect(try mode.currentMappings()["1062090"]?.tool == "macneutron-native")
+}
+
+@Test func enableBuildsThePlanAfterSteamHasQuit() async throws {
+    // Steam rewrites its app list on exit, so a plan built earlier can miss a game bought this session.
+    let (mode, fake) = try makeMode(running: true)
+    var steamWasRunning: Bool?
+    try await mode.enable(planAfterQuit: {
+        steamWasRunning = fake.isRunning()
+        return samplePlan
+    })
+    #expect(steamWasRunning == false)
+    #expect(try mode.currentMappings() == samplePlan)
+}
+
+@Test func intentIsRecordedBeforeSteamStartsInLinuxMode() async throws {
+    // If the app dies during verification, it must still know Steam Play mode is on.
+    let (mode, fake) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    #expect(fake.launchesWithIntent == [true])
+    let (failing, failingFake) = try makeMode(session: macModeSession)
+    await #expect(throws: SteamPlayError.self) { try await failing.enable(plan: samplePlan) }
+    #expect(failingFake.launchesWithIntent == [true, false])
+    #expect(!failing.isWanted)
 }

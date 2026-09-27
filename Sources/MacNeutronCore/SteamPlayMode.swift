@@ -77,8 +77,14 @@ public struct SteamPlayMode: Sendable {
     // MARK: Flows
 
     public func enable(plan: [String: ToolMapping]) async throws {
+        try await enable(planAfterQuit: { plan })
+    }
+
+    /// Builds the plan only once Steam has quit: Steam rewrites its app list on exit.
+    public func enable(planAfterQuit makePlan: () throws -> [String: ToolMapping]) async throws {
         guard steam.isInstalled else { throw SteamPlayError.steamNotInstalled }
         try await process.quit(timeout: quitTimeout)
+        let plan = try makePlan()
         _ = try readConfig()
         let backup = try backupConfig()
         do {
@@ -91,13 +97,14 @@ public struct SteamPlayMode: Sendable {
             unlinkTools()
             throw error
         }
+        // Recorded before Steam starts in Linux mode, so a crash during verification can't hide that it's on.
+        try write("", to: intentFile)
         let logStart = size(of: steam.compatLog)
         try process.launch()
         if let problem = await waitForVerification(since: logStart) {
             await rollBack(restoring: backup)
             throw SteamPlayError.verificationFailed(problem)
         }
-        try write("", to: intentFile)
     }
 
     public func disable() async throws {
@@ -110,9 +117,13 @@ public struct SteamPlayMode: Sendable {
     }
 
     /// Brings `config.vdf` up to date with `plan`. Call only while Steam is closed.
+    /// Refuses any plan that would drop a Mac game's `macneutron-native` mapping: with Steam in Linux mode,
+    /// that game's files would be deleted at the next start. Apps never legitimately leave the plan.
     @discardableResult
     public func sync(plan: [String: ToolMapping]) throws -> Bool {
         guard isWanted, filesIntact, try pendingChanges(plan: plan) > 0 else { return false }
+        let dropped = try currentMappings().filter { $0.value.tool == Self.nativeToolName && plan[$0.key] == nil }
+        guard dropped.isEmpty else { throw SteamPlayError.planDropsMacGames(dropped.count) }
         try applyMappings(plan)
         return true
     }
@@ -210,6 +221,7 @@ public struct SteamPlayMode: Sendable {
 
     private func rollBack(restoring backup: URL?) async {
         try? FileManager.default.removeItem(at: steam.steamDevConfig)  // first
+        try? FileManager.default.removeItem(at: intentFile)
         try? await process.quit(timeout: quitTimeout)
         unlinkTools()
         if let backup {

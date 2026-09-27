@@ -31,16 +31,20 @@ final class FakeSteam: SteamControlling, @unchecked Sendable {
     private let lock = NSLock()
     private var running: Bool
     private var devConfigAtLaunch: [Bool] = []
+    private var intentAtLaunch: [Bool] = []
     let steam: SteamLocation
     let session: String
+    let intentFile: URL?
 
-    init(steam: SteamLocation, running: Bool = false, session: String = okSession) {
+    init(steam: SteamLocation, running: Bool = false, session: String = okSession, intentFile: URL? = nil) {
         self.steam = steam
         self.running = running
         self.session = session
+        self.intentFile = intentFile
     }
 
     var launchesWithDevConfig: [Bool] { lock.withLock { devConfigAtLaunch } }
+    var launchesWithIntent: [Bool] { lock.withLock { intentAtLaunch } }
 
     func isRunning() -> Bool { lock.withLock { running } }
 
@@ -48,9 +52,11 @@ final class FakeSteam: SteamControlling, @unchecked Sendable {
 
     func launch() throws {
         let hasDevConfig = FileManager.default.fileExists(atPath: steam.steamDevConfig.path(percentEncoded: false))
+        let hasIntent = intentFile.map { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) } ?? false
         lock.withLock {
             running = true
             devConfigAtLaunch.append(hasDevConfig)
+            intentAtLaunch.append(hasIntent)
         }
         let old = (try? String(contentsOf: steam.compatLog, encoding: .utf8)) ?? ""
         try write(old + session, to: steam.compatLog)
