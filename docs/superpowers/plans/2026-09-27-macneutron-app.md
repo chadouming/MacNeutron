@@ -120,7 +120,7 @@ open -a Steam
 Check: 40 s later, `grep "AppID 1062090" "$S/logs/content_log.txt" | tail -2` shows no new update line for Timberborn.
 
 - [ ] **Step 5: Decide and record**
-  - **The probe registered:** B is confirmed. Add "**Verified 2026-MM-DD:** Steam registers tools symlinked into the bundle's `compatibilitytools.d` with no environment variable" under spec §10.1, and continue.
+  - **The probe registered:** B is confirmed. Add "**Verified <date>:** Steam registers tools symlinked into the bundle's `compatibilitytools.d` with no environment variable" under spec §10.1, and continue.
   - **It did not register:** **stop.** Task 7's `linkTools()` has to become approach C (a LaunchAgent running `launchctl setenv STEAM_EXTRA_COMPAT_TOOLS_PATHS` at load); re-plan Task 7 before executing it. Tasks 2–6 don't depend on this and can go ahead.
 
 ---
@@ -2370,9 +2370,13 @@ final class AppModel {
     }
 
     /// Every 3 s: when Steam quits, bring its mappings up to date; 20 s after it starts, re-check the files.
+    /// Once a minute, re-read Steam's app list so games bought meanwhile show up as "restart needed".
     private func startWatchingSteam() {
         pollTask = Task { [weak self] in
+            var ticks = 0
             while !Task.isCancelled {
+                ticks += 1
+                if ticks % 20 == 0, self?.busy == nil { self?.refresh() }
                 guard let self else { return }
                 switch self.watcher.observe(running: self.mode.process.isRunning()) {
                 case .quit?:
