@@ -164,7 +164,7 @@ Every failure is logged. Launch-blocking failures also post a macOS notification
 
 1. **Wine build: pinned and smoke-tested for DXMT and DXVK; D3DMetal still open.** Pinned to winecx-gptk `runtime-v4.7.3`.
    - **2026-09-27, macOS 27 on Apple Silicon:** `exitcode.exe` got both arguments intact and `d3d11probe.exe` created a D3D11 device and swap chain at feature level 11_0 through `dxmt` and through `dxvk`. The real tarball's layout matched the plan and the SHA-256 verified.
-   - **`d3dmetal`: not run yet, because GPTK is not imported.** Rerun with `make smoke GPTK=<volume>`. If GPTK 3.0 fails but GPTK 4.0 beta works, support 4.0 only and require macOS 26.4.
+   - **`d3dmetal`: passes, 2026-09-27, with GPTK 4.0b2** (D3DMetal is x86_64-only). The smoke test runs 6/6. "Cats" from Steam renders on D3DMetal (Unity sees `AMD Compatibility Mode`, D3D 11.1). Measured CPU while playing: game 31%, wineserver 1.9%, so wineserver is about 6% of the total and a native arm64 wineserver isn't worth building for performance.
 2. **msync variable: resolved.** `WINEMSYNC` (winecx `server/msync.c`).
 3. **DXMT: resolved.** DXMT 0.80 ships inside the pinned runtime.
 4. **Acceptance game: open.** Pick a free, Windows-only D3D11 title on Steam whose executable does not import `steam_api64.dll`, checked by inspecting the downloaded depot's imports with `llvm-objdump -p`.
