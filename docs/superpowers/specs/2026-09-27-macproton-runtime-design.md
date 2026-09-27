@@ -71,24 +71,27 @@ Tool directory `~/Library/Application Support/MacProton/compatibilitytools.d/mac
 | `compatibilitytool.vdf` | Tool `macproton`, `from_oslist "windows"`, `to_oslist "linux"`. The tool name must not contain `arm64`, because Steam ignores those names |
 | `toolmanifest.vdf` | `version "2"`, `commandline "/proton %verb%"` |
 | `proton` | Shell stub: `exec "$(dirname "$0")/bin/macproton" launch "$@"` |
-| `bin/macproton` | Universal Swift CLI from MacProtonCore. All launcher logic lives here, shared with the app |
-| `wine/` | CrossOver-derived Wine (CrossOver 26.x changes on Wine 11.x), x86_64, relocatable. Built by our fork of the winecx-gptk GitHub Actions pipeline. Releases publish binaries plus source (LGPL). Pinned by version and SHA-256 |
-| GPTK overlay | "Import GPTK" takes the mounted GPTK image: it validates `redist/lib/external` and `redist/lib/wine/{x86_64-unix,x86_64-windows}` against a known file list for supported GPTK versions, copies them over `wine/lib`, and records the GPTK version in `gptk.json`. Re-import overwrites; a Wine update re-applies the overlay from a kept copy under `gptk/` |
-| `dxmt/` | Bundled DXMT (open source, D3D10/11), used when GPTK is not imported |
+| `bin/macproton` | arm64 Swift CLI from MacProtonCore (Apple Silicon only, so no universal binary). All launcher logic lives here, shared with the app |
+| `Libraries/` | The winecx-gptk runtime tarball, unpacked: `Wine/{bin,lib}` (CrossOver 26.3 changes on Wine 11.17, x86_64, relocatable), `DXMT/{x64,x32}` (DXMT 0.80) and `DXVK/{x64,x32}` (DXVK-macOS 1.10.3). Pinned to release `runtime-v4.7.3`, SHA-256 `a4b5d63493f80698cce5cad8e7212d9a51c8292037b00c478f4652636fcfd331`, verified at install. Before the first public release we fork the pipeline to `github.com/chadouming/winecx-gptk` and publish binaries plus source (LGPL) |
+| `runtime-version` | The installed pin's version; also the prefix version (§5) |
+| GPTK overlay | `macproton import-gptk <volume \| redist \| redist/lib>` requires `external/{D3DMetal.framework,libd3dshared.dylib}` and `wine/x86_64-windows/{d3d10,d3d11,d3d12,dxgi}.dll`, and reads the version from the framework's `Info.plist` (`CFBundleShortVersionString`). Validation runs before anything is copied. It then keeps a pristine copy in `gptk/lib`, `ditto`s that over `Libraries/Wine/lib`, points `wine/x86_64-unix/{d3d10,d3d11,d3d12,dxgi}.so` at `../../external/libd3dshared.dylib`, and writes `gptk.json`. A runtime reinstall re-applies the overlay from `gptk/` |
 
 D3DMetal runs only on CrossOver-derived Wine, which is why upstream Wine is not an option.
 
-**Graphics backend.** `MACPROTON_GRAPHICS` is read from the environment and is settable per game through Steam launch options, e.g. `MACPROTON_GRAPHICS=dxmt %command%`:
+**Graphics backend.** `MACPROTON_GRAPHICS` is read from the environment and is settable per game through Steam launch options, e.g. `MACPROTON_GRAPHICS=dxmt %command%`. An invalid value falls back to the default and is noted in the log.
 
-| Value | Default when | Covers | Overrides |
-|---|---|---|---|
-| `d3dmetal` | GPTK imported | D3D11, D3D12 | `dxgi,d3d11,d3d12,d3d10core` → GPTK's builtins |
-| `dxmt` | GPTK absent | D3D10, D3D11 | `dxgi,d3d11,d3d10core` → DXMT (native) |
-| `wined3d` | never | last resort; D3D9 path | Wine's own builtins |
+| Value | Default when | Covers | `WINEDLLOVERRIDES` | DLLs copied into the prefix |
+|---|---|---|---|---|
+| `d3dmetal` | GPTK imported | D3D10/11/12 (D3D9 via Wine's builtin) | `dxgi,d3d9,d3d10,d3d10core,d3d11,d3d12=b` | none |
+| `dxmt` | GPTK absent, or `d3dmetal` requested without GPTK | D3D10/11 | `dxgi,d3d10core,d3d11=n,b;d3d9,d3d10,d3d12=b` | DXMT `d3d11`, `d3d10core`, `dxgi` |
+| `dxvk` | never | D3D9/10/11 through MoltenVK | `dxgi,d3d9,d3d10core,d3d11=n,b;d3d10,d3d12=b` | DXVK `d3d9`, `d3d10core`, `d3d11`, `dxgi` |
 
-**Default environment** (each has a `MACPROTON_NO_*` opt-out):
-- `ROSETTA_ADVERTISE_AVX=1`.
-- Wine msync enabled, using whatever variable the pinned build expects.
+Every backend names all six D3D DLLs, so DLLs a previous backend left in the prefix cannot leak into a launch. The GPTK overlay replaces Wine's builtin D3D DLLs, which makes `wined3d` unreachable once GPTK is imported; DXVK is the D3D9 route instead. The prefix copies go into `system32` (x64) and `syswow64` (x32). User-supplied `WINEDLLOVERRIDES` are merged by DLL name, the user winning, with no name repeated.
+
+**Default environment:**
+- `ROSETTA_ADVERTISE_AVX=1`; `MACPROTON_NO_AVX=1` opts out.
+- `WINEMSYNC=1`, which the pinned build reads; `MACPROTON_NO_MSYNC=1` opts out.
+- A value the user sets for any of these wins.
 
 **Deferred** (add when users ask):
 - Proton's prebuilt `default_pfx`. Without it, the first launch runs `wineboot` and takes about 20 seconds longer.
@@ -123,6 +126,8 @@ Steam invokes `proton <verb> <exe> [args…]` with the variables listed in §2.4
 
 Wine's x86_64 binaries run under Rosetta automatically. The `exec`-to-keep-PID trick is used only by the passthrough tool.
 
+**Stop button.** Steam's Stop sends SIGTERM to the launcher. The launcher runs `wineserver -k` for the game's prefix and exits with 128 + the signal number. SIGINT is handled the same way.
+
 ## 6. Sub-project 1: Errors and logging
 
 Every failure is logged. Launch-blocking failures also post a macOS notification, because Steam gives no useful feedback when a compat tool fails.
@@ -130,7 +135,8 @@ Every failure is logged. Launch-blocking failures also post a macOS notification
 | Situation | Behaviour |
 |---|---|
 | Rosetta missing | Notification with the install command (`softwareupdate --install-rosetta --agree-to-license`); exit 1 |
-| Wine missing or checksum mismatch | Notification "Repair runtime in MacProton"; exit 1 |
+| Runtime missing or incomplete (`wine`, `wineserver` or `runtime-version` absent) | Notification "Repair it with: macproton install-runtime"; exit 1. The SHA-256 is checked at install, not on every launch |
+| Runtime tarball fails its checksum, or lacks `Wine/bin/wine`/`wineserver` | Install aborts; the previously installed runtime is left untouched |
 | GPTK not imported | Use DXMT; log it |
 | GPTK import fails validation | Reject with a message naming the missing or unknown files. Validation runs before any copy, so nothing is half-copied |
 | Prefix upgrade fails | Leave the prefix as is, log, exit 1. Never delete `drive_c` |
@@ -148,18 +154,18 @@ Every failure is logged. Launch-blocking failures also post a macOS notification
   - GPTK import validation against fixture folders (valid, missing file, unknown version).
   Wine is replaced by a fake script that records its arguments.
 - **Smoke** (`make smoke`, real Wine, run on a developer Mac, not CI):
-  - `exitcode.exe` is a console program that returns 0.
+  - `exitcode.exe` prints its arguments and exits with their count, which proves arguments with spaces survive Steam → stub → launcher → Wine.
   - `d3d11probe.exe` creates a D3D11 device and a swap chain and exits 0 on success.
-  Both are built with mingw-w64 from sources in `tests/smoke/`, and run through `macproton launch waitforexitandrun` with each backend. GitHub's macOS runners are not reliable for GPU work.
+  Both are built with mingw-w64 from sources in `Tests/Smoke/`, and run through `macproton launch waitforexitandrun` with each backend. GitHub's macOS runners are not reliable for GPU work.
 - **Acceptance** (manual, documented steps): enable Steam Play mode by hand (steam_dev.cfg, env var, mapping, as in §2), install a free Windows-only D3D11 game that does not require the Steam API, and launch it from Play with `d3dmetal` and with `dxmt`.
 
 ## 8. First plan tasks: verifications with decision rules
 
-1. **Pin the Wine build.** Fork winecx-gptk. Confirm its current release runs `exitcode.exe` on macOS 26/27 and that GPTK 3.0's overlay creates a D3D11 device with `d3d11probe.exe`.
+1. **Wine build: pinned, with its smoke run still to do.** Pinned to winecx-gptk `runtime-v4.7.3`. The implementation plan's smoke task confirms `exitcode.exe` and `d3d11probe.exe` pass through `dxmt` and `dxvk`, and, with GPTK imported, `d3dmetal`.
    - If GPTK 3.0 fails but GPTK 4.0 beta works, support 4.0 only and require macOS 26.4.
-2. **msync variable.** Find the name the pinned build honors (check its source for `MSYNC`). If it has none, drop the default.
-3. **DXMT.** Build or pin a DXMT release compatible with the pinned Wine, and confirm `d3d11probe.exe` passes with `MACPROTON_GRAPHICS=dxmt`.
-4. **Acceptance game.** Pick a free, Windows-only D3D11 title on Steam whose executable does not import `steam_api64.dll`, checked by inspecting the downloaded depot's imports with `llvm-objdump -p`.
+2. **msync variable: resolved.** `WINEMSYNC` (winecx `server/msync.c`).
+3. **DXMT: resolved.** DXMT 0.80 ships inside the pinned runtime.
+4. **Acceptance game: open.** Pick a free, Windows-only D3D11 title on Steam whose executable does not import `steam_api64.dll`, checked by inspecting the downloaded depot's imports with `llvm-objdump -p`.
 
 ## 9. Risks
 
@@ -170,3 +176,4 @@ Every failure is logged. Launch-blocking failures also post a macOS notification
 | D3DMetal only runs on CrossOver-derived Wine | Tied to CodeWeavers' open-source drops | Fork the CI; DXMT fallback works on any Wine |
 | Apple license changes or GPTK layout changes | Import breaks | Known-file-list validation per GPTK version, with a clear error |
 | Steam API bridge infeasible | v1 goal unmet | Sub-project 2 comes right after the runtime, so a failure surfaces early |
+| Rosetta 2 largely discontinued in macOS 28 (per winecx-gptk's README); D3DMetal ships x86_64 only | The whole x86_64 runtime, and every Rosetta-based Wine on the Mac, stops working unless Apple keeps Rosetta for games | Out of our hands. Track Apple's Rosetta policy for games. The successor path is an arm64 Wine running x86 code under FEX, which needs the `com.apple.developer.cross-architecture-support` entitlement that Apple grants at its discretion |
