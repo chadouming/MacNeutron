@@ -51,9 +51,11 @@ public struct Launcher: Sendable {
                 try prefix.prepare(backend: backend, environment: env)
                 status = try runGame(request, env, gameLog)
             case .waitforexitandrun:
-                // Let a previous session in this prefix (e.g. the redistributable installer) finish first.
-                _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
+                // Prepare first (Proton's order): a launch queued on the prefix lock behind
+                // `run iscriptevaluator.exe` then finds that session's wineserver alive, and
+                // `-w` waits for the redistributable installers to finish.
                 try prefix.prepare(backend: backend, environment: env)
+                _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
                 status = try runGame(request, env, gameLog)
                 // Keep Steam's "running" state until every process in the prefix is gone
                 // (covers launchers that start the real game and exit).

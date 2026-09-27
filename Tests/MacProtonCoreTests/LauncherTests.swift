@@ -25,7 +25,9 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     return Fixture(launcher: launcher, runner: runner, notifier: notifier, env: env)
 }
 
-@Test func waitForExitAndRunWaitsPreparesRunsThenWaits() throws {
+@Test func waitForExitAndRunPreparesWaitsRunsThenWaits() throws {
+    // Proton's order: preparing first means a launch that queued on the prefix lock behind
+    // `run iscriptevaluator.exe` finds that session's wineserver alive and waits it out.
     let runner = FakeRunner { call in
         if call.arguments.first == "wineboot", let prefix = call.environment["WINEPREFIX"] {
             try? FileManager.default.createDirectory(atPath: prefix, withIntermediateDirectories: true)
@@ -36,8 +38,8 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     let status = f.launcher.launch(["waitforexitandrun", "/g/Game.exe", "-windowed"], environment: f.env)
     #expect(status == 7)
     #expect(runner.calls.map { [$0.tool] + $0.arguments } == [
-        ["wineserver", "-w"],
         ["wine", "wineboot", "-u"],
+        ["wineserver", "-w"],
         ["wine", "/g/Game.exe", "-windowed"],
         ["wineserver", "-w"],
     ])
