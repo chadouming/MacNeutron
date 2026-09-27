@@ -57,6 +57,8 @@ final class AppModel {
     private var apps: [AppInfo] = []
     private var watcher = SteamWatcher()
     private var pollTask: Task<Void, Never>?
+    /// Bumped by every change the model makes on disk.
+    private(set) var generation = 0
 
     init(steam: SteamLocation = SteamLocation(), layout: ToolLayout = ToolLayout(root: ToolLayout.defaultRoot),
          mode: SteamPlayMode = SteamPlayMode(), store: GameSettingsStore = GameSettingsStore(),
@@ -68,6 +70,9 @@ final class AppModel {
         self.loginItem = loginItem
         // Keep the passthrough script current across app updates (it's only rewritten here and on enable).
         if mode.isWanted { try? mode.installNativeTool() }
+        // Read now, not in the first refresh: the scene decides at launch whether to open the setup window.
+        runtimeVersion = layout.runtimeVersion
+        gptkVersion = layout.gptkVersion
         Task { await refresh() }
         startWatchingSteam()
     }
@@ -86,9 +91,16 @@ final class AppModel {
 
     func refresh() async {
         let (steam, layout, store, mode, fallback) = (self.steam, self.layout, self.store, self.mode, apps)
+        let mine = generation
         let snapshot = await Task.detached {
             Self.loadSnapshot(steam: steam, layout: layout, store: store, mode: mode, fallbackApps: fallback)
         }.value
+        apply(snapshot, generation: mine)
+    }
+
+    /// Drops a snapshot read before a settings change or cleanup: it would put the old state back.
+    func apply(_ snapshot: Snapshot, generation mine: Int) {
+        guard mine == generation else { return }
         runtimeVersion = snapshot.runtimeVersion
         gptkVersion = snapshot.gptkVersion
         apps = snapshot.apps
@@ -142,12 +154,14 @@ final class AppModel {
             errorMessage = "MacNeutron can't read Steam's app list, so it can't protect your Mac games: \(appInfoError ?? "")"
             return
         }
-        await run("Turning on Steam Play mode and restarting Steam…") { [mode] in
-            // Steam rewrites its app list on exit, so plan only after it has quit.
-            try await mode.process.quit(timeout: .seconds(30))
-            await self.refresh()
-            if let error = self.appInfoError { throw AppInfoUnreadable(detail: error) }
-            try await mode.enable(plan: self.plan())
+        await run("Turning on Steam Play mode and restarting Steam…") { [mode, steam, store] in
+            // enable quits Steam itself (after its checks, so a failure leaves Steam running) and then asks
+            // for the plan: Steam rewrites its app list on exit.
+            try await mode.enable(planAfterQuit: { @Sendable in
+                let apps: [AppInfo]
+                do { apps = try AppInfoReader.read(steam.appInfo) } catch { throw AppInfoUnreadable(detail: "\(error)") }
+                return MappingPlanner.plan(apps: apps, runAs: store.runAsOverrides())
+            })
         }
     }
 
@@ -175,6 +189,7 @@ final class AppModel {
     /// otherwise it waits for a restart ("restart needed").
     func update(_ appID: UInt32, _ change: (inout GameSettings) -> Void) async {
         guard let index = games.firstIndex(where: { $0.id == appID }) else { return }
+        generation += 1  // a refresh already reading from disk would put the old settings back
         change(&games[index].settings)
         do {
             try store.save(games[index].settings, for: String(appID))
@@ -194,6 +209,7 @@ final class AppModel {
     }
 
     func cleanUp(_ selected: [OrphanPrefix]) async {
+        generation += 1
         do { try OrphanPrefixes.delete(selected) } catch { errorMessage = error.localizedDescription }
         await refresh()
     }

@@ -79,3 +79,35 @@ private func makeModel(steamRunning: Bool = false,
     #expect(model.loginItemStatus == .requiresApproval)
     #expect(model.errorMessage == nil)
 }
+
+@MainActor @Test func turningOnWithoutRosettaLeavesSteamRunning() async throws {
+    var (mode, fake) = try makeMode(running: true)
+    mode.rosettaAvailable = { false }
+    try FileManager.default.createDirectory(at: mode.steam.appInfo.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try makeAppInfoV29([timberborn, bongoCat, cats]).write(to: mode.steam.appInfo)
+    let model = AppModel(steam: mode.steam, layout: try makeToolLayout(), mode: mode,
+                         store: GameSettingsStore(directory: try makeTempDir()),
+                         loginItem: FakeLoginItem(statusAfterRegister: .enabled).item)
+    await model.refresh()
+    await model.enableSteamPlay()
+    #expect(model.errorMessage?.contains("Rosetta") == true)
+    #expect(fake.isRunning())
+}
+
+@MainActor @Test func setupWindowStaysClosedOnceSetUp() async throws {
+    let (model, mode, _) = try await makeModel()
+    try write("runtime-v4.7.3", to: model.layout.runtimeVersionFile)
+    let relaunched = AppModel(steam: mode.steam, layout: model.layout, mode: mode, store: model.store,
+                              loginItem: model.loginItem)
+    #expect(relaunched.setupComplete)  // the scene reads it before any refresh finishes
+}
+
+@MainActor @Test func aSnapshotReadBeforeAChangeDoesNotUndoIt() async throws {
+    let (model, mode, _) = try await makeModel()
+    let token = model.generation
+    let stale = AppModel.loadSnapshot(steam: mode.steam, layout: model.layout, store: model.store, mode: mode,
+                                      fallbackApps: [])
+    await model.update(bongoCat.appID) { $0.runAs = .windows }
+    model.apply(stale, generation: token)
+    #expect(model.games.first { $0.id == bongoCat.appID }?.settings.runAs == .windows)
+}

@@ -111,9 +111,9 @@ public struct SteamPlayMode: Sendable {
         }
         // Recorded before Steam starts in Linux mode, so a crash during verification can't hide that it's on.
         try write("", to: intentFile)
-        let logStart = size(of: steam.compatLog)
+        let logBefore = (try? Data(contentsOf: steam.compatLog)) ?? Data()
         try process.launch()
-        if let problem = await waitForVerification(since: logStart) {
+        if let problem = await waitForVerification(after: logBefore.count, head: logBefore.prefix(256)) {
             await rollBack(restoring: backup)
             throw SteamPlayError.verificationFailed(problem)
         }
@@ -245,15 +245,18 @@ public struct SteamPlayMode: Sendable {
         try? process.launch()
     }
 
-    private func waitForVerification(since offset: Int) async -> String? {
+    private func waitForVerification(after size: Int, head: Data) async -> String? {
         let deadline = ContinuousClock.now + verifyTimeout
         var problem: String? = "Steam didn't write its compatibility log"
         repeat {
-            if let data = try? Data(contentsOf: steam.compatLog), data.count != offset {
-                // A file shorter than before means Steam started it over: read all of it.
-                let session = data.count > offset ? data.dropFirst(offset) : data[...]
-                problem = Self.verify(log: String(decoding: session, as: UTF8.self))
-                if problem == nil { return nil }
+            if let data = try? Data(contentsOf: steam.compatLog) {
+                // Steam appends each session; a file that no longer begins as it did (the first line has a
+                // timestamp) was started over, so all of it is the new session.
+                let session = data.count >= size && data.starts(with: head) ? data.dropFirst(size) : data[...]
+                if !session.isEmpty {
+                    problem = Self.verify(log: String(decoding: session, as: UTF8.self))
+                    if problem == nil { return nil }
+                }
             }
             try? await Task.sleep(for: .seconds(1))
         } while ContinuousClock.now < deadline
@@ -281,10 +284,6 @@ public struct SteamPlayMode: Sendable {
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) }
-
-    private func size(of url: URL) -> Int {
-        ((try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)))?[.size] as? NSNumber)?.intValue ?? 0
-    }
 
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

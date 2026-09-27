@@ -239,6 +239,18 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     #expect(mode.isWanted)
 }
 
+@Test func verificationHandlesAStartedOverLogThatOutgrewTheOldOne() async throws {
+    // Steam appends every session to one log; a log started over can grow past the old size before the first poll.
+    let (steam, root) = try makeFakeSteam()
+    try write(String(repeating: "[2026-09-26 09:00:00] Client version: 1788652215\n", count: 2), to: steam.compatLog)
+    let fake = FakeSteam(steam: steam, replaceLogOnLaunch: true)
+    var mode = SteamPlayMode(steam: steam, root: root, process: fake)
+    mode.verifyTimeout = .seconds(2)
+    mode.rosettaAvailable = { true }
+    try await mode.enable(plan: samplePlan)
+    #expect(mode.isWanted)
+}
+
 @Test func statusReportsAnUnreadableConfig() async throws {
     let (mode, _) = try makeMode()
     try await mode.enable(plan: samplePlan)
