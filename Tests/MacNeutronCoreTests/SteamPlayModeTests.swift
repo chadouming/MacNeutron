@@ -9,6 +9,7 @@ func makeMode(session: String = okSession, config: String = steamConfigFixture,
                          intentFile: root.appending(path: "steam-play-enabled"))
     var mode = SteamPlayMode(steam: steam, root: root, process: fake)
     mode.verifyTimeout = .seconds(2)
+    mode.rosettaAvailable = { true }
     return (mode, fake)
 }
 
@@ -224,4 +225,16 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     mode.rosettaAvailable = { false }
     await #expect(throws: SteamPlayError.rosettaMissing) { try await mode.enable(plan: samplePlan) }
     #expect(fake.isRunning())
+}
+
+@Test func verificationHandlesACompatLogThatStartsOver() async throws {
+    // If Steam truncates its log at startup, the new session is shorter than the old file.
+    let (steam, root) = try makeFakeSteam()
+    try write(String(repeating: "[old] Client version: 1 and more\n", count: 200), to: steam.compatLog)
+    let fake = FakeSteam(steam: steam, replaceLogOnLaunch: true)
+    var mode = SteamPlayMode(steam: steam, root: root, process: fake)
+    mode.verifyTimeout = .seconds(2)
+    mode.rosettaAvailable = { true }
+    try await mode.enable(plan: samplePlan)
+    #expect(mode.isWanted)
 }

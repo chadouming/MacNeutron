@@ -243,8 +243,10 @@ public struct SteamPlayMode: Sendable {
         let deadline = ContinuousClock.now + verifyTimeout
         var problem: String? = "Steam didn't write its compatibility log"
         repeat {
-            if let data = try? Data(contentsOf: steam.compatLog), data.count > offset {
-                problem = Self.verify(log: String(decoding: data.dropFirst(offset), as: UTF8.self))
+            if let data = try? Data(contentsOf: steam.compatLog), data.count != offset {
+                // A file shorter than before means Steam started it over: read all of it.
+                let session = data.count > offset ? data.dropFirst(offset) : data[...]
+                problem = Self.verify(log: String(decoding: session, as: UTF8.self))
                 if problem == nil { return nil }
             }
             try? await Task.sleep(for: .seconds(1))

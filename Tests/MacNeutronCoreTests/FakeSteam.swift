@@ -35,8 +35,11 @@ final class FakeSteam: SteamControlling, @unchecked Sendable {
     let steam: SteamLocation
     let session: String
     let intentFile: URL?
+    let replaceLogOnLaunch: Bool
 
-    init(steam: SteamLocation, running: Bool = false, session: String = okSession, intentFile: URL? = nil) {
+    init(steam: SteamLocation, running: Bool = false, session: String = okSession, intentFile: URL? = nil,
+         replaceLogOnLaunch: Bool = false) {
+        self.replaceLogOnLaunch = replaceLogOnLaunch
         self.steam = steam
         self.running = running
         self.session = session
@@ -58,7 +61,7 @@ final class FakeSteam: SteamControlling, @unchecked Sendable {
             devConfigAtLaunch.append(hasDevConfig)
             intentAtLaunch.append(hasIntent)
         }
-        let old = (try? String(contentsOf: steam.compatLog, encoding: .utf8)) ?? ""
+        let old = replaceLogOnLaunch ? "" : (try? String(contentsOf: steam.compatLog, encoding: .utf8)) ?? ""
         try write(old + session, to: steam.compatLog)
     }
 }
