@@ -201,6 +201,7 @@ Mockups were reviewed in brainstorming. Every visible string uses sentence case 
 ## 10. First plan tasks: verifications with decision rules
 
 1. **Approach B probe.**
+   - **Verified 2026-09-27:** with no environment variable set anywhere, Steam registered a tool symlinked into `Steam.AppBundle/Steam/Contents/MacOS/compatibilitytools.d` ("Processing local tool list at …/Contents/MacOS/compatibilitytools.d/macneutron-probe/…", then "Registering tool macneutron-probe") in Linux mode. **B is kept.**
    - Test: with no environment variable set, place a probe tool at `B/compatibilitytools.d/<probe>` (a symlink to a folder outside the bundle), start Steam in Linux mode (Timberborn's manifest hidden), and check `compat_log.txt` for `Registering tool <probe>`.
    - **If it registers:** keep B.
    - **If not:** switch §4 step 5.2 to C, `~/Library/LaunchAgents/io.github.chadouming.macneutron.env.plist` running `launchctl setenv STEAM_EXTRA_COMPAT_TOOLS_PATHS` at load. Record the result in this spec.
