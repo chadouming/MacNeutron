@@ -127,3 +127,33 @@ func verifiesCompatLogSessions(log: String, problem: String?) {
     #expect(SteamPlayMode.verify(log: SteamPlayMode.lastSession(of: okSession + macModeSession)) != nil)
 }
 
+
+@Test func passthroughLaunchesAppBundles() async throws {
+    // Steam's launch entry for many Mac games is the .app folder itself (Timberborn's is).
+    let (mode, _) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    let app = try makeTempDir().appending(path: "My Game.app", directoryHint: .isDirectory)
+    try write("#!/bin/sh\necho \"$@\"\n", to: app.appending(path: "Contents/MacOS/Game Binary"), executable: true)
+    let info = try PropertyListSerialization.data(fromPropertyList: ["CFBundleExecutable": "Game Binary"], format: .xml, options: 0)
+    try info.write(to: app.appending(path: "Contents/Info.plist"))
+    let out = try makeTempDir().appending(path: "out.txt")
+    let status = try SystemProcessRunner().run(mode.link("macneutron-native").appending(path: "passthrough.sh"),
+                                               ["waitforexitandrun", app.path(percentEncoded: false), "a b"],
+                                               environment: [:], output: out)
+    #expect(status == 0)
+    #expect(try String(contentsOf: out, encoding: .utf8) == "a b\n")
+}
+
+@Test(.enabled(if: FileManager.default.fileExists(atPath: Preflight.rosettaRuntime.path(percentEncoded: false))))
+func passthroughPrefersTheAppleSiliconBuild() async throws {
+    // Steam starts tools preferring x86_64; without an override a universal game would run under Rosetta.
+    let (mode, _) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    let out = try makeTempDir().appending(path: "arch.txt")
+    let script = mode.link("macneutron-native").appending(path: "passthrough.sh").path(percentEncoded: false)
+    let status = try SystemProcessRunner().run(URL(filePath: "/usr/bin/arch"),
+                                               ["-x86_64", "/bin/sh", script, "waitforexitandrun", "/usr/bin/uname", "-m"],
+                                               environment: [:], output: out)
+    #expect(status == 0)
+    #expect(try String(contentsOf: out, encoding: .utf8) == "arm64\n")
+}

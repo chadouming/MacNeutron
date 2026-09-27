@@ -15,6 +15,23 @@ public struct SteamPlayMode: Sendable {
     public static let nativeToolName = MappingPlanner.nativeTool
     public static let devConfig = "@sSteamCmdForcePlatformType linux\n"
 
+    /// Runs a Mac game for Steam: `<verb> <command…>`. The command may be an `.app` folder (Steam would
+    /// normally open it through LaunchServices), so the bundle's executable is resolved. Steam starts
+    /// tools preferring x86_64, which carries through `exec`; `arch` puts the Apple Silicon build first.
+    /// `arch` replaces this process, so Steam keeps tracking the same PID.
+    static let passthroughScript = """
+        #!/bin/sh
+        shift
+        target=$1
+        shift
+        if [ -d "$target" ] && [ -f "$target/Contents/Info.plist" ]; then
+            name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$target/Contents/Info.plist" 2>/dev/null) || name=$(basename "$target" .app)
+            target="$target/Contents/MacOS/$name"
+        fi
+        exec /usr/bin/arch -arm64e -arm64 -x86_64 "$target" "$@"
+
+        """
+
     public let steam: SteamLocation
     public let tools: URL
     public let backups: URL
@@ -153,7 +170,7 @@ public struct SteamPlayMode: Sendable {
         return backup
     }
 
-    func installNativeTool() throws {
+    public func installNativeTool() throws {
         try write("""
             "compatibilitytools"
             {
@@ -173,8 +190,7 @@ public struct SteamPlayMode: Sendable {
         try write("\"manifest\"\n{\n  \"version\" \"2\"\n  \"commandline\" \"/passthrough.sh %verb%\"\n}\n",
                   to: nativeTool.appending(path: "toolmanifest.vdf"))
         let script = nativeTool.appending(path: "passthrough.sh")
-        // Steam passes "<verb> <command…>"; run the Mac game itself, keeping this PID for Steam's tracking.
-        try write("#!/bin/sh\nshift\nexec \"$@\"\n", to: script)
+        try write(Self.passthroughScript, to: script)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path(percentEncoded: false))
     }
 
