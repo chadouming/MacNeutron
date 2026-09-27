@@ -7,18 +7,22 @@ public struct Launcher: Sendable {
     public let log: LauncherLog
     public let notifier: any Notifier
     public let preflight: Preflight
+    public let settings: GameSettingsStore
 
     public init(layout: ToolLayout, runner: any ProcessRunner = SystemProcessRunner(), log: LauncherLog = .standard,
-                notifier: any Notifier = AppleScriptNotifier(), preflight: Preflight = Preflight()) {
+                notifier: any Notifier = AppleScriptNotifier(), preflight: Preflight = Preflight(),
+                settings: GameSettingsStore = GameSettingsStore()) {
         self.layout = layout
         self.runner = runner
         self.log = log
         self.notifier = notifier
         self.preflight = preflight
+        self.settings = settings
     }
 
     /// Returns the exit code for Steam. Never throws: every failure is logged and becomes exit 1.
-    public func launch(_ argv: [String], environment: [String: String]) -> Int32 {
+    public func launch(_ argv: [String], environment steamEnvironment: [String: String]) -> Int32 {
+        var environment = steamEnvironment
         let request: LaunchRequest
         let context: CompatContext
         do {
@@ -26,6 +30,12 @@ public struct Launcher: Sendable {
             context = try CompatContext(environment: environment)
         } catch {
             return fail("\(error)", argv: argv, notify: false)
+        }
+        do {
+            // Per-game settings from the app sit underneath; variables from Steam launch options win.
+            environment = try settings.load(context.appID).environment.merging(environment) { _, launchOption in launchOption }
+        } catch {
+            log.append("note: ignoring unreadable game settings for \(context.appID): \(error)")
         }
         do {
             try preflight.check(layout)

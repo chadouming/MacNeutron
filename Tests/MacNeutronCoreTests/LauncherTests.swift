@@ -20,7 +20,8 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     let notifier = RecordingNotifier()
     let launcher = Launcher(layout: try makeToolLayout(), runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
-                            notifier: notifier, preflight: Preflight(rosettaAvailable: { rosetta }))
+                            notifier: notifier, preflight: Preflight(rosettaAvailable: { rosetta }),
+                            settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")))
     let env = steamEnvironment(dataPath: try makeTempDir().appending(path: "compatdata/42"), appID: "42")
     return Fixture(launcher: launcher, runner: runner, notifier: notifier, env: env)
 }
@@ -131,4 +132,23 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     f.launcher.terminate(environment: f.env)
     #expect(f.runner.calls.map { [$0.tool] + $0.arguments } == [["wineserver", "-k"]])
     #expect(f.runner.calls[0].environment["WINEPREFIX"]?.hasSuffix("compatdata/42/pfx/") == true)
+}
+
+@Test func gameSettingsApplyUnderneathLaunchOptions() throws {
+    let f = try makeFixture()
+    try f.launcher.settings.save(GameSettings(graphics: "dxvk", log: true, msync: false), for: "42")
+    var env = f.env
+    env["MACNEUTRON_GRAPHICS"] = "dxmt"  // typed into Steam's launch options: wins
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    let wine = try #require(f.runner.calls.last?.environment)
+    #expect(wine["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)  // dxmt
+    #expect(wine["WINEDEBUG"] == "+err,+warn,+loaddll")
+    #expect(wine["WINEMSYNC"] == nil)
+}
+
+@Test func unreadableGameSettingsAreIgnored() throws {
+    let f = try makeFixture()
+    try write("{ not json", to: f.launcher.settings.directory.appending(path: "42.json"))
+    #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
+    #expect(try String(contentsOf: f.launcher.log.launcherLog, encoding: .utf8).contains("ignoring unreadable game settings for 42"))
 }
