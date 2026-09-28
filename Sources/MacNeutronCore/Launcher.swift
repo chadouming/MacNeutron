@@ -63,12 +63,14 @@ public struct Launcher: Sendable {
                 status = try runGame(request, env, gameLog, throughSteam: false)
             case .run:
                 try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
+                if env["MACNEUTRON_NO_STEAM_BRIDGE"] == "1" { try prefix.removeSteamBridge() }
                 status = try runGame(request, env, gameLog, throughSteam: steamBridge)
             case .waitforexitandrun:
                 // Prepare first (Proton's order): a launch queued on the prefix lock behind
                 // `run iscriptevaluator.exe` then finds that session's wineserver alive, and
                 // `-w` waits for the redistributable installers to finish.
                 try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
+                if env["MACNEUTRON_NO_STEAM_BRIDGE"] == "1" { try prefix.removeSteamBridge() }
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
                 status = try runGame(request, env, gameLog, throughSteam: steamBridge)
                 // Keep Steam's "running" state until every process in the prefix is gone

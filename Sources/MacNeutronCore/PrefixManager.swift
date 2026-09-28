@@ -79,6 +79,17 @@ public struct PrefixManager: Sendable {
         }
     }
 
+    /// For `MACNEUTRON_NO_STEAM_BRIDGE`: a game's steam_api loads the client DLL an earlier launch left
+    /// (its registry values persist), and without Steam's client path the bridge aborts the game.
+    /// Without these files the game just finds no Steam.
+    public func removeSteamBridge() throws {
+        try withFileLock(at: context.lockFile) {
+            for name in ["steam.exe", "steamclient64.dll", "steamclient.dll"] {
+                try? FileManager.default.removeItem(at: context.prefix.appending(path: "\(SteamBridge.prefixFolder)/\(name)"))
+            }
+        }
+    }
+
     private func install(_ source: URL, at destination: String) throws {
         let fm = FileManager.default
         let target = context.prefix.appending(path: destination)

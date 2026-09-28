@@ -211,3 +211,19 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(f.launcherLog.contains("(Steam passed /nowhere)"))
     #expect(f.launcherLog.contains("note: steamclient.dylib not found in"))
 }
+
+@Test func escapeHatchTakesTheBridgeOutOfThePrefix() throws {
+    // Seen in acceptance: a game's steam_api loads the client DLL an earlier launch left (its registry
+    // values persist), and without Steam's client path the bridge aborts the game. Without the files,
+    // the game just finds no Steam.
+    let f = try makeFixture(bridge: true)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let folder = try CompatContext(environment: f.env).prefix.appending(path: "drive_c/Program Files (x86)/Steam")
+    #expect(FileManager.default.fileExists(atPath: folder.appending(path: "steamclient64.dll").path(percentEncoded: false)))
+    var env = f.env
+    env["MACNEUTRON_NO_STEAM_BRIDGE"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    for name in ["steam.exe", "steamclient64.dll", "steamclient.dll"] {
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: name).path(percentEncoded: false)))
+    }
+}
