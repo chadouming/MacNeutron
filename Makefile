@@ -19,6 +19,7 @@ bridge:
 	@command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "bridge: needs brew install mingw-w64" >&2; exit 1; }
 	mkdir -p $(BRIDGE)/tests
 	$(MINGW) -o $(BRIDGE)/steam.exe bridge/steam.c -ladvapi32
+	$(MINGW) -o $(BRIDGE)/steamprobe.exe bridge/probe.c
 	$(MINGW) -o $(BRIDGE)/tests/helper.exe bridge/tests/helper.c -ladvapi32 -lshell32
 
 # steam.exe under the installed runtime (real Wine, no Steam).
