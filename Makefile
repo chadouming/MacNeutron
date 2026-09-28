@@ -27,11 +27,13 @@ bridge-check: bridge
 	sh bridge/check.sh
 
 # Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
-app: build
+app: build bridge
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Helpers
 	cp App/Info.plist $(APP)/Contents/Info.plist
 	cp .build/release/MacNeutronApp $(APP)/Contents/MacOS/MacNeutron
 	cp .build/release/macneutron $(APP)/Contents/Helpers/macneutron
+	mkdir -p $(APP)/Contents/Resources
+	cp $(BRIDGE)/steam.exe $(APP)/Contents/Resources/steam.exe
 	codesign --force --sign - $(APP)/Contents/Helpers/macneutron
 	codesign --force --sign - $(APP)

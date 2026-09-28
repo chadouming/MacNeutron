@@ -28,7 +28,7 @@ A Windows game started from native macOS Steam through MacNeutron can use the St
 | Steam client bridge | The runtime's own `lsteamclient` (§2.8); we neither build nor ship it |
 | "Steam is running" | Our own `steam.exe` (open source, not Proton's `steam_helper`) |
 | Windows helper toolchain | Homebrew `mingw-w64` (`x86_64-w64-mingw32-gcc`), as `Tests/Smoke` already uses |
-| Shipping `steam.exe` | Inside `MacNeutron.app/Contents/Helpers/`, installed into the tool folder with the launcher |
+| Shipping `steam.exe` | Inside `MacNeutron.app/Contents/Resources/` (codesign accepts only Mach-O code in `Contents/Helpers`), installed into the tool folder with the launcher |
 | 32-bit games | `steamclient.dll` is copied whenever the runtime has an i386 build; 32-bit is recorded as untested unless a 32-bit Steam game is available |
 | Escape hatch | `MACNEUTRON_NO_STEAM_BRIDGE=1` in a game's launch options starts the game directly |
 
@@ -118,8 +118,8 @@ It exits 0 only when all four succeed.
 
 ## 6. Shipping and installation
 
-- **App bundle.** `make app` depends on `make bridge` and copies `build/bridge/steam.exe` to `MacNeutron.app/Contents/Helpers/steam.exe`, next to the `macneutron` CLI.
-- **Tool folder.** `RuntimeInstaller.writeToolFiles` installs the launcher and, when a `steam.exe` sits next to the launcher it was given, `steam.exe` into `<tool>/bin/`. Each file is written to a temporary name and renamed into place, and skipped when identical, so a game launching at that moment never sees a missing launcher. It runs on every runtime install and at every app start when a runtime is installed. That way an updated app updates the launcher and `steam.exe` without a reinstall.
+- **App bundle.** `make app` depends on `make bridge` and copies `build/bridge/steam.exe` to `MacNeutron.app/Contents/Resources/steam.exe`. It can't sit next to the `macneutron` CLI in `Contents/Helpers`: codesign accepts only signed Mach-O code there.
+- **Tool folder.** `RuntimeInstaller.writeToolFiles` installs the launcher and `steam.exe` into `<tool>/bin/`, taking `steam.exe` from next to the launcher it was given or, for the app's `Contents/Helpers/macneutron`, from `Contents/Resources`. Each file is written to a temporary name and renamed into place, and skipped when identical, so a game launching at that moment never sees a missing launcher. It runs on every runtime install and at every app start when a runtime is installed. That way an updated app updates the launcher and `steam.exe` without a reinstall.
 - **Prefix.** Before `run` and `waitforexitandrun`, when the bridge is enabled, `PrefixManager.prepare` copies the files in §3 into `drive_c/Program Files (x86)/Steam/`, every launch, the same way it deploys graphics DLLs.
 
 ## 7. Launcher integration

@@ -18,7 +18,7 @@ make smoke   # real Wine; needs `brew install mingw-w64`
 ## The app
 
 ```sh
-make app                    # build/MacNeutron.app, ad-hoc signed, with the CLI inside
+make app                    # build/MacNeutron.app, ad-hoc signed, with the CLI and steam.exe inside (needs brew install mingw-w64)
 open build/MacNeutron.app
 ```
 
@@ -49,3 +49,10 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 | `/usr/bin/env MACNEUTRON_LOG=1 %command%` | Wine log in `~/Library/Logs/MacNeutron/steam-<appid>.log` |
 | `/usr/bin/env MACNEUTRON_NO_AVX=1 %command%` | Don't advertise AVX through Rosetta |
 | `/usr/bin/env MACNEUTRON_NO_MSYNC=1 %command%` | Turn off msync |
+| `/usr/bin/env MACNEUTRON_NO_STEAM_BRIDGE=1 %command%` | Start the game without the Steam bridge (the game then can't reach Steam) |
+
+## Steam API
+
+Windows games talk to your running Mac Steam through the runtime's Steam client bridge (Proton's `lsteamclient`,
+built for macOS by the runtime). MacNeutron's `steam.exe` tells each game that Steam is running. Anti-cheat
+that needs a Windows kernel driver (Easy Anti-Cheat, BattlEye, Vanguard and others) still won't run.
