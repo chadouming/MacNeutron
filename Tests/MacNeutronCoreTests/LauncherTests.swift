@@ -14,14 +14,20 @@ private struct Fixture {
     let runner: FakeRunner
     let notifier: RecordingNotifier
     let env: [String: String]
+    var launcherLog: String { (try? String(contentsOf: launcher.log.launcherLog, encoding: .utf8)) ?? "" }
 }
 
-private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta: Bool = true) throws -> Fixture {
+private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta: Bool = true,
+                         bridge: Bool = false) throws -> Fixture {
     let notifier = RecordingNotifier()
-    let launcher = Launcher(layout: try makeToolLayout(), runner: runner,
+    let layout = try makeToolLayout()
+    if bridge { try installFakeSteamBridge(in: layout) }
+    let steam = try makeSteamLocation(loginUsers: loginUsersFile(loginUser(account: 1, timestamp: 100, mostRecent: true)))
+    let launcher = Launcher(layout: layout, runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
                             notifier: notifier, preflight: Preflight(rosettaAvailable: { rosetta }),
-                            settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")))
+                            settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")),
+                            steam: steam)
     let env = steamEnvironment(dataPath: try makeTempDir().appending(path: "compatdata/42"), appID: "42")
     return Fixture(launcher: launcher, runner: runner, notifier: notifier, env: env)
 }
@@ -151,4 +157,57 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     try write("{ not json", to: f.launcher.settings.directory.appending(path: "42.json"))
     #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
     #expect(try String(contentsOf: f.launcher.log.launcherLog, encoding: .utf8).contains("ignoring unreadable game settings for 42"))
+}
+
+@Test func gameGoesThroughSteamExeWhenTheBridgeIsInstalled() throws {
+    let f = try makeFixture(bridge: true)
+    #expect(f.launcher.launch(["waitforexitandrun", "/Steam Library/My Game/Game.exe", "-windowed"], environment: f.env) == 0)
+    let game = try #require(f.runner.calls.first { $0.arguments.first == SteamBridge.steamExe })
+    #expect(game.arguments == [#"C:\Program Files (x86)\Steam\steam.exe"#, #"Z:\Steam Library\My Game\Game.exe"#, "-windowed"])
+    #expect(game.environment["STEAM_COMPAT_CLIENT_INSTALL_PATH"]
+        == String(f.launcher.steam.bundleMacOS.path(percentEncoded: false).dropLast()))
+    #expect(game.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+    let prefix = try CompatContext(environment: f.env).prefix
+    #expect(FileManager.default.fileExists(
+        atPath: prefix.appending(path: "drive_c/Program Files (x86)/Steam/steamclient64.dll").path(percentEncoded: false)))
+}
+
+@Test func runInPrefixNeverGoesThroughSteamExe() throws {
+    let f = try makeFixture(bridge: true)
+    _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)
+    #expect(f.runner.calls.map(\.arguments) == [["/g/tool.exe"]])
+}
+
+@Test func escapeHatchStartsTheGameDirectly() throws {
+    let f = try makeFixture(bridge: true)
+    var env = f.env
+    env["MACNEUTRON_NO_STEAM_BRIDGE"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.arguments == ["/g/Game.exe"])
+    #expect(f.launcherLog.contains("note: Steam bridge disabled by launch option"))
+}
+
+@Test func missingBridgeStartsTheGameDirectly() throws {
+    let f = try makeFixture()
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.arguments == ["/g/Game.exe"])
+    #expect(f.launcherLog.contains("note: Steam bridge not installed"))
+}
+
+@Test func accountFromLaunchOptionsWins() throws {
+    let f = try makeFixture(bridge: true)
+    var env = f.env
+    env["MACNEUTRON_STEAM_ACCOUNT"] = "99"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "99")
+}
+
+@Test func steamsClientPathIsLoggedAndCheckedForTheLibrary() throws {
+    let f = try makeFixture(bridge: true)
+    try FileManager.default.removeItem(at: f.launcher.steam.bundleMacOS.appending(path: "steamclient.dylib"))
+    var env = f.env
+    env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/nowhere"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.launcherLog.contains("(Steam passed /nowhere)"))
+    #expect(f.launcherLog.contains("note: steamclient.dylib not found in"))
 }

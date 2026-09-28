@@ -40,3 +40,12 @@ import Testing
     #expect(try makeSteamLocation().activeAccountID() == nil)
     #expect(try makeSteamLocation(loginUsers: "\"users\"\n{\n}\n").activeAccountID() == nil)
 }
+
+@Test func bridgeNeedsSteamExeAndBothHalvesOfTheClient() throws {
+    let layout = try makeToolLayout()
+    #expect(!layout.steamBridgeInstalled)
+    try installFakeSteamBridge(in: layout, i386: false)
+    #expect(layout.steamBridgeInstalled)
+    try FileManager.default.removeItem(at: layout.lsteamclientUnix)
+    #expect(!layout.steamBridgeInstalled)
+}

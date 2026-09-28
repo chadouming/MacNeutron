@@ -29,6 +29,18 @@ public struct ToolLayout: Equatable, Sendable {
     public var gptkManifest: URL { root.appending(path: "gptk.json") }
     public var runtimeVersionFile: URL { root.appending(path: "runtime-version") }
     public var launcherBinary: URL { root.appending(path: "bin/macneutron") }
+    /// MacNeutron's `steam.exe`, installed next to the launcher.
+    public var steamHelper: URL { root.appending(path: "bin/steam.exe") }
+    /// The runtime's Steam client bridge (Proton's lsteamclient, built by the runtime).
+    public var lsteamclientUnix: URL { wineLib.appending(path: "wine/x86_64-unix/lsteamclient.so") }
+    public var lsteamclient64: URL { wineLib.appending(path: "wine/x86_64-windows/lsteamclient.dll") }
+    public var lsteamclient32: URL { wineLib.appending(path: "wine/i386-windows/lsteamclient.dll") }
+
+    /// `steam.exe` and both halves of the 64-bit bridge are present.
+    public var steamBridgeInstalled: Bool {
+        [steamHelper, lsteamclientUnix, lsteamclient64]
+            .allSatisfy { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
+    }
 
     public var runtimeVersion: String? {
         (try? String(contentsOf: runtimeVersionFile, encoding: .utf8))?

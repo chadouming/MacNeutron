@@ -96,3 +96,42 @@ private let disableCrashDialog = ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, 
     #expect(status == 3)
     #expect(try String(contentsOf: log, encoding: .utf8) == "a b\n")
 }
+
+private func steamFolder(_ manager: PrefixManager) -> URL {
+    manager.context.prefix.appending(path: "drive_c/Program Files (x86)/Steam", directoryHint: .isDirectory)
+}
+
+@Test func steamBridgeIsCopiedIntoTheSteamFolder() throws {
+    let (manager, env) = try makeManager(winebootCreatingPrefix())
+    try installFakeSteamBridge(in: manager.layout)
+    try manager.prepare(backend: .dxmt, environment: env, steamBridge: true)
+    let folder = steamFolder(manager)
+    #expect(try String(contentsOf: folder.appending(path: "steam.exe"), encoding: .utf8) == "steam.exe")
+    #expect(try String(contentsOf: folder.appending(path: "steamclient64.dll"), encoding: .utf8) == "lsteamclient x86_64")
+    #expect(try String(contentsOf: folder.appending(path: "steamclient.dll"), encoding: .utf8) == "lsteamclient i386")
+}
+
+@Test func upToDatePrefixStillGetsTheSteamBridge() throws {
+    // Prefixes prepared before the bridge existed (SMITE 2's on the maintainer's Mac) must get it too.
+    let (manager, env) = try makeManager(winebootCreatingPrefix())
+    try manager.prepare(backend: .dxmt, environment: env)
+    try installFakeSteamBridge(in: manager.layout)
+    try manager.prepare(backend: .dxmt, environment: env, steamBridge: true)
+    #expect(FileManager.default.fileExists(
+        atPath: steamFolder(manager).appending(path: "steamclient64.dll").path(percentEncoded: false)))
+}
+
+@Test func thirtyTwoBitClientIsSkippedWithoutAnI386Build() throws {
+    let (manager, env) = try makeManager(winebootCreatingPrefix())
+    try installFakeSteamBridge(in: manager.layout, i386: false)
+    try manager.prepare(backend: .dxmt, environment: env, steamBridge: true)
+    #expect(!FileManager.default.fileExists(
+        atPath: steamFolder(manager).appending(path: "steamclient.dll").path(percentEncoded: false)))
+}
+
+@Test func prefixWithoutBridgeRequestGetsNoSteamFolder() throws {
+    let (manager, env) = try makeManager(winebootCreatingPrefix())
+    try installFakeSteamBridge(in: manager.layout)
+    try manager.prepare(backend: .dxmt, environment: env)
+    #expect(!FileManager.default.fileExists(atPath: steamFolder(manager).path(percentEncoded: false)))
+}

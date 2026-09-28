@@ -8,16 +8,18 @@ public struct Launcher: Sendable {
     public let notifier: any Notifier
     public let preflight: Preflight
     public let settings: GameSettingsStore
+    public let steam: SteamLocation
 
     public init(layout: ToolLayout, runner: any ProcessRunner = SystemProcessRunner(), log: LauncherLog = .standard,
                 notifier: any Notifier = AppleScriptNotifier(), preflight: Preflight = Preflight(),
-                settings: GameSettingsStore = GameSettingsStore()) {
+                settings: GameSettingsStore = GameSettingsStore(), steam: SteamLocation = SteamLocation()) {
         self.layout = layout
         self.runner = runner
         self.log = log
         self.notifier = notifier
         self.preflight = preflight
         self.settings = settings
+        self.steam = steam
     }
 
     /// Returns the exit code for Steam. Never throws: every failure is logged and becomes exit 1.
@@ -46,7 +48,9 @@ public struct Launcher: Sendable {
         let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"],
                                                      gptkImported: layout.gptkImported)
         let logging = environment["MACNEUTRON_LOG"] == "1"
-        let env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
+        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
+        let steamBridge = usesSteamBridge(request.verb, env)
+        if steamBridge { addSteamClient(to: &env) }
         let gameLog = logging ? log.gameLog(appID: context.appID) : nil
         if let gameLog { writeHeader(to: gameLog, request: request, environment: env) }
         let prefix = PrefixManager(context: context, layout: layout, runtimeVersion: layout.runtimeVersion ?? "unknown",
@@ -56,17 +60,17 @@ public struct Launcher: Sendable {
             let status: Int32
             switch request.verb {
             case .runinprefix:
-                status = try runGame(request, env, gameLog)
+                status = try runGame(request, env, gameLog, throughSteam: false)
             case .run:
-                try prefix.prepare(backend: backend, environment: env)
-                status = try runGame(request, env, gameLog)
+                try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
+                status = try runGame(request, env, gameLog, throughSteam: steamBridge)
             case .waitforexitandrun:
                 // Prepare first (Proton's order): a launch queued on the prefix lock behind
                 // `run iscriptevaluator.exe` then finds that session's wineserver alive, and
                 // `-w` waits for the redistributable installers to finish.
-                try prefix.prepare(backend: backend, environment: env)
+                try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
-                status = try runGame(request, env, gameLog)
+                status = try runGame(request, env, gameLog, throughSteam: steamBridge)
                 // Keep Steam's "running" state until every process in the prefix is gone
                 // (covers launchers that start the real game and exit).
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
@@ -93,8 +97,43 @@ public struct Launcher: Sendable {
         _ = try? runner.run(layout.wineserver, ["-k"], environment: env, output: nil)
     }
 
-    private func runGame(_ request: LaunchRequest, _ env: [String: String], _ gameLog: URL?) throws -> Int32 {
-        try runner.run(layout.wine, [request.target] + request.arguments, environment: env, output: gameLog)
+    private func runGame(_ request: LaunchRequest, _ env: [String: String], _ gameLog: URL?,
+                         throughSteam: Bool) throws -> Int32 {
+        let game = [request.target] + request.arguments
+        let command = throughSteam ? [SteamBridge.steamExe, SteamBridge.windowsPath(request.target)] + request.arguments : game
+        return try runner.run(layout.wine, command, environment: env, output: gameLog)
+    }
+
+    /// `run` and `waitforexitandrun` start the game through `steam.exe` when the bridge is installed,
+    /// as Proton does; the log says why when they don't.
+    private func usesSteamBridge(_ verb: Verb, _ environment: [String: String]) -> Bool {
+        guard verb == .run || verb == .waitforexitandrun else { return false }
+        if environment["MACNEUTRON_NO_STEAM_BRIDGE"] == "1" {
+            log.append("note: Steam bridge disabled by launch option")
+            return false
+        }
+        guard layout.steamBridgeInstalled else {
+            log.append("note: Steam bridge not installed")
+            return false
+        }
+        return true
+    }
+
+    /// Tells the runtime's lsteamclient where macOS Steam's client library is, and steam.exe who is logged in.
+    private func addSteamClient(to env: inout [String: String]) {
+        let passed = env["STEAM_COMPAT_CLIENT_INSTALL_PATH"]
+        let client = SteamBridge.clientDirectory(steamValue: passed, steam: steam)
+        env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = client
+        log.append("note: Steam client folder \(client) (Steam passed \(passed ?? "nothing"))")
+        if !FileManager.default.fileExists(atPath: client + "/steamclient.dylib") {
+            log.append("note: steamclient.dylib not found in \(client)")
+        }
+        guard env["MACNEUTRON_STEAM_ACCOUNT"] == nil else { return }
+        if let account = steam.activeAccountID() {
+            env["MACNEUTRON_STEAM_ACCOUNT"] = String(account)
+        } else {
+            log.append("note: no Steam account found in loginusers.vdf")
+        }
     }
 
     private func writeHeader(to gameLog: URL, request: LaunchRequest, environment: [String: String]) {

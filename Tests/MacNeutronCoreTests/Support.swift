@@ -93,3 +93,11 @@ func loginUser(account: Int, timestamp: Int, mostRecent: Bool? = nil) -> String 
 }
 
 func loginUsersFile(_ users: String...) -> String { "\"users\"\n{\n" + users.joined() + "}\n" }
+
+/// The files `ToolLayout.steamBridgeInstalled` looks for; `i386: false` leaves out the 32-bit client.
+func installFakeSteamBridge(in layout: ToolLayout, i386: Bool = true) throws {
+    try write("steam.exe", to: layout.steamHelper)
+    try write("lsteamclient.so", to: layout.lsteamclientUnix)
+    try write("lsteamclient x86_64", to: layout.lsteamclient64)
+    if i386 { try write("lsteamclient i386", to: layout.lsteamclient32) }
+}
