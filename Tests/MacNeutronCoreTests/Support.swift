@@ -74,3 +74,22 @@ func makeToolLayout() throws -> ToolLayout {
 func steamEnvironment(dataPath: URL, appID: String = "3419430") -> [String: String] {
     ["STEAM_COMPAT_DATA_PATH": dataPath.path(percentEncoded: false), "SteamAppId": appID, "PATH": "/usr/bin:/bin"]
 }
+
+/// A Steam root in a temp folder. `loginUsers` becomes config/loginusers.vdf; `steamClient` puts a
+/// steamclient.dylib in the bundle's MacOS folder.
+func makeSteamLocation(loginUsers: String? = nil, steamClient: Bool = true) throws -> SteamLocation {
+    let steam = SteamLocation(root: try makeTempDir().appending(path: "Steam", directoryHint: .isDirectory))
+    if let loginUsers { try write(loginUsers, to: steam.loginUsers) }
+    if steamClient { try write("dylib", to: steam.bundleMacOS.appending(path: "steamclient.dylib")) }
+    return steam
+}
+
+/// One user block of loginusers.vdf. SteamID64 76561197960265728 + n belongs to account n.
+func loginUser(account: Int, timestamp: Int, mostRecent: Bool? = nil) -> String {
+    var block = "\t\"\(76561197960265728 + account)\"\n\t{\n"
+        + "\t\t\"AccountName\"\t\t\"user\(account)\"\n\t\t\"Timestamp\"\t\t\"\(timestamp)\"\n"
+    if let mostRecent { block += "\t\t\"MostRecent\"\t\t\"\(mostRecent ? 1 : 0)\"\n" }
+    return block + "\t}\n"
+}
+
+func loginUsersFile(_ users: String...) -> String { "\"users\"\n{\n" + users.joined() + "}\n" }
