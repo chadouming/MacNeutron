@@ -1,0 +1,207 @@
+// Batch 1 of the D3D12 stubs spec: calls that aborted, hung or failed where D3DMetal succeeds.
+//   d3d12_api.exe <vs.dxil> <ps.dxil> [section]   (shaders/depth.hlsl's vsmain and psmain)
+// Each line starts with its section; check.sh compares them with D3DMetal's. "caps" is checked on our DXMT only.
+#include "d3d12_common.hpp"
+#include <string>
+
+static Gpu *gpu;
+static std::vector<char> vs, ps;
+static const char *only;
+static bool Section(const char *name) { return !only || !strcmp(only, name); }
+
+static void Markers() {  // PIX-style events on a command list, then the list runs
+    const char text[] = "event";
+    gpu->list->BeginEvent(1, text, sizeof text);
+    gpu->list->SetMarker(1, text, sizeof text);
+    gpu->list->EndEvent();
+    gpu->Submit();
+    printf("markers ok\n");
+}
+
+static void CachedBlob(ID3D12RootSignature *root) {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC gd;
+    ID3D12PipelineState *pso = QuadPipeline(*gpu, root, vs, ps, &gd);
+    ID3DBlob *blob = nullptr;
+    HRESULT hr = pso->GetCachedBlob(&blob);
+    HRESULT again = E_FAIL;
+    if (blob) {
+        gd.CachedPSO = {blob->GetBufferPointer(), blob->GetBufferSize()};
+        ID3D12PipelineState *second = nullptr;
+        again = gpu->device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&second);
+    }
+    printf("cachedblob %08lx %zu %08lx\n", (unsigned long)hr, blob ? (size_t)blob->GetBufferSize() : (size_t)0,
+           (unsigned long)again);
+}
+
+static void NullDsv(ID3D12RootSignature *root) {  // a depth view with no resource: the draw must finish
+    ID3D12PipelineState *pso = QuadPipeline(*gpu, root, vs, ps);
+    ID3D12DescriptorHeap *rtv_heap, *dsv_heap;
+    D3D12_DESCRIPTOR_HEAP_DESC rd = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1}, dd = {D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1};
+    CHECK(gpu->device->CreateDescriptorHeap(&rd, __uuidof(ID3D12DescriptorHeap), (void **)&rtv_heap));
+    CHECK(gpu->device->CreateDescriptorHeap(&dd, __uuidof(ID3D12DescriptorHeap), (void **)&dsv_heap));
+    ID3D12Resource *target = gpu->Texture(Tex2D(16, 16, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
+    auto rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart(), dsv = dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    gpu->device->CreateRenderTargetView(target, nullptr, rtv);
+    D3D12_DEPTH_STENCIL_VIEW_DESC dv = {DXGI_FORMAT_D32_FLOAT, D3D12_DSV_DIMENSION_TEXTURE2D};
+    gpu->device->CreateDepthStencilView(nullptr, &dv, dsv);
+    float draw[64] = {-1, -1, 1, 1, 1, 0, 0, 1, 0};
+    ID3D12Resource *cb = gpu->Buffer(D3D12_HEAP_TYPE_UPLOAD, 256, D3D12_RESOURCE_STATE_GENERIC_READ);
+    void *p; CHECK(cb->Map(0, nullptr, &p)); memcpy(p, draw, sizeof draw); cb->Unmap(0, nullptr);
+    D3D12_VIEWPORT vp = {0, 0, 16, 16, 0, 1}; D3D12_RECT sc = {0, 0, 16, 16};
+    gpu->list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+    gpu->list->RSSetViewports(1, &vp); gpu->list->RSSetScissorRects(1, &sc);
+    gpu->list->SetGraphicsRootSignature(root); gpu->list->SetPipelineState(pso);
+    gpu->list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    gpu->list->SetGraphicsRootConstantBufferView(0, cb->GetGPUVirtualAddress());
+    gpu->list->DrawInstanced(6, 1, 0, 0);
+    gpu->Submit();
+    printf("nulldsv ok\n");
+}
+
+static void List1() {
+    ID3D12Device4 *d4;
+    CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device4), (void **)&d4));
+    ID3D12GraphicsCommandList *list = nullptr;
+    HRESULT hr = d4->CreateCommandList1(0, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_FLAG_NONE,
+                                        __uuidof(ID3D12GraphicsCommandList), (void **)&list);
+    ID3D12CommandAllocator *allocator;
+    CHECK(gpu->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&allocator));
+    HRESULT reset = list ? list->Reset(allocator, nullptr) : E_FAIL;
+    HRESULT close = list ? list->Close() : E_FAIL;
+    printf("list1 %08lx reset %08lx close %08lx\n", (unsigned long)hr, (unsigned long)reset, (unsigned long)close);
+}
+
+static void Heap1() {
+    ID3D12Device4 *d4;
+    CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device4), (void **)&d4));
+    D3D12_HEAP_DESC hd = {65536, {D3D12_HEAP_TYPE_DEFAULT}, 0, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS};
+    ID3D12Heap *heap = nullptr;
+    printf("heap1 %08lx\n", (unsigned long)d4->CreateHeap1(&hd, nullptr, __uuidof(ID3D12Heap), (void **)&heap));
+}
+
+static void Residency() {
+    ID3D12Device1 *d1; ID3D12Device3 *d3;
+    CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device1), (void **)&d1));
+    CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device3), (void **)&d3));
+    ID3D12Fence *fence;
+    CHECK(gpu->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&fence));
+    ID3D12Pageable *objects[] = {fence};
+    D3D12_RESIDENCY_PRIORITY priority = D3D12_RESIDENCY_PRIORITY_NORMAL;
+    HRESULT evict = gpu->device->Evict(1, objects), resident = gpu->device->MakeResident(1, objects);
+    HRESULT prio = d1->SetResidencyPriority(1, objects, &priority);
+    HRESULT enqueue = d3->EnqueueMakeResident(D3D12_RESIDENCY_FLAG_NONE, 1, objects, fence, 5);
+    HANDLE e = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    fence->SetEventOnCompletion(5, e);
+    WaitForSingleObject(e, 1000);
+    printf("residency evict %08lx resident %08lx priority %08lx enqueue %08lx fence %llu\n", (unsigned long)evict,
+           (unsigned long)resident, (unsigned long)prio, (unsigned long)enqueue, (unsigned long long)fence->GetCompletedValue());
+}
+
+static void MultiFence() {
+    ID3D12Device1 *d1;
+    CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device1), (void **)&d1));
+    ID3D12Fence *a, *b;
+    CHECK(gpu->device->CreateFence(1, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&a));  // done
+    CHECK(gpu->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&b));  // not yet
+    ID3D12Fence *fences[] = {a, b};
+    UINT64 values[] = {1, 1};
+    HANDLE any = CreateEventA(nullptr, FALSE, FALSE, nullptr), all = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    HRESULT hr_any = d1->SetEventOnMultipleFenceCompletion(fences, values, 2, D3D12_MULTIPLE_FENCE_WAIT_FLAG_ANY, any);
+    int any_set = WaitForSingleObject(any, 1000) == WAIT_OBJECT_0;
+    HRESULT hr_all = d1->SetEventOnMultipleFenceCompletion(fences, values, 2, D3D12_MULTIPLE_FENCE_WAIT_FLAG_ALL, all);
+    int all_early = WaitForSingleObject(all, 200) == WAIT_OBJECT_0;
+    CHECK(b->Signal(1));
+    int all_late = WaitForSingleObject(all, 1000) == WAIT_OBJECT_0;
+    HRESULT wait = d1->SetEventOnMultipleFenceCompletion(fences, values, 2, D3D12_MULTIPLE_FENCE_WAIT_FLAG_ALL, nullptr);
+    HANDLE none = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    HRESULT hr_none = d1->SetEventOnMultipleFenceCompletion(fences, values, 0, D3D12_MULTIPLE_FENCE_WAIT_FLAG_ALL, none);
+    int none_set = WaitForSingleObject(none, 200) == WAIT_OBJECT_0;
+    printf("multifence any %08lx %d all %08lx %d %d wait %08lx none %08lx %d\n", (unsigned long)hr_any, any_set,
+           (unsigned long)hr_all, all_early, all_late, (unsigned long)wait, (unsigned long)hr_none, none_set);
+}
+
+template <typename T> static void Feature(int id) {
+    T data = {};
+    printf("feature %d %08lx\n", id, (unsigned long)gpu->device->CheckFeatureSupport((D3D12_FEATURE)id, &data, sizeof data));
+}
+struct Raw40 { UINT v[10]; };  // OPTIONS19 (48)
+struct Raw16 { UINT v[4]; };   // OPTIONS21 (53)
+
+static void Features() {
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS>(0); Feature<D3D12_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT>(6);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS1>(8); Feature<D3D12_FEATURE_DATA_PROTECTED_RESOURCE_SESSION_SUPPORT>(10);
+    Feature<D3D12_FEATURE_DATA_ARCHITECTURE1>(16); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS2>(18);
+    Feature<D3D12_FEATURE_DATA_SHADER_CACHE>(19); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS3>(21);
+    Feature<D3D12_FEATURE_DATA_EXISTING_HEAPS>(22); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS4>(23);
+    Feature<D3D12_FEATURE_DATA_CROSS_NODE>(25); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS5>(27);
+    Feature<D3D12_FEATURE_DATA_DISPLAYABLE>(28); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS6>(30);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS7>(32); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS8>(36);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS9>(37); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS10>(39);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS11>(40); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS12>(41);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS13>(42); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS14>(43);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS15>(44); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS16>(45);
+    Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS17>(46); Feature<D3D12_FEATURE_DATA_D3D12_OPTIONS18>(47);
+    Feature<Raw40>(48); Feature<Raw16>(53);
+    // Our DXMT only (check.sh): no claim of what the fork lacks.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5 = {}; D3D12_FEATURE_DATA_D3D12_OPTIONS6 o6 = {};
+    D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7 = {};
+    gpu->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof o5);
+    gpu->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &o6, sizeof o6);
+    gpu->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof o7);
+    printf("caps rt=%d mesh=%d vrs=%d sfb=%d\n", (int)o5.RaytracingTier, (int)o7.MeshShaderTier,
+           (int)o6.VariableShadingRateTier, (int)o7.SamplerFeedbackTier);
+}
+
+static void Library(ID3D12RootSignature *root) {
+    ID3D12Device1 *d1;
+    CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device1), (void **)&d1));
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC gd;
+    ID3D12PipelineState *pso = QuadPipeline(*gpu, root, vs, ps, &gd), *got = nullptr;
+    auto step = [](const char *name, HRESULT hr) { printf("library %s %08lx\n", name, (unsigned long)hr); };
+    ID3D12PipelineLibrary *lib = nullptr;
+    step("create", d1->CreatePipelineLibrary(nullptr, 0, __uuidof(ID3D12PipelineLibrary), (void **)&lib));
+    if (!lib)
+        return;
+    step("load-missing", lib->LoadGraphicsPipeline(L"a", &gd, __uuidof(ID3D12PipelineState), (void **)&got));
+    step("store", lib->StorePipeline(L"a", pso));
+    step("store-again", lib->StorePipeline(L"a", pso));
+    HRESULT hr = lib->LoadGraphicsPipeline(L"a", &gd, __uuidof(ID3D12PipelineState), (void **)&got);
+    printf("library load-stored %08lx same %d\n", (unsigned long)hr, got == pso);
+    if (got) got->Release();
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC other = gd;
+    other.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    step("load-other", lib->LoadGraphicsPipeline(L"a", &other, __uuidof(ID3D12PipelineState), (void **)&got));
+    pso->Release();  // the library still holds the stored pipeline
+    got = nullptr;
+    hr = lib->LoadGraphicsPipeline(L"a", &gd, __uuidof(ID3D12PipelineState), (void **)&got);
+    printf("library load-after-release %08lx valid %d\n", (unsigned long)hr, got != nullptr);
+    SIZE_T size = lib->GetSerializedSize();
+    std::vector<char> blob(size);
+    hr = lib->Serialize(blob.data(), size);
+    printf("library serialize %08lx nonzero %d\n", (unsigned long)hr, size > 0);
+    ID3D12PipelineLibrary *lib2 = nullptr;
+    step("from-blob", d1->CreatePipelineLibrary(blob.data(), size, __uuidof(ID3D12PipelineLibrary), (void **)&lib2));
+    if (lib2)
+        step("load-from-blob", lib2->LoadGraphicsPipeline(L"a", &gd, __uuidof(ID3D12PipelineState), (void **)&got));
+    char junk[64] = {1, 2, 3};
+    step("junk", d1->CreatePipelineLibrary(junk, sizeof junk, __uuidof(ID3D12PipelineLibrary), (void **)&lib2));
+}
+
+int main(int argc, char **argv) {
+    if (argc < 3) { printf("usage: d3d12_api.exe <vs.dxil> <ps.dxil> [section]\n"); return 2; }
+    vs = Load(argv[1]); ps = Load(argv[2]); only = argc > 3 ? argv[3] : nullptr;
+    if (vs.empty() || ps.empty()) { printf("can't read the shaders\n"); return 1; }
+    gpu = new Gpu();
+    ID3D12RootSignature *root = CbvRootSignature(*gpu);
+    if (Section("features")) Features();
+    if (Section("list1")) List1();
+    if (Section("heap1")) Heap1();
+    if (Section("residency")) Residency();
+    if (Section("multifence")) MultiFence();
+    if (Section("library")) Library(root);
+    if (Section("markers")) Markers();
+    if (Section("cachedblob")) CachedBlob(root);
+    if (Section("nulldsv")) NullDsv(root);
+    return 0;
+}

@@ -13,10 +13,15 @@ cp "$SRC"/win64-install/x86_64-unix/* "$ROOT/build/dxmt/x86_64-unix/"
 "$ROOT/.build/release/macneutron" install-dxmt --tool-dir "$WORK/ours" "$ROOT/build/dxmt" > /dev/null
 make -C "$ROOT" -s dxmt-tests > /dev/null
 test=$1; shift
-for backend in dxmt d3dmetal; do
+for backend in dxmt d3dmetal; do  # 120 s at most: a hung test is killed (its Wine process too) and shows no lines
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/ours" SteamAppId=0 MACNEUTRON_GRAPHICS=$backend \
       MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 ${RUN_ENV:-} \
-      perl -e 'alarm 120; exec @ARGV' "$WORK/ours/bin/macneutron" launch waitforexitandrun \
-      "$ROOT/build/dxmt-tests/$test.exe" "$@" 2>&1 | tr -d '\r' \
-    | grep -E '^[a-z][a-z0-9-]* ' | grep -vE '^(msync|err|warn|fixme):' | sed "s/^/$backend: /" || true
+      "$WORK/ours/bin/macneutron" launch waitforexitandrun "$ROOT/build/dxmt-tests/$test.exe" "$@" \
+      > "$WORK/run-$backend.out" 2>&1 &
+  pid=$!
+  ( sleep 120; pkill -f "dxmt-tests/$test.exe"; kill "$pid" ) 2> /dev/null & dog=$!
+  wait "$pid" || true
+  kill "$dog" 2> /dev/null || true
+  tr -d '\r' < "$WORK/run-$backend.out" | grep -E '^[a-z][a-z0-9-]* ' | grep -vE '^(msync|err|warn|fixme):' \
+    | sed "s/^/$backend: /" || true
 done
