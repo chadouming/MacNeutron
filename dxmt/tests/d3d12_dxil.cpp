@@ -63,6 +63,14 @@ int main(int argc, char **argv) {
     gd.SampleDesc.Count = 0;
     hr = device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&pso);
     printf("graphics-samples0 hr=0x%08lx\n", (unsigned long)hr);
+    // Newer device interfaces (AMD's FSR 3 swapchain needs ID3D12Device8): D3DMetal is the reference.
+    const IID *devices[] = {&__uuidof(ID3D12Device5), &__uuidof(ID3D12Device6), &__uuidof(ID3D12Device7), &__uuidof(ID3D12Device8)};
+    for (int i = 0; i < 4; i++) {
+        IUnknown *newer = nullptr;
+        hr = device->QueryInterface(*devices[i], (void **)&newer);
+        printf("device%d hr=0x%08lx\n", i + 5, (unsigned long)hr);
+        if (newer) newer->Release();
+    }
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
     cd.pRootSignature = root;

@@ -74,6 +74,8 @@ dxil dxil
 expect "DXIL pipelines are created" "$(grep -cE '^(graphics|compute) hr=0x00000000$' "$WORK/dxil.txt" || true)" 2
 expect "an out-of-scope DXIL op fails only its pipeline" "$(grep -c '^heap hr=0x80004001$' "$WORK/dxil.txt" || true)" 1
 run ours dxil-ref d3dmetal "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil" "Z:$H"
+expect "newer device interfaces (5-8) answer as on D3DMetal" "$(grep '^device' "$WORK/dxil.txt" | tr -d '\r' | tr '\n' ' ')" \
+  "$(grep '^device' "$WORK/dxil-ref.txt" | tr -d '\r' | tr '\n' ' ')"
 expect "a graphics pipeline with sample count 0 fares as on D3DMetal" "$(grep '^graphics-samples0' "$WORK/dxil.txt" | tr -d '\r')" \
   "$(grep '^graphics-samples0' "$WORK/dxil-ref.txt" | tr -d '\r')"
 expect "the capture folder is created" "$([ -d "$D" ] && echo yes || echo no)" yes
@@ -132,6 +134,16 @@ run ours trigs-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z
 run ours trigs-ref d3dmetal "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
 expect "DXIL geometry shader triangle matches D3DMetal (12 pixels within 1/255)" \
   "$(same_pixels "$WORK/trigs-ours.txt" "$WORK/trigs-ref.txt")" yes
+
+# AMD's FSR 3 swapchain proxy, which SMITE 2 (and other Unreal games with the FSR 3 plugin) create their swapchain
+# through: read from the game's install when it's there, never copied.
+FFX="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Hemingway/Binaries/Win64/amd_fidelityfx_dx12.dll"
+if [ -f "$FFX" ]; then
+  run ours ffx-ours dxmt "$TESTS/d3d12_ffx_swapchain.exe" "Z:$FFX" 60
+  expect "the FSR 3 swapchain proxy presents on our DXMT" "$(grep -o 'presented 60/60' "$WORK/ffx-ours.txt" || grep -o 'ffxCreateContext rc=[0-9]*' "$WORK/ffx-ours.txt" || true)" "presented 60/60"
+else
+  echo "skip the FSR 3 swapchain proxy (SMITE 2 isn't installed)"
+fi
 
 # 4. D3DMetal still works.
 run ours d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0

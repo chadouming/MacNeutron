@@ -1,7 +1,7 @@
 # MacNeutron's DXMT build inputs (DXMT fork spec §5), sourced by dxmt/build.sh.
 # DXMT_COMMIT is the head of the fork's `macneutron` branch that MacNeutron ships; LGPL: its source is public there.
 DXMT_REPO=https://github.com/chadouming/dxmt.git
-DXMT_COMMIT=f49ac386e4890d4e133f51a1999488d90625c0ce
+DXMT_COMMIT=fcf2213c77a67cc9f4371d81175a0aa1219b7157
 LLVM_TAG=llvmorg-15.0.7
 # 3Shain's Wine 8.16 tree, which DXMT's CI builds against. SHA-256 recorded at first download, 2026-09-28.
 WINE_URL=https://github.com/3Shain/wine/releases/download/v8.16-3shain/wine.tar.gz
