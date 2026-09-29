@@ -41,7 +41,7 @@ presenter-check: presenter
 	sh presenter/check.sh
 
 # Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
-app: build bridge
+app: build bridge presenter
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Helpers
 	cp App/Info.plist $(APP)/Contents/Info.plist
@@ -50,4 +50,7 @@ app: build bridge
 	mkdir -p $(APP)/Contents/Resources
 	cp $(BRIDGE)/steam.exe $(APP)/Contents/Resources/steam.exe
 	codesign --force --sign - $(APP)/Contents/Helpers/macneutron
+	mkdir -p $(APP)/Contents/Frameworks
+	cp $(PRESENTER)/libmacneutron-present.dylib $(APP)/Contents/Frameworks/libmacneutron-present.dylib
+	codesign --force --sign - $(APP)/Contents/Frameworks/libmacneutron-present.dylib
 	codesign --force --sign - $(APP)
