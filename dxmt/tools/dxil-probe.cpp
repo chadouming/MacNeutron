@@ -34,17 +34,22 @@ static const char *const stages[] = {"ps", "vs", "gs", "hs", "ds", "cs", "lib", 
 // Fills `line` and returns "", or returns why the file can't be read.
 static std::string probe(const std::vector<char> &blob, std::string &line) {
   if (blob.size() < 32 || memcmp(blob.data(), "DXBC", 4)) return "not a DXBC container";
-  size_t part = 0;
-  for (uint32_t i = 0, parts = read32(blob, 28); i < parts; i++) {
+  // The part table ends where the file does, whatever count the header claims.
+  size_t part = 0, end = 0;
+  for (uint64_t i = 0, parts = read32(blob, 28); i < parts && 36 + 4 * i <= blob.size(); i++) {
     size_t at = read32(blob, 32 + 4 * i);
-    if (at + 8 <= blob.size() && !memcmp(blob.data() + at, "DXIL", 4)) { part = at + 8; break; }
+    if (at + 8 <= blob.size() && !memcmp(blob.data() + at, "DXIL", 4)) {
+      part = at + 8;
+      end = std::min<uint64_t>(blob.size(), part + uint64_t(read32(blob, at + 4)));
+      break;
+    }
   }
   if (!part) return "no DXIL part (a DXBC shader)";
   // DxilProgramHeader: ProgramVersion, SizeInUint32, then DxilBitcodeHeader: "DXIL", DxilVersion, BitcodeOffset, BitcodeSize.
-  if (part + 24 > blob.size() || memcmp(blob.data() + part + 8, "DXIL", 4)) return "bad DXIL program header";
+  if (part + 24 > end || memcmp(blob.data() + part + 8, "DXIL", 4)) return "bad DXIL program header";
   uint32_t program = read32(blob, part), version = read32(blob, part + 12);
   uint64_t start = part + 8 + uint64_t(read32(blob, part + 16)), size = read32(blob, part + 20);
-  if (size < 4 || start + size > blob.size()) return "bitcode lies outside the DXIL part";
+  if (size < 4 || start + size > end) return "bitcode lies outside the DXIL part";
 
   llvm::LLVMContext context;
   auto module = llvm::parseBitcodeFile(

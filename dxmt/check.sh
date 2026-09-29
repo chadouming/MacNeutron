@@ -101,6 +101,21 @@ expect "present_loop completes on D3DMetal" "$(grep -c 'avg frame' "$WORK/d3dmet
 cat "$WORK/probe.txt"
 expect "the probe reports every shader" "$(grep -cE '^(ok|fail) ' "$WORK/probe.txt")" 3
 expect "the probe refuses a non-container" "$("$DXMT/dxil-probe" "$DXMT/version" | cut -d ' ' -f 1)" fail
+# Malformed containers: a part count of 2^32-1, and bitcode that lies past the end of its DXIL part.
+python3 - "$WORK" <<'PY'
+import struct, sys
+w = sys.argv[1]
+open(w + "/many-parts.dxil", "wb").write(b"DXBC" + bytes(16) + struct.pack("<III", 1, 32, 0xFFFFFFFF))
+part = b"DXIL" + struct.pack("<I", 24) + struct.pack("<II", 0x60060, 6) + b"DXIL" + struct.pack("<III", 0x106, 16, 64)
+open(w + "/past-part.dxil", "wb").write(b"DXBC" + bytes(16) + struct.pack("<IIII", 1, 36 + len(part) + 64, 1, 36) + part + bytes(64))
+PY
+"$DXMT/dxil-probe" "$WORK/many-parts.dxil" > "$WORK/many-parts.txt" & probe=$!
+sleep 1
+if kill -0 "$probe" 2> /dev/null; then kill "$probe"; quick=no; else quick=yes; fi
+reason() { sed 's/^[a-z]* .*\.dxil //'; }  # the probe's message after "<ok|fail> <file>"; $WORK has a space
+expect "the probe answers a huge part count at once" "$quick:$(reason < "$WORK/many-parts.txt")" "yes:no DXIL part (a DXBC shader)"
+expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/past-part.dxil" | reason)" \
+  "bitcode lies outside the DXIL part"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

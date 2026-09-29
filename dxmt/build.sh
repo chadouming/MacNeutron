@@ -10,7 +10,15 @@ OUT="$B/dxmt"
 LLVM="$SRC/llvm"
 die() { echo "dxmt: $*" >&2; exit 1; }
 
+# The DXIL probe (spec §6), against the same LLVM. -fno-rtti matches LLVM's own build.
+build_probe() {  # build_probe <folder>
+  clang++ -arch x86_64 -std=c++17 -O1 -fno-rtti -I"$LLVM/include" "$ROOT/dxmt/tools/dxil-probe.cpp" -o "$1/dxil-probe" \
+    -L"$LLVM/lib" -lLLVMBitReader -lLLVMCore -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMSupport \
+    -lLLVMDemangle -lz -lcurses > "$SRC/dxil-probe.log" 2>&1 || die "dxil-probe failed to build; see $SRC/dxil-probe.log"
+}
+
 if [ "$(cat "$OUT/version" 2> /dev/null)" = "$DXMT_COMMIT" ] && [ -x "$OUT/dxil-probe" ]; then
+  [ "$OUT/dxil-probe" -nt "$ROOT/dxmt/tools/dxil-probe.cpp" ] || build_probe "$OUT"
   echo "dxmt: $OUT is up to date ($DXMT_COMMIT)"
   exit 0
 fi
@@ -109,9 +117,7 @@ done
 [ -f "$T/x86_64-unix/winemetal.so" ] || die "the build has no x86_64-unix/winemetal.so"
 echo "$DXMT_COMMIT" > "$T/version"
 
-# 6. The DXIL probe (spec §6), against the same LLVM. -fno-rtti matches LLVM's own build.
-clang++ -arch x86_64 -std=c++17 -O1 -fno-rtti -I"$LLVM/include" "$ROOT/dxmt/tools/dxil-probe.cpp" -o "$T/dxil-probe" \
-  -L"$LLVM/lib" -lLLVMBitReader -lLLVMCore -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMSupport \
-  -lLLVMDemangle -lz -lcurses > "$SRC/dxil-probe.log" 2>&1 || die "dxil-probe failed to build; see $SRC/dxil-probe.log"
+# 6. The DXIL probe.
+build_probe "$T"
 rm -rf "$OUT"; mv "$T" "$OUT"
 echo "dxmt: built $OUT ($DXMT_COMMIT)"
