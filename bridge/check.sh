@@ -37,5 +37,15 @@ expect "launcher-style child still sees Steam" "$(tr -d '\r' < "$WORK/late.txt" 
 expect "pid cleared afterwards" "$("$WINE" "$HELPER" pid 2>/dev/null | tr -d '\r')" 0
 set +e; "$WINE" "$STEAMEXE" 'C:\missing.exe' >/dev/null 2>&1; got=$?; set -e
 expect "missing program exits 1" "$got" 1
+expect "launchers may start children outside the job" "$(steam breakaway)" "breakaway ok"
+
+# A second steam.exe in the prefix (a failed one, then a short one) must not end the first one's Steam.
+rm -f "$WORK/late.txt"
+steam spawn "$(winpath "$WORK/late.txt")" >/dev/null &
+sleep 0.5
+"$WINE" "$STEAMEXE" 'C:\missing.exe' >/dev/null 2>&1 || true
+steam exit 0 >/dev/null
+wait
+expect "a second steam.exe leaves the first one's Steam running" "$(tr -d '\r' < "$WORK/late.txt" 2>/dev/null || true)" "alive=1"
 
 exit $fail

@@ -134,7 +134,7 @@ It exits 0 only when all four succeed.
 
 | Condition | Behavior |
 |---|---|
-| Runtime or tool folder lacks a bridge file | Game starts directly; launcher log: `note: Steam bridge not installed` |
+| Runtime or tool folder lacks a bridge file | Game starts directly, with leftover bridge files removed from the prefix (as for the escape hatch); launcher log: `note: Steam bridge not installed` |
 | `MACNEUTRON_NO_STEAM_BRIDGE=1` | Game starts directly, and `steam.exe`, `steamclient64.dll` and `steamclient.dll` are removed from the prefix: otherwise the game's `steam_api` loads the leftover client DLL (its registry values persist) and the bridge aborts the game for want of Steam's client path (seen in acceptance). Launcher log: `note: Steam bridge disabled by launch option` |
 | No `steamclient.dylib` in the folder used | Launcher log: `note: steamclient.dylib not found in <folder>`; the game still starts |
 | No readable `loginusers.vdf` or no user in it | `ActiveUser` not written; launcher log: `note: no Steam account found in loginusers.vdf` |

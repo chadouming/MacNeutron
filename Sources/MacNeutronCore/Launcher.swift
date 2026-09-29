@@ -63,14 +63,14 @@ public struct Launcher: Sendable {
                 status = try runGame(request, env, gameLog, throughSteam: false)
             case .run:
                 try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
-                if env["MACNEUTRON_NO_STEAM_BRIDGE"] == "1" { try prefix.removeSteamBridge() }
+                if !steamBridge { try prefix.removeSteamBridge() }
                 status = try runGame(request, env, gameLog, throughSteam: steamBridge)
             case .waitforexitandrun:
                 // Prepare first (Proton's order): a launch queued on the prefix lock behind
                 // `run iscriptevaluator.exe` then finds that session's wineserver alive, and
                 // `-w` waits for the redistributable installers to finish.
                 try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
-                if env["MACNEUTRON_NO_STEAM_BRIDGE"] == "1" { try prefix.removeSteamBridge() }
+                if !steamBridge { try prefix.removeSteamBridge() }
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
                 status = try runGame(request, env, gameLog, throughSteam: steamBridge)
                 // Keep Steam's "running" state until every process in the prefix is gone
@@ -140,7 +140,10 @@ public struct Launcher: Sendable {
 
     private func writeHeader(to gameLog: URL, request: LaunchRequest, environment: [String: String]) {
         var text = "=== \(Date().formatted(.iso8601)) \(request.verb.rawValue) \(request.target) \(request.arguments)\n"
-        for key in environment.keys.sorted() { text += "\(key)=\(environment[key]!)\n" }
+        // People post these logs in bug reports; the account ID leads straight to a Steam profile.
+        for key in environment.keys.sorted() {
+            text += "\(key)=\(key == "MACNEUTRON_STEAM_ACCOUNT" ? "<redacted>" : environment[key]!)\n"
+        }
         if let handle = try? FileHandle(forWritingTo: gameLog) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()

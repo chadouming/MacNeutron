@@ -35,9 +35,24 @@ static void set_dword(HKEY key, const WCHAR *name, DWORD value)
     RegSetValueExW(key, name, 0, REG_DWORD, (const BYTE *)&value, sizeof(value));
 }
 
+/* The pid another steam.exe in this prefix registered before us, restored when we exit. */
+static DWORD previous_pid;
+
+static int process_alive(DWORD pid)
+{
+    HANDLE process;
+    DWORD code = 0;
+
+    if (!pid || !(process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))) return 0;
+    GetExitCodeProcess(process, &code);
+    CloseHandle(process);
+    return code == STILL_ACTIVE;
+}
+
 static void register_steam(DWORD pid)
 {
     WCHAR account[16];
+    DWORD size = sizeof(previous_pid);
     HKEY key;
 
     if ((key = create_key(HKEY_CURRENT_USER, STEAM_KEY)))
@@ -48,6 +63,7 @@ static void register_steam(DWORD pid)
     }
     if ((key = create_key(HKEY_CURRENT_USER, ACTIVE_PROCESS_KEY)))
     {
+        if (RegQueryValueExW(key, L"pid", NULL, NULL, (BYTE *)&previous_pid, &size)) previous_pid = 0;
         set_dword(key, L"pid", pid);
         set_string(key, L"SteamClientDll64", STEAM_DIR L"\\steamclient64.dll");
         if (GetFileAttributesW(STEAM_DIR L"\\steamclient.dll") != INVALID_FILE_ATTRIBUTES)
@@ -63,7 +79,8 @@ static void register_steam(DWORD pid)
     }
 }
 
-/* A later steam.exe in the same prefix may own the pid by now: only clear our own. */
+/* Another steam.exe in the same prefix may own the pid by now: only touch our own, and hand it
+ * back to the one we replaced while that one still runs (its game may still call into Steam). */
 static void unregister_steam(DWORD pid)
 {
     DWORD current = 0, size = sizeof(current);
@@ -71,7 +88,7 @@ static void unregister_steam(DWORD pid)
 
     if (!(key = create_key(HKEY_CURRENT_USER, ACTIVE_PROCESS_KEY))) return;
     if (!RegQueryValueExW(key, L"pid", NULL, NULL, (BYTE *)&current, &size) && current == pid)
-        set_dword(key, L"pid", 0);
+        set_dword(key, L"pid", previous_pid != pid && process_alive(previous_pid) ? previous_pid : 0);
     RegCloseKey(key);
 }
 
@@ -114,15 +131,23 @@ int main(void)
         fprintf(stderr, "usage: steam.exe <program> [arguments...]\n");
         return 1;
     }
-    register_steam(pid);
-    job = CreateJobObjectW(NULL, NULL);
+    /* Registered only once the child exists (still suspended): a steam.exe that can't start its
+     * program must not touch the Steam another one registered. */
     if (!CreateProcessW(NULL, cmd, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &si, &pi))
     {
         fprintf(stderr, "steam.exe: could not start %ls (error %lu)\n", cmd, GetLastError());
-        unregister_steam(pid);
         return 1;
     }
-    if (job) AssignProcessToJobObject(job, pi.hProcess);
+    register_steam(pid);
+    if ((job = CreateJobObjectW(NULL, NULL)))
+    {
+        /* Launchers may start the game with CREATE_BREAKAWAY_FROM_JOB; Wine refuses that inside a job
+         * that doesn't allow it, so the game wouldn't start at all. */
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = { 0 };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+        AssignProcessToJobObject(job, pi.hProcess);
+    }
     ResumeThread(pi.hThread);
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &code);

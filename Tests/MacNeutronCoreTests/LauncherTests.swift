@@ -227,3 +227,25 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
         #expect(!FileManager.default.fileExists(atPath: folder.appending(path: name).path(percentEncoded: false)))
     }
 }
+
+@Test func anyDirectStartTakesLeftoverBridgeFilesOut() throws {
+    // Same abort as with the escape hatch when the runtime or tool folder loses a bridge file.
+    let f = try makeFixture(bridge: true)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    try FileManager.default.removeItem(at: f.launcher.layout.steamHelper)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let folder = try CompatContext(environment: f.env).prefix.appending(path: "drive_c/Program Files (x86)/Steam")
+    #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "steamclient64.dll").path(percentEncoded: false)))
+}
+
+@Test func gameLogsHideTheSteamAccount() throws {
+    // People post game logs in bug reports; the account ID leads straight to a Steam profile.
+    let f = try makeFixture(bridge: true)
+    var env = f.env
+    env["MACNEUTRON_LOG"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    let log = try String(contentsOf: f.launcher.log.gameLog(appID: "42"), encoding: .utf8)
+    #expect(log.contains("MACNEUTRON_STEAM_ACCOUNT=<redacted>"))
+    #expect(!log.contains("MACNEUTRON_STEAM_ACCOUNT=1\n"))
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+}

@@ -79,9 +79,9 @@ public struct PrefixManager: Sendable {
         }
     }
 
-    /// For `MACNEUTRON_NO_STEAM_BRIDGE`: a game's steam_api loads the client DLL an earlier launch left
-    /// (its registry values persist), and without Steam's client path the bridge aborts the game.
-    /// Without these files the game just finds no Steam.
+    /// For a game started without the bridge (launch option, or a runtime without it): its steam_api
+    /// loads the client DLL an earlier launch left (its registry values persist), and the bridge can
+    /// then abort the game. Without these files the game just finds no Steam.
     public func removeSteamBridge() throws {
         try withFileLock(at: context.lockFile) {
             for name in ["steam.exe", "steamclient64.dll", "steamclient.dll"] {

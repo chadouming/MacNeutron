@@ -72,6 +72,23 @@ int main(void)
         cmd[ARRAYSIZE(cmd) - 1] = 0;
         return CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi) ? 0 : 2;
     }
+    if (!wcscmp(mode, L"breakaway"))  /* a launcher that starts its child outside any job */
+    {
+        WCHAR self[MAX_PATH], cmd[2 * MAX_PATH];
+        STARTUPINFOW si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+
+        GetModuleFileNameW(NULL, self, MAX_PATH);
+        _snwprintf(cmd, ARRAYSIZE(cmd), L"\"%ls\" exit 0", self);
+        cmd[ARRAYSIZE(cmd) - 1] = 0;
+        if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi))
+        {
+            printf("breakaway failed (error %lu)\n", GetLastError());
+            return 2;
+        }
+        printf("breakaway ok\n");
+        return 0;
+    }
     if (!wcscmp(mode, L"late") && argc > 2)  /* the real game, still running after its launcher quit */
     {
         FILE *out;
