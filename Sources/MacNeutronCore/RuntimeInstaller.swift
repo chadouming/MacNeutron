@@ -121,6 +121,12 @@ public enum RuntimeInstaller {
         if let steamExe = candidates.first(where: { fm.fileExists(atPath: $0.path(percentEncoded: false)) }) {
             try installFile(steamExe, at: layout.steamHelper)
         }
+        // The presenter is Mach-O code, so in MacNeutron.app it lives in Contents/Frameworks.
+        let presenters = [helpers.appending(path: "libmacneutron-present.dylib"),
+                          helpers.deletingLastPathComponent().appending(path: "Frameworks/libmacneutron-present.dylib")]
+        if let presenter = presenters.first(where: { fm.fileExists(atPath: $0.path(percentEncoded: false)) }) {
+            try installFile(presenter, at: layout.presenterLibrary)
+        }
     }
 
     /// Copies `source` to `destination` through a temporary file and `rename(2)`, unless they already match.

@@ -42,6 +42,10 @@ public struct ToolLayout: Equatable, Sendable {
             .allSatisfy { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
     }
 
+    /// MacNeutron's MetalFX presenter, which the launcher injects into games' Wine processes.
+    public var presenterLibrary: URL { root.appending(path: "lib/libmacneutron-present.dylib") }
+    public var presenterInstalled: Bool { FileManager.default.fileExists(atPath: presenterLibrary.path(percentEncoded: false)) }
+
     public var runtimeVersion: String? {
         (try? String(contentsOf: runtimeVersionFile, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)

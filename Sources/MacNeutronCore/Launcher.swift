@@ -51,6 +51,7 @@ public struct Launcher: Sendable {
         var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
         let steamBridge = usesSteamBridge(request.verb, env)
         if steamBridge { addSteamClient(to: &env) }
+        if request.verb == .run || request.verb == .waitforexitandrun { addPresenter(to: &env) }
         let gameLog = logging ? log.gameLog(appID: context.appID) : nil
         if let gameLog { writeHeader(to: gameLog, request: request, environment: env) }
         let prefix = PrefixManager(context: context, layout: layout, runtimeVersion: layout.runtimeVersion ?? "unknown",
@@ -119,6 +120,18 @@ public struct Launcher: Sendable {
             return false
         }
         return true
+    }
+
+    /// Loads the MetalFX presenter into the game's Wine processes, after any libraries the player set,
+    /// unless the game opts out.
+    private func addPresenter(to env: inout [String: String]) {
+        guard env["MACNEUTRON_NO_METALFX"] != "1" else { return }
+        guard layout.presenterInstalled else {
+            log.append("note: MetalFX presenter not installed")
+            return
+        }
+        let libraries = [env["DYLD_INSERT_LIBRARIES"], layout.presenterLibrary.path(percentEncoded: false)]
+        env["DYLD_INSERT_LIBRARIES"] = libraries.compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ":")
     }
 
     /// Tells the runtime's lsteamclient where macOS Steam's client library is, and steam.exe who is logged in.

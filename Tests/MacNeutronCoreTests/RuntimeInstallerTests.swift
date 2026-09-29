@@ -128,3 +128,24 @@ private func makeEchoLauncher() throws -> URL {
     try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
     #expect(try String(contentsOf: layout.steamHelper, encoding: .utf8) == "steam.exe from resources")
 }
+
+@Test func installPutsThePresenterInTheToolFolder() throws {
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    let launcher = try makeEchoLauncher()
+    #expect(!layout.presenterInstalled)
+    try write("presenter v1", to: launcher.deletingLastPathComponent().appending(path: "libmacneutron-present.dylib"))
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.presenterLibrary, encoding: .utf8) == "presenter v1")
+    #expect(layout.presenterInstalled)
+}
+
+@Test func installFindsThePresenterInTheAppsFrameworks() throws {
+    // In MacNeutron.app the launcher is Contents/Helpers/macneutron and the library is in Contents/Frameworks.
+    let contents = try makeTempDir().appending(path: "MacNeutron.app/Contents", directoryHint: .isDirectory)
+    let launcher = contents.appending(path: "Helpers/macneutron")
+    try write("#!/bin/sh\n", to: launcher, executable: true)
+    try write("presenter from frameworks", to: contents.appending(path: "Frameworks/libmacneutron-present.dylib"))
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.presenterLibrary, encoding: .utf8) == "presenter from frameworks")
+}

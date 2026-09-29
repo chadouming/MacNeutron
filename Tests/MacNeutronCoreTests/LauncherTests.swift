@@ -18,10 +18,11 @@ private struct Fixture {
 }
 
 private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta: Bool = true,
-                         bridge: Bool = false) throws -> Fixture {
+                         bridge: Bool = false, presenter: Bool = false) throws -> Fixture {
     let notifier = RecordingNotifier()
     let layout = try makeToolLayout()
     if bridge { try installFakeSteamBridge(in: layout) }
+    if presenter { try installFakePresenter(in: layout) }
     let steam = try makeSteamLocation(loginUsers: loginUsersFile(loginUser(account: 1, timestamp: 100, mostRecent: true)))
     let launcher = Launcher(layout: layout, runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
@@ -248,4 +249,53 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(log.contains("MACNEUTRON_STEAM_ACCOUNT=<redacted>"))
     #expect(!log.contains("MACNEUTRON_STEAM_ACCOUNT=1\n"))
     #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+}
+
+@Test func presenterIsInjectedByDefault() throws {
+    let f = try makeFixture(presenter: true)
+    _ = f.launcher.launch(["waitforexitandrun", "/g/Game.exe"], environment: f.env)
+    let game = try #require(f.runner.calls.first { $0.arguments == ["/g/Game.exe"] })
+    #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
+}
+
+@Test func presenterComesAfterTheUsersOwnLibraries() throws {
+    let f = try makeFixture(presenter: true)
+    var env = f.env
+    env["DYLD_INSERT_LIBRARIES"] = "/opt/mine.dylib"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"]
+        == "/opt/mine.dylib:" + f.launcher.layout.presenterLibrary.path(percentEncoded: false))
+}
+
+@Test func optingOutLeavesThePresenterOut() throws {
+    let f = try makeFixture(presenter: true)
+    var env = f.env
+    env["MACNEUTRON_NO_METALFX"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
+    try f.launcher.settings.save(GameSettings(metalFX: false), for: "42")
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
+}
+
+@Test func missingPresenterIsNoted() throws {
+    let f = try makeFixture()
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
+    #expect(f.launcherLog.contains("note: MetalFX presenter not installed"))
+}
+
+@Test func toolCommandsGetNoPresenter() throws {
+    let f = try makeFixture(presenter: true)
+    _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)
+    _ = f.launcher.launch(["getcompatpath", "/g/save"], environment: f.env)
+    #expect(f.runner.calls.allSatisfy { $0.environment["DYLD_INSERT_LIBRARIES"] == nil })
+}
+
+@Test func presenterAndSteamBridgeTravelTogether() throws {
+    let f = try makeFixture(bridge: true, presenter: true)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let game = try #require(f.runner.calls.last)
+    #expect(game.arguments.first == SteamBridge.steamExe)
+    #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
 }

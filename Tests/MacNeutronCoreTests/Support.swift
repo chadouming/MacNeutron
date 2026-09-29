@@ -101,3 +101,8 @@ func installFakeSteamBridge(in layout: ToolLayout, i386: Bool = true) throws {
     try write("lsteamclient x86_64", to: layout.lsteamclient64)
     if i386 { try write("lsteamclient i386", to: layout.lsteamclient32) }
 }
+
+/// A stand-in for the MetalFX presenter library in the tool folder.
+func installFakePresenter(in layout: ToolLayout) throws {
+    try write("presenter", to: layout.presenterLibrary)
+}

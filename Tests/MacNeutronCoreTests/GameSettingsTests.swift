@@ -3,10 +3,11 @@ import Testing
 @testable import MacNeutronCore
 
 @Test func settingsBecomeLaunchVariables() {
-    #expect(GameSettings(graphics: "dxmt", log: true, avx: false, msync: false, runAs: .windows).environment == [
+    #expect(GameSettings(graphics: "dxmt", log: true, avx: false, msync: false, runAs: .windows, metalFX: false).environment == [
         "MACNEUTRON_GRAPHICS": "dxmt", "MACNEUTRON_LOG": "1", "MACNEUTRON_NO_AVX": "1", "MACNEUTRON_NO_MSYNC": "1",
+        "MACNEUTRON_NO_METALFX": "1",
     ])
-    #expect(GameSettings(log: false, avx: true, msync: true).environment.isEmpty)
+    #expect(GameSettings(log: false, avx: true, msync: true, metalFX: true).environment.isEmpty)
 }
 
 @Test func storeRoundTripsAndDefaultsWhenMissing() throws {
