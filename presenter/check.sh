@@ -61,6 +61,18 @@ run_loop hdr 1 1 1280 720 640 360 200 0 fp16
 expect "HDR layers are left alone" \
   "$(grep -c 'left alone (HDR/extended-range layer)' "$WORK/hdr.txt" || true):$(grep -c 'macneutron-present: MetalFX' "$WORK/hdr.txt" || true)" "1:0"
 
+run_loop vsync 1 1 1280 720 640 360 200 1
+expect "vsync-on game is upscaled" "$(grep -c 'macneutron-present: MetalFX 640x360 -> 1280x720' "$WORK/vsync.txt" || true)" 1
+
+rm -f "$WORK/frame.ppm"
+run_loop vswitch 1 1 1280 720 640 360 300 0 vsync_at=60:1
+expect "switching vsync on keeps upscaling" \
+  "$( [ -f "$WORK/frame.ppm" ] && python3 "$ROOT/presenter/tests/pixels.py" "$WORK/frame.ppm" || echo none)" "WNWNWNWN"
+
+run_loop format 1 1 1280 720 640 360 300 0 format_at=100
+expect "a pixel-format switch rebuilds the overlay" \
+  "$(grep -c 'macneutron-present: MetalFX 640x360 -> 1280x720' "$WORK/format.txt" || true):$(grep -c 'avg frame' "$WORK/format.txt" || true)" "2:1"
+
 run_loop base 0 1 1280 720 640 360 600 0
 run_loop pace 1 1 1280 720 640 360 600 0
 expect "pacing within 1 ms of no library" \

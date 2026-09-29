@@ -28,6 +28,8 @@
 static const void *kState = &kState, *kIsOverlay = &kIsOverlay;
 static id<CAMetalDrawable> (*origNextDrawable)(CAMetalLayer *, SEL);
 static void (*origPresent)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>);
+static void (*origPresentAfter)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>, CFTimeInterval);  // D3DMetal with vsync on
+static void (*origPresentAt)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>, CFTimeInterval);
 static const char *dumpPath;      // test-only: write the 120th upscaled frame as a PPM
 static double scaleOverride;      // test-only: pretend the window has this backing scale
 
@@ -187,8 +189,9 @@ static void dumpFrame(id<MTLCommandBuffer> cb, id<MTLTexture> t, MNLayerState *s
     }];
 }
 
-/* Upscales the game's drawable into the overlay and presents the overlay. NO: present the game's drawable as usual. */
-static BOOL upscaleInto(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable)
+/* Upscales the game's drawable into the overlay and presents the overlay with `present`, the same kind of present the
+ * game asked for. NO: present the game's drawable as usual. */
+static BOOL upscaleInto(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable, void (^present)(id<MTLDrawable>))
 {
     CAMetalLayer *layer = drawable.layer;
     id<MTLTexture> src = drawable.texture;
@@ -202,6 +205,11 @@ static BOOL upscaleInto(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable)
         return NO;
     }
     if (src.framebufferOnly) return NO;  // switched this frame: the next drawable is readable
+    if (st.overlay && st.overlay.pixelFormat != src.pixelFormat) {  // the game switched formats: rebuild the overlay
+        removeOverlay(st);
+        note(st, @"pass-through (pixel format changed)");
+        return NO;
+    }
     CGSize target = targetSize(layer, st);
     if (!st.overlay || !CGSizeEqualToSize(st.overlaySize, target)) {
         placeOverlay(layer, st, target);
@@ -225,14 +233,31 @@ static BOOL upscaleInto(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable)
     dumpFrame(cb, out.texture, st);
     note(st, [NSString stringWithFormat:@"MetalFX %lux%lu -> %lux%lu", (unsigned long)src.width,
               (unsigned long)src.height, (unsigned long)st.outWidth, (unsigned long)st.outHeight]);
-    origPresent(cb, @selector(presentDrawable:), out);
+    present(out);
     return YES;
 }
 
+static BOOL upscaled(id<MTLCommandBuffer> cb, id<MTLDrawable> drawable, void (^present)(id<MTLDrawable>))
+{
+    return [drawable conformsToProtocol:@protocol(CAMetalDrawable)] && upscaleInto(cb, (id<CAMetalDrawable>)drawable, present);
+}
+
+/* An upscaled frame shows only the overlay; every other frame is presented as the game asked. */
 static void mnPresent(id<MTLCommandBuffer> self, SEL _cmd, id<MTLDrawable> drawable)
 {
-    BOOL upscaled = [drawable conformsToProtocol:@protocol(CAMetalDrawable)] && upscaleInto(self, (id<CAMetalDrawable>)drawable);
-    if (!upscaled) origPresent(self, _cmd, drawable);  // an upscaled frame shows only the overlay
+    if (!upscaled(self, drawable, ^(id<MTLDrawable> out) { origPresent(self, _cmd, out); })) origPresent(self, _cmd, drawable);
+}
+
+static void mnPresentAfter(id<MTLCommandBuffer> self, SEL _cmd, id<MTLDrawable> drawable, CFTimeInterval duration)
+{
+    if (!upscaled(self, drawable, ^(id<MTLDrawable> out) { origPresentAfter(self, _cmd, out, duration); }))
+        origPresentAfter(self, _cmd, drawable, duration);
+}
+
+static void mnPresentAt(id<MTLCommandBuffer> self, SEL _cmd, id<MTLDrawable> drawable, CFTimeInterval time)
+{
+    if (!upscaled(self, drawable, ^(id<MTLDrawable> out) { origPresentAt(self, _cmd, out, time); }))
+        origPresentAt(self, _cmd, drawable, time);
 }
 
 /* Hooks presentation on this device's command buffers, once per process, the first time something draws. */
@@ -241,8 +266,13 @@ static void hookPresent(id<MTLDevice> device)
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         id<MTLCommandBuffer> cb = [[device newCommandQueue] commandBuffer];
-        Method m = cb ? class_getInstanceMethod(object_getClass(cb), @selector(presentDrawable:)) : NULL;
+        Class c = cb ? object_getClass(cb) : Nil;
+        Method m = class_getInstanceMethod(c, @selector(presentDrawable:));
+        Method after = class_getInstanceMethod(c, @selector(presentDrawable:afterMinimumDuration:));
+        Method at = class_getInstanceMethod(c, @selector(presentDrawable:atTime:));
         if (m) origPresent = (void *)method_setImplementation(m, (IMP)mnPresent);
+        if (after) origPresentAfter = (void *)method_setImplementation(after, (IMP)mnPresentAfter);
+        if (at) origPresentAt = (void *)method_setImplementation(at, (IMP)mnPresentAt);
     });
 }
 

@@ -1,8 +1,10 @@
 /* Test program for presenter/check.sh: presents a checkerboard from a D3D11 swap chain and reports the
  * average frame time.
  *   present_loop.exe <client_w> <client_h> <swap_w|0> <swap_h|0> <frames> <vsync 0|1> [resize=F:WxH] [grow=F] [fp16]
+ *                    [vsync_at=F:V] [format_at=F]
  * Swap size 0 means the window's client size. resize= resizes the window at frame F; grow= resizes the swap chain
- * to the window at frame F; fp16 uses a float swap chain, which D3DMetal shows through an extended-range layer. */
+ * to the window at frame F; fp16 uses a float swap chain, which D3DMetal shows through an extended-range layer.
+ * vsync_at= switches the Present sync interval to V at frame F; format_at= switches the swap chain to 10-bit at frame F. */
 #include <windows.h>
 #include <d3d11_1.h>
 #include <stdio.h>
@@ -24,10 +26,13 @@ int main(int argc, char **argv)
 {
     int cw = atoi(argv[1]), ch = atoi(argv[2]), sw = atoi(argv[3]), sh = atoi(argv[4]);
     int frames = atoi(argv[5]), vsync = atoi(argv[6]), resize_at = -1, rw = 0, rh = 0, grow_at = -1, fp16 = 0;
+    int vsync_at = -1, vsync_to = 0, format_at = -1;
     for (int i = 7; i < argc; i++) {
         if (!strncmp(argv[i], "resize=", 7)) sscanf(argv[i] + 7, "%d:%dx%d", &resize_at, &rw, &rh);
         else if (!strncmp(argv[i], "grow=", 5)) grow_at = atoi(argv[i] + 5);
         else if (!strcmp(argv[i], "fp16")) fp16 = 1;
+        else if (!strncmp(argv[i], "vsync_at=", 9)) sscanf(argv[i] + 9, "%d:%d", &vsync_at, &vsync_to);
+        else if (!strncmp(argv[i], "format_at=", 10)) format_at = atoi(argv[i] + 10);
     }
     WNDCLASSA wc = {0};
     RECT r = {0, 0, cw, ch};
@@ -61,6 +66,12 @@ int main(int argc, char **argv)
             RECT nr = {0, 0, rw, rh};
             AdjustWindowRect(&nr, WS_OVERLAPPEDWINDOW, FALSE);
             SetWindowPos(hwnd, NULL, 0, 0, nr.right - nr.left, nr.bottom - nr.top, SWP_NOMOVE | SWP_NOZORDER);
+        }
+        if (i == vsync_at) vsync = vsync_to;
+        if (i == format_at) {
+            rtv->lpVtbl->Release(rtv); rtv = NULL;
+            swap->lpVtbl->ResizeBuffers(swap, 0, sd.BufferDesc.Width, sd.BufferDesc.Height, DXGI_FORMAT_R10G10B10A2_UNORM, 0);
+            target(swap, dev, &rtv, &sd);
         }
         if (i == grow_at) {
             rtv->lpVtbl->Release(rtv); rtv = NULL;
