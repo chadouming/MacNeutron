@@ -62,9 +62,27 @@ run ours clear dxmt "$TESTS/d3d12_clear.exe" 300
 expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' "$WORK/clear.txt" || true)" 1
 expect "the D3D12 device is our DXMT (shader model 5.1)" "$(grep -c '^shader model 0x51 ' "$WORK/clear.txt" || true)" 1
 
-# 3. DXIL pipelines (Task 5 adds the capture checks).
-run ours dxil dxmt "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil"
+# 3. DXIL pipelines return E_NOTIMPL, and DXMT_DXIL_DUMP captures each shader once, byte for byte.
+#    $WORK has a space in it, like the Application Support paths users will pass.
+dxil() { run ours "$1" dxmt "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil"; }
+D="$WORK/dxil"; mkdir -p "$D"
+export DXMT_DXIL_DUMP="$D"
+dxil dxil
 expect "DXIL pipelines return E_NOTIMPL" "$(grep -c 'hr=0x80004001' "$WORK/dxil.txt" || true)" 2
+expect "three shaders captured" "$(ls "$D" | wc -l | tr -d ' ')" 3
+expect "each capture is the shader, byte for byte" "$(for s in triangle.vs:vs triangle.ps:ps compute.cs:cs; do
+    f=$(ls "$D/${s#*:}"-*.dxil 2> /dev/null | head -1)
+    [ -n "$f" ] && cmp -s "$S/${s%%:*}.dxil" "$f" && printf y || printf n
+  done)" yyy
+expect "capture names are <stage>-<16 hex>.dxil" "$(ls "$D" | grep -cE '^(vs|ps|cs)-[0-9a-f]{16}\.dxil$')" 3
+vs=$(ls "$D"/vs-*.dxil 2> /dev/null | head -1)
+[ -z "$vs" ] || echo keep > "$vs"
+dxil dxil-again
+expect "an existing capture is left alone" "$(cat "$vs" 2> /dev/null)" keep
+export DXMT_DXIL_DUMP="/nonexistent/macneutron dxil"
+dxil dxil-unwritable
+expect "an unwritable capture folder changes nothing for the game" "$(grep -c 'hr=0x80004001' "$WORK/dxil-unwritable.txt" || true)" 2
+unset DXMT_DXIL_DUMP
 
 # 4. D3DMetal still works.
 run ours d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0

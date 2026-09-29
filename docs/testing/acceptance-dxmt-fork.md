@@ -4,13 +4,13 @@ Spec: `docs/superpowers/specs/2026-09-28-macneutron-dxmt-fork-design.md`.
 
 ## make dxmt-check, 2026-09-29
 
-Fork commit `9df853715009a165aeb5053cb465ea8f376fd966`, runtime-v4.7.3, GPTK 4.0b2, M5 Pro, macOS 27.
+Fork commit `7579e39792732625569d07a03df1a73a70dd984b`, runtime-v4.7.3, GPTK 4.0b2, M5 Pro, macOS 27.
 
 | Check | Result |
 |---|---|
 | 1. D3D11 `present_loop` 1280x720, 600 frames: ours vs DXMT 0.80 (best of 2) | 8.308 ms vs 8.306 ms |
 | 2. `d3d12_clear` 300 frames | 300/300 presented, 8.372 ms; adapter Apple M5 Pro, shader model 0x51, binding tier 2 |
-| 3. `d3d12_dxil` | graphics and compute `0x80004001` |
+| 3. `d3d12_dxil` with `DXMT_DXIL_DUMP` | E_NOTIMPL x2; 3 shaders captured byte for byte; existing capture kept; unwritable folder ignored |
 | 4. `present_loop` on D3DMetal | completes, 8.267 ms |
 | 5. `dxil-probe` on the test shaders | see below |
 
