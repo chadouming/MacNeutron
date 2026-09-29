@@ -9,14 +9,15 @@
     - MacNeutron building and shipping it with Direct3D 12 enabled;
     - D3D12 test programs;
     - DXIL shader capture;
-    - a probe of whether LLVM 15 can read DXIL.
+    - a probe of whether LLVM 15 can read DXIL;
+    - making DXMT MacNeutron's default graphics backend for every game.
   - **Out:** sub-projects 2–7 (listed in §2; each gets its own spec). Upstream contributions of any kind other than issue reports.
 
 ## 1. Goal
 
 One open-source, Metal-native translation library for Direct3D 9–12, with no Game Porting Toolkit, performing on par with D3DMetal. MacNeutron would use one graphics backend instead of juggling DXMT and D3DMetal.
 
-**Sub-project 1 is done when** §8's acceptance passes: MacNeutron builds, ships and installs our DXMT with D3D12 enabled; D3D11 behaves as with DXMT 0.80; a D3D12 program presents through it; SMITE 2's DXIL shaders are captured; and the LLVM 15 probe's results are recorded.
+**Sub-project 1 is done when** §8's acceptance passes: MacNeutron builds, ships and installs our DXMT with D3D12 enabled, and uses it as the default backend for every game; D3D11 behaves as with DXMT 0.80; a D3D12 program presents through it; SMITE 2's DXIL shaders are captured; and the LLVM 15 probe's results are recorded.
 
 ### Decisions made during brainstorming
 
@@ -26,6 +27,7 @@ One open-source, Metal-native translation library for Direct3D 9–12, with no G
 | D3D12 shaders | Our own DXIL front end for DXMT's compiler (open; no Metal Shader Converter, no GPTK) |
 | Goal for D3D12 | Parity with D3DMetal on speed |
 | First sub-project | Fork, build and capture (with the LLVM 15 DXIL probe) |
+| Default backend | Our DXMT for every game, now, D3D12 included. Modern D3D12 (DXIL) games, SMITE 2 among them, stop working on the default until sub-projects 2–3 land; D3DMetal stays selectable per game |
 | Fork home | `chadouming/dxmt`, a public GitHub fork, branch `macneutron`; MacNeutron builds a pinned commit locally |
 | Upstream | Never sent upstream: DXMT refuses AI-authored contributions (`CONTRIBUTING.md`, `AGENTS.md`). Issue reports only |
 
@@ -35,7 +37,7 @@ One open-source, Metal-native translation library for Direct3D 9–12, with no G
 2. **DXIL shader translator:** a DXIL front end for DXMT's `airconv` (DXBC→AIR today), starting with SM6.0 vertex, pixel and compute; the approach depends on §6's probe.
 3. **D3D12 runtime for modern games:** real resource barriers, bundles, full ExecuteIndirect, resource binding tier 3 and SM6.6 dynamic resources, wave operations, then mesh shaders and ray tracing for titles that need them.
 4. **Performance parity with D3DMetal:** measured with Metal System Trace on the same scenes (SMITE 2 first).
-5. **MacNeutron integration:** DXMT becomes the default backend and the Game Porting Toolkit becomes optional.
+5. **GPTK optional:** once DXMT runs the D3D12 games D3DMetal does, the Game Porting Toolkit import leaves Setup's recommended path (DXMT is already the default from sub-project 1).
 6. **Direct3D 9 front end:** on DXMT's shared Metal core.
 7. **Direct3D 8:** a shim onto the D3D9 front end.
 
@@ -100,7 +102,9 @@ One open-source, Metal-native translation library for Direct3D 9–12, with no G
 
 **Graphics backend:** when `Libraries/DXMT/x64/d3d12.dll` exists, the `dxmt` backend also copies `d3d12.dll` into `system32`, and its overrides become `dxgi,d3d10core,d3d11,d3d12=n,b;d3d9,d3d10=b`. Without it, nothing changes.
 
-**README:** a note that MacNeutron ships DXMT (LGPL-2.1+) from `github.com/chadouming/dxmt` at the commit in `dxmt-version`, and what `make dxmt` needs.
+**Default backend:** `GraphicsBackend.select` returns `dxmt` when no valid `MACNEUTRON_GRAPHICS` is given, whether or not GPTK is imported (today: `d3dmetal` when imported). `d3dmetal` without GPTK still falls back to `dxmt`, and `dxvk` with GPTK imported still falls back to `d3dmetal`. The Games window's default entry reads "Default (DXMT)".
+
+**README:** a note that MacNeutron ships DXMT (LGPL-2.1+) from `github.com/chadouming/dxmt` at the commit in `dxmt-version`, and what `make dxmt` needs; and that DXMT is now the default, so modern D3D12 games (DXIL shaders, most Unreal Engine 5 and recent titles) need "Graphics: D3DMetal" in the Games window, with GPTK imported, until DXMT's D3D12 matures.
 
 ## 6. Tests, capture and the DXIL probe
 
@@ -132,6 +136,7 @@ One open-source, Metal-native translation library for Direct3D 9–12, with no G
 | Bundle has no DXMT | Nothing installed; the runtime's DXMT 0.80 stays |
 | DXMT without `d3d12.dll` | D3D12 stays on Wine's builtin (`d3d12=b`) for the `dxmt` backend |
 | Runtime reinstall | Our DXMT re-applied after the GPTK overlay |
+| A DXIL D3D12 game on the default | Pipeline creation fails with `E_NOTIMPL` (captured with `DXMT_DXIL_DUMP`); the game shows its own error or exits. The user picks D3DMetal for that game |
 
 ## 8. Acceptance on the maintainer's Mac
 
@@ -142,7 +147,7 @@ Recorded in `docs/testing/acceptance-dxmt-fork.md`:
 3. **A D3D11 game on our DXMT:** SMITE 2 with `-dx11` on the `dxmt` backend, or another D3D11 title. Record whether it runs, FPS and GPU time.
 4. **SMITE 2 (D3D12) on the `dxmt` backend** with `DXMT_DXIL_DUMP`: record how many shaders were captured and where the game stopped.
 5. **`dxil-probe`** on SMITE 2's shaders and the test shaders: record ok/fail counts and LLVM errors. This decides sub-project 2's approach.
-6. D3DMetal is still SMITE 2's working default.
+6. With the default now DXMT, SMITE 2 fails as expected (its launch is the capture run in item 4); with "Graphics: D3DMetal" set for it in the Games window, it plays as before.
 
 ## 9. Risks
 
@@ -151,4 +156,5 @@ Recorded in `docs/testing/acceptance-dxmt-fork.md`:
 - **Build cost:** LLVM takes roughly 30–60 minutes and a few GB, once.
 - **LGPL:** shipping DXMT binaries requires the corresponding source to be available: the public fork, a pinned commit, and the licence files bundled.
 - **The Wine 8.16 tree** we build against differs from the runtime's Wine 11. DXMT 0.80 shows this works; a winemetal ABI break would show up in check item 1.
+- **Default before D3D12 parity:** every modern D3D12 game needs a per-game switch to D3DMetal until sub-projects 2–3 land. The maintainer chose this knowingly; the README says so.
 - **Rosetta after macOS 27:** DXMT has an arm64ec build path upstream; a later sub-project can move to it.
