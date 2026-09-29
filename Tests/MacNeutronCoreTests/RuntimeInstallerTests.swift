@@ -171,3 +171,18 @@ private func makeEchoLauncher() throws -> URL {
     try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: try makeEchoLauncher())
     #expect(layout.dxmtVersion == nil)
 }
+
+@Test func aSwapThatFailsDoesNotLeaveDXMTVersionClaimingOurs() throws {
+    // The old Libraries can't be removed (a read-only folder inside), so moving the new one in fails.
+    let (tarball, pin) = try makeRuntimeTarball()
+    let layout = try makeToolLayout()
+    try write("abc123", to: layout.dxmtVersionFile)
+    let stuck = layout.libraries.appending(path: "stuck", directoryHint: .isDirectory)
+    try write("x", to: stuck.appending(path: "file"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: stuck.path(percentEncoded: false))
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stuck.path(percentEncoded: false)) }
+    #expect(throws: (any Error).self) {
+        try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: try makeEchoLauncher())
+    }
+    #expect(layout.dxmtVersion == nil)
+}

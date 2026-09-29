@@ -92,9 +92,10 @@ public enum RuntimeInstaller {
         where !fm.isExecutableFile(atPath: required.path(percentEncoded: false)) {
             throw RuntimeInstallError.badArchive("missing Libraries/Wine/bin/\(required.lastPathComponent)")
         }
+        // Before the swap: the new runtime brings its own DXMT 0.80, and a swap that fails must not leave a claim either.
+        try? fm.removeItem(at: layout.dxmtVersionFile)
         try? fm.removeItem(at: layout.libraries)
         try fm.moveItem(at: extracted.libraries, to: layout.libraries)
-        try? fm.removeItem(at: layout.dxmtVersionFile)  // the new runtime brings its own DXMT 0.80
         try writeToolFiles(layout: layout, launcherBinary: launcherBinary)
         try pin.version.write(to: layout.runtimeVersionFile, atomically: true, encoding: .utf8)
         if fm.fileExists(atPath: layout.gptkStore.path(percentEncoded: false)) {
