@@ -43,3 +43,21 @@ DXMT compiles its own Metal shaders with `xcrun metal`.
    Level was 'SM6'`. It creates no pipelines, so nothing was captured. The launch option also used `$HOME`, which
    Steam doesn't expand. Fix: fork `3dec1a8`'s capture mode reports what that check needs while `DXMT_DXIL_DUMP` is
    set, and creates the folder; the README asks for an absolute path.
+   Second attempt, fork `a00c283`, with `DXMT_DXIL_DUMP=/Users/<maintainer>/dxil-smite2`:
+   - Unreal passed its check: `Max supported Feature Level 12_1, shader model 6.7, binding tier 3, wave ops
+     supported, atomic64 supported`, then `Creating D3D12 RHI with Max Feature Level SM6`.
+   - It stopped at `ID3D12CommandQueue::GetClockCalibration` (E_NOTIMPL, fatal in D3D12Util.cpp). The fork now stubs
+     it, like `GetTimestampFrequency`.
+   - Third attempt: it stopped at the first failed pipeline ("Shader compilation failures are Fatal",
+     PipelineStateCache.cpp:528), after **770 shaders were captured** (18 MB): 587 ps, 166 vs, 16 cs, 1 gs.
+5. `dxil-probe` on SMITE 2's 770 shaders: **770 ok, 0 fail**.
+   - DXIL 1.6 (768) and 1.4 (2); all Shader Model 6.6 (ps/vs/cs/gs_6_6).
+   - Most-used `dx.op` calls: unary.f32 134083, tertiary.f32 71999, dot3.f32 41061, binary.f32 36933,
+     cbufferLoadLegacy.f32 24244, dot4AddPacked.i32 23060, annotateHandle 19249, createHandleFromBinding 12982,
+     sampleLevel.f32 12375, rawBufferLoad.i32 5440.
+   - Test shaders: 3/3 ok (DXIL 1.0, SM 6.0; table above).
+
+   **Consequence for sub-project 2:** LLVM 15, which DXMT's `airconv` already links, reads SMITE 2's DXIL as it
+   ships. The DXIL translator can parse with LLVM 15 directly; no separate reader (such as dxil-spirv's) is needed.
+   SM 6.6 resource handles (`createHandleFromBinding`/`annotateHandle`) are in almost every shader, so they come first.
+6. SMITE 2 on the default: fails as expected (item 4). With Graphics: D3DMetal: to be confirmed by the maintainer.
