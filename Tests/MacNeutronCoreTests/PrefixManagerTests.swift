@@ -6,7 +6,7 @@ private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String
     let layout = try makeToolLayout()
     let env = steamEnvironment(dataPath: try makeTempDir().appending(path: "compatdata/42"))
     let context = try CompatContext(environment: env)
-    let wineEnv = LaunchEnvironment.build(base: env, context: context, backend: .dxmt, logging: false)
+    let wineEnv = LaunchEnvironment.build(base: env, context: context, backend: .dxmt, layout: layout, logging: false)
     return (PrefixManager(context: context, layout: layout, runtimeVersion: "runtime-test", runner: runner), wineEnv)
 }
 
@@ -134,4 +134,12 @@ private func steamFolder(_ manager: PrefixManager) -> URL {
     try installFakeSteamBridge(in: manager.layout)
     try manager.prepare(backend: .dxmt, environment: env)
     #expect(!FileManager.default.fileExists(atPath: steamFolder(manager).path(percentEncoded: false)))
+}
+
+@Test func dxmtDeploysOurD3D12WhenInstalled() throws {
+    let (manager, env) = try makeManager(winebootCreatingPrefix())
+    try write("ours x64 d3d12.dll", to: manager.layout.dxmtD3D12)
+    try manager.prepare(backend: .dxmt, environment: env)
+    let d3d12 = manager.context.prefix.appending(path: "drive_c/windows/system32/d3d12.dll")
+    #expect(try String(contentsOf: d3d12, encoding: .utf8) == "ours x64 d3d12.dll")
 }

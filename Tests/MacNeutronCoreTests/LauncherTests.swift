@@ -299,3 +299,11 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(game.arguments.first == SteamBridge.steamExe)
     #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
 }
+
+@Test func defaultBackendIsDXMTEvenWithGPTKImported() throws {
+    let f = try makeFixture()
+    try write(#"{"version": "4.0b2"}"#, to: f.launcher.layout.gptkManifest)
+    #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
+    #expect(f.launcherLog.contains("backend=dxmt"))
+    #expect(f.launcherLog.contains("gptk=4.0b2"))
+}

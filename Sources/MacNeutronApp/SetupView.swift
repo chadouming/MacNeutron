@@ -21,7 +21,7 @@ struct SetupView: View {
 
             Step(done: model.gptkVersion != nil, title: "Import Game Porting Toolkit (optional)",
                  detail: model.gptkVersion.map { "D3DMetal \($0) imported. Drop a newer .dmg here to update." }
-                     ?? "Drop Apple's Game_Porting_Toolkit .dmg here, or choose it. Without it, games use DXMT.") {
+                     ?? "Drop Apple's Game_Porting_Toolkit .dmg here, or choose it. Games use DXMT; GPTK adds D3DMetal, which modern Direct3D 12 games need for now (set it per game in the Games window).") {
                 Button("Choose…") { choosingDMG = true }
             }
             .dropDestination(for: URL.self) { urls, _ in

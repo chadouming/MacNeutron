@@ -4,10 +4,10 @@ public enum LaunchEnvironment {
     /// Wine's environment: Steam's (including the user's launch-option variables) plus ours.
     /// Anything the user set explicitly wins over our defaults.
     public static func build(base: [String: String], context: CompatContext, backend: GraphicsBackend,
-                             logging: Bool) -> [String: String] {
+                             layout: ToolLayout, logging: Bool) -> [String: String] {
         var env = base
         env["WINEPREFIX"] = context.prefix.path(percentEncoded: false)
-        env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides, user: base["WINEDLLOVERRIDES"])
+        env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides(layout: layout), user: base["WINEDLLOVERRIDES"])
         if base["WINEDEBUG"] == nil {
             env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll,+steamclient" : "-all"
         }

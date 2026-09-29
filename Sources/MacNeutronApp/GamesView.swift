@@ -37,7 +37,7 @@ struct GamesView: View {
                         Picker("", selection: Binding(
                             get: { row.settings.graphics ?? "" },
                             set: { value in Task { await model.update(row.id) { $0.graphics = value.isEmpty ? nil : value } } })) {
-                            Text("Default (\(model.gptkVersion == nil ? "DXMT" : "D3DMetal"))").tag("")
+                            Text("Default (DXMT)").tag("")
                             Text("D3DMetal").tag("d3dmetal")
                             Text("DXMT").tag("dxmt")
                             Text(model.gptkVersion == nil ? "DXVK" : "DXVK (falls back to D3DMetal while GPTK is imported)").tag("dxvk")

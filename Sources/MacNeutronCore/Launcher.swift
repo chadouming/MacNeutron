@@ -48,7 +48,8 @@ public struct Launcher: Sendable {
         let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"],
                                                      gptkImported: layout.gptkImported)
         let logging = environment["MACNEUTRON_LOG"] == "1"
-        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
+        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, layout: layout,
+                                          logging: logging)
         let steamBridge = usesSteamBridge(request.verb, env)
         if steamBridge { addSteamClient(to: &env) }
         if request.verb == .run || request.verb == .waitforexitandrun { addPresenter(to: &env) }
