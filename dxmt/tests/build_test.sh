@@ -20,6 +20,29 @@ out=$(BUILD_DIR="$T/b2" sh "$ROOT/dxmt/build.sh" 2>&1) && st=0 || st=$?
 expect "a bad checksum stops the build" "$st" 1
 expect "and says so" "$(echo "$out" | grep -c 'checksum mismatch for wine.tar.gz')" 1
 expect "and stages nothing" "$([ -e "$T/b2/dxmt" ] && echo staged || echo none)" none
+expect "and moves the bad file aside, so the next run downloads it again" \
+  "$([ -e "$T/b2/dxmt-src/wine.tar.gz" ] && echo kept || echo moved):$([ -f "$T/b2/dxmt-src/wine.tar.gz.bad" ] && echo bad)" "moved:bad"
+
+# Xcode's Metal Toolchain is a separate download; without it DXMT's Metal shaders can't compile.
+mkdir -p "$T/bin2"
+for t in cmake ninja meson x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do ln -s "$(command -v $t)" "$T/bin2/$t"; done
+printf '#!/bin/sh\nexit 1\n' > "$T/bin2/xcrun"; chmod +x "$T/bin2/xcrun"
+mkdir -p "$T/b4/dxmt-src"; echo "not wine" > "$T/b4/dxmt-src/wine.tar.gz"  # a regression stops here, not at a download
+out=$(PATH="$T/bin2:/usr/bin:/bin" BUILD_DIR="$T/b4" sh "$ROOT/dxmt/build.sh" 2>&1) && st=0 || st=$?
+expect "a missing Metal Toolchain is named" \
+  "$st:$(echo "$out" | grep -c 'Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)')" "1:1"
+
+# make app ships only a fork commit that's published on the fork's macneutron branch (LGPL).
+git init -q --bare "$T/origin.git"
+git clone -q "$T/origin.git" "$T/clone" 2> /dev/null
+git -C "$T/clone" -c user.name=t -c user.email=t@t commit -q --allow-empty -m pushed
+git -C "$T/clone" push -q origin HEAD:macneutron
+pushed=$(git -C "$T/clone" rev-parse HEAD)
+git -C "$T/clone" -c user.name=t -c user.email=t@t commit -q --allow-empty -m local
+sh "$ROOT/dxmt/published.sh" "$T/clone" "$pushed" > /dev/null 2>&1 && st=0 || st=$?
+expect "a pushed fork commit may ship" "$st" 0
+out=$(sh "$ROOT/dxmt/published.sh" "$T/clone" "$(git -C "$T/clone" rev-parse HEAD)" 2>&1) && st=0 || st=$?
+expect "an unpushed fork commit may not" "$st:$(echo "$out" | grep -c 'push it before shipping')" "1:1"
 
 # A build already at the pinned commit is left alone, even without the tools.
 mkdir -p "$T/b3/dxmt"; echo "$DXMT_COMMIT" > "$T/b3/dxmt/version"; printf '#!/bin/sh\n' > "$T/b3/dxmt/dxil-probe"

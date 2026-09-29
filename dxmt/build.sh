@@ -20,6 +20,8 @@ missing=""
 need() { command -v "$1" > /dev/null 2>&1 || missing="$missing, $1 (brew install $2)"; }
 need cmake cmake; need ninja ninja; need meson meson
 need x86_64-w64-mingw32-gcc mingw-w64; need i686-w64-mingw32-gcc mingw-w64
+# DXMT compiles its own Metal shaders; Xcode ships the compiler as a separate component.
+xcrun metal --version > /dev/null 2>&1 || missing="$missing, Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"
 [ -z "$missing" ] || die "missing tools: ${missing#, }"
 
 # 2. Fetch. Checksummed archives first, so a bad download stops before anything is built or staged.
@@ -31,7 +33,10 @@ fetch() {  # fetch <url> <file> <sha256>
     mv "$2.part" "$2"
   fi
   sum=$(shasum -a 256 "$2" | cut -d ' ' -f 1)
-  [ "$sum" = "$3" ] || die "checksum mismatch for $(basename "$2"): expected $3, got $sum"
+  if [ "$sum" != "$3" ]; then
+    mv "$2" "$2.bad"  # so the next run downloads it again
+    die "checksum mismatch for $(basename "$2"): expected $3, got $sum (moved to $(basename "$2").bad)"
+  fi
 }
 fetch "$WINE_URL" "$SRC/wine.tar.gz" "$WINE_SHA256"
 fetch "$DXC_URL" "$SRC/dxc.zip" "$DXC_SHA256"
@@ -57,7 +62,7 @@ git -C "$SRC/dxmt" -c advice.detachedHead=false checkout -q --detach "$DXMT_COMM
 git -C "$SRC/dxmt" submodule update -q --init --depth 1 || die "can't fetch DXMT's submodules"
 
 # 3. LLVM 15: x86_64, static, with DXMT's CI flags. Built once.
-if [ ! -f "$LLVM/lib/libLLVMCore.a" ]; then
+if [ ! -f "$LLVM/.complete" ]; then
   [ -d "$SRC/llvm-project/llvm" ] || git clone -q --depth 1 --branch "$LLVM_TAG" \
     https://github.com/llvm/llvm-project.git "$SRC/llvm-project" || die "can't clone llvm-project $LLVM_TAG"
   echo "dxmt: building LLVM $LLVM_TAG (30-60 minutes, once); log: $SRC/llvm.log"
@@ -67,6 +72,7 @@ if [ ! -f "$LLVM/lib/libLLVMCore.a" ]; then
       -DLLVM_BUILD_TOOLS=Off -DLLVM_VERSION_PRINTER_SHOW_HOST_TARGET_INFO=Off -DCMAKE_POLICY_VERSION_MINIMUM=3.5 &&
     cmake --build "$SRC/llvm-build" && cmake --install "$SRC/llvm-build"; } > "$SRC/llvm.log" 2>&1 \
     || die "LLVM build failed; see $SRC/llvm.log"
+  touch "$LLVM/.complete"  # written last: an interrupted install is redone
 fi
 
 # 4. DXMT: 64-bit with Direct3D 12, and 32-bit, which gets no D3D12 (spec §5).

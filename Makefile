@@ -70,9 +70,10 @@ app: build bridge presenter dxmt
 	mkdir -p $(APP)/Contents/Frameworks
 	cp $(PRESENTER)/libmacneutron-present.dylib $(APP)/Contents/Frameworks/libmacneutron-present.dylib
 	codesign --force --sign - $(APP)/Contents/Frameworks/libmacneutron-present.dylib
+	sh dxmt/published.sh build/dxmt-src/dxmt $$(cat build/dxmt/version)
 	mkdir -p $(APP)/Contents/Resources/DXMT $(APP)/Contents/Frameworks/DXMT
 	cp -R build/dxmt/x86_64-windows build/dxmt/i386-windows build/dxmt/version \
 		build/dxmt/COPYING.LIB build/dxmt/LICENSE build/dxmt/LICENSE.OLD $(APP)/Contents/Resources/DXMT/
 	cp -R build/dxmt/x86_64-unix $(APP)/Contents/Frameworks/DXMT/
-	codesign --force --sign - $(APP)/Contents/Frameworks/DXMT/x86_64-unix/winemetal.so
+	for f in $(APP)/Contents/Frameworks/DXMT/x86_64-unix/*; do codesign --force --sign - "$$f"; done
 	codesign --force --sign - $(APP)

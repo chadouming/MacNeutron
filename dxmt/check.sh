@@ -43,7 +43,7 @@ run() {
 }
 for tool in stock ours; do  # the prefixes, created outside the 120 s watchdog
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/$tool" SteamAppId=0 \
-      "$WORK/$tool/bin/macneutron" launch getcompatpath "$WORK" > /dev/null 2>&1
+      "$WORK/$tool/bin/macneutron" launch getcompatpath "$WORK" > /dev/null 2>&1 || die "creating the $tool prefix failed"
 done
 
 # 1. D3D11 on our DXMT is as fast as on DXMT 0.80: best of two runs each, within 10%.
