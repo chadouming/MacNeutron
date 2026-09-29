@@ -79,7 +79,12 @@ expect "newer device interfaces (5-8) answer as on D3DMetal" "$(grep '^device' "
 expect "a graphics pipeline with sample count 0 fares as on D3DMetal" "$(grep '^graphics-samples0' "$WORK/dxil.txt" | tr -d '\r')" \
   "$(grep '^graphics-samples0' "$WORK/dxil-ref.txt" | tr -d '\r')"
 expect "the capture folder is created" "$([ -d "$D" ] && echo yes || echo no)" yes
-expect "four shaders captured" "$(ls "$D" | wc -l | tr -d ' ')" 4
+expect "four shaders captured" "$(ls "$D" | grep -c '\.dxil$')" 4
+# Capture mode also saves the root signature and a line per pipeline naming its shaders and root signature by hash.
+rs=$(ls "$D" | sed -n 's/^rs-\([0-9a-f]\{16\}\)\.bin$/\1/p')
+expect "the root signature is captured" "$(echo "$rs" | grep -c .)" 1
+expect "pipelines.txt names each pipeline's shaders and root signature" \
+  "$(grep -cE "^(gfx vs=[0-9a-f]{16} ps=[0-9a-f]{16}|cs cs=[0-9a-f]{16}) rs=$rs( |$)" "$D/pipelines.txt" 2> /dev/null || true)" 4
 expect "each capture is its shader, byte for byte" "$(for src in "$S/triangle.vs.dxil" "$S/triangle.ps.dxil" "$S/compute.cs.dxil" "$H"; do
     found=n; for f in "$D"/*.dxil; do cmp -s "$src" "$f" && found=y; done; printf %s $found
   done)" yyyy
@@ -116,13 +121,13 @@ for g in buffers math transcendental textures groupshared wave half packed atomi
 done
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
 expect "DXIL pipelines compile on 8 threads at once" "$(grep -o 'threads ok 8/8' "$WORK/exec-threads.txt" || true)" "threads ok 8/8"
-same_pixels() {  # same_pixels <ours> <ref>: yes when both drew and the 12 sampled pixels are within 1/255
+same_pixels() {  # same_pixels <ours> <ref>: yes when both drew ("<test> ok") and the 12 sampled pixels are within 1/255
   python3 - "$1" "$2" <<'PY'
 import sys
 def px(p):
     for l in open(p):
         s = l.split()
-        if s[:2] == ["triangle", "ok"]: return [int(x, 16) for x in s[3:15]]
+        if s[1:2] == ["ok"]: return [int(x, 16) for x in s[3:15]]
 a, b = px(sys.argv[1]), px(sys.argv[2])
 print("yes" if a and b and len(a) == len(b) == 12 and all(abs(((x >> k) & 255) - ((y >> k) & 255)) <= 1 for x, y in zip(a, b) for k in (0, 8, 16, 24)) else f"no {a} {b}")
 PY
@@ -134,6 +139,19 @@ run ours trigs-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z
 run ours trigs-ref d3dmetal "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
 expect "DXIL geometry shader triangle matches D3DMetal (12 pixels within 1/255)" \
   "$(same_pixels "$WORK/trigs-ours.txt" "$WORK/trigs-ref.txt")" yes
+# Depth and stencil as Unreal uses them; occlusion queries, which Unreal culls meshes by (SMITE 2's lobby).
+run ours depth-ours dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
+run ours depth-ref d3dmetal "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
+expect "depth and stencil match D3DMetal (12 pixels within 1/255)" "$(same_pixels "$WORK/depth-ours.txt" "$WORK/depth-ref.txt")" yes
+# The pass dump (capture mode, DXMT_DUMP_FRAME): frame 0 of a test that never presents, saved as its queue goes.
+rm -rf "$WORK/passes"; export DXMT_DXIL_DUMP="$WORK/passes" DXMT_DUMP_FRAME=0
+run ours depth-dump dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME
+expect "the pass dump saves the depth test's 3 render passes (5 attachments)" \
+  "$(grep -c ' render ' "$WORK/passes/passes.txt" 2> /dev/null || true) $(ls "$WORK/passes" 2> /dev/null | grep -c '\.raw$')" "3 5"
+run ours query-ours dxmt "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
+run ours query-ref d3dmetal "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
+expect "occlusion queries match D3DMetal" "$(grep '^query' "$WORK/query-ours.txt" || true)" "$(grep '^query' "$WORK/query-ref.txt" || echo 'D3DMetal ran no query')"
 
 # AMD's FSR 3 swapchain proxy, which SMITE 2 (and other Unreal games with the FSR 3 plugin) create their swapchain
 # through: read from the game's install when it's there, never copied.
@@ -174,7 +192,7 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "10/11"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "6/6"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "9/9"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
