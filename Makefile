@@ -58,7 +58,7 @@ dxmt-check: build dxmt presenter dxmt-tests
 	sh dxmt/check.sh
 
 # Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
-app: build bridge presenter
+app: build bridge presenter dxmt
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Helpers
 	cp App/Info.plist $(APP)/Contents/Info.plist
@@ -70,4 +70,9 @@ app: build bridge presenter
 	mkdir -p $(APP)/Contents/Frameworks
 	cp $(PRESENTER)/libmacneutron-present.dylib $(APP)/Contents/Frameworks/libmacneutron-present.dylib
 	codesign --force --sign - $(APP)/Contents/Frameworks/libmacneutron-present.dylib
+	mkdir -p $(APP)/Contents/Resources/DXMT $(APP)/Contents/Frameworks/DXMT
+	cp -R build/dxmt/x86_64-windows build/dxmt/i386-windows build/dxmt/version \
+		build/dxmt/COPYING.LIB build/dxmt/LICENSE build/dxmt/LICENSE.OLD $(APP)/Contents/Resources/DXMT/
+	cp -R build/dxmt/x86_64-unix $(APP)/Contents/Frameworks/DXMT/
+	codesign --force --sign - $(APP)/Contents/Frameworks/DXMT/x86_64-unix/winemetal.so
 	codesign --force --sign - $(APP)
