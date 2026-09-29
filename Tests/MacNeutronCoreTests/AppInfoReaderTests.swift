@@ -30,3 +30,21 @@ func readsTheRealAppCache() throws {
     #expect(timberborn?.oslist == ["windows", "macos"])
     #expect(timberborn?.type == "game")
 }
+
+@Test func readingWhileSteamRewritesTheFileNeverCrashes() throws {
+    // Seen in acceptance: a memory-mapped read died with SIGBUS when the file shrank mid-parse. Steam
+    // rewrites appinfo.vdf on exit, exactly when the app refreshes. A short read may fail; it must not crash.
+    let apps = (0..<3000).map { AppInfo(appID: UInt32($0 + 1), name: "Game \($0)", type: "game", oslist: ["windows"]) }
+    let big = makeAppInfoV29(apps)
+    let url = try makeTempDir().appending(path: "appinfo.vdf")
+    try big.write(to: url)
+    let deadline = Date().addingTimeInterval(1)
+    let writer = Thread {
+        while Date() < deadline {
+            try? big.prefix(64).write(to: url)  // truncates in place, as a non-atomic writer does
+            try? big.write(to: url)
+        }
+    }
+    writer.start()
+    while Date() < deadline { _ = try? AppInfoReader.read(url) }
+}

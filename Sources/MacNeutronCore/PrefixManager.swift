@@ -5,12 +5,14 @@ public enum PrefixError: Error, Equatable, CustomStringConvertible {
     case lockFailed(String)
     case winebootFailed(Int32)
     case dllCopyFailed(String)
+    case steamBridgeCopyFailed(String)
 
     public var description: String {
         switch self {
         case .lockFailed(let reason): "could not lock the prefix: \(reason)"
         case .winebootFailed(let status): "prefix setup failed (wineboot exit \(status)); the prefix was left unchanged"
         case .dllCopyFailed(let detail): "could not install graphics DLLs: \(detail)"
+        case .steamBridgeCopyFailed(let detail): "could not install the Steam bridge: \(detail)"
         }
     }
 }
@@ -36,10 +38,10 @@ public struct PrefixManager: Sendable {
         return recorded?.trimmingCharacters(in: .whitespacesAndNewlines) != runtimeVersion
     }
 
-    /// Runs `wineboot -u` when needed, then installs the backend's DLLs. Holds the prefix lock only
-    /// for this preparation, never while the game runs. On failure the version is not recorded,
-    /// so the next launch retries; nothing under `drive_c` is ever deleted.
-    public func prepare(backend: GraphicsBackend, environment: [String: String]) throws {
+    /// Runs `wineboot -u` when needed, then installs the backend's DLLs and, when asked, the Steam bridge.
+    /// Holds the prefix lock only for this preparation, never while the game runs. On failure the version
+    /// is not recorded, so the next launch retries; nothing under `drive_c` is ever deleted.
+    public func prepare(backend: GraphicsBackend, environment: [String: String], steamBridge: Bool = false) throws {
         try FileManager.default.createDirectory(at: context.dataPath, withIntermediateDirectories: true)
         try withFileLock(at: context.lockFile) {
             if needsPreparation {
@@ -52,25 +54,48 @@ public struct PrefixManager: Sendable {
                 try runtimeVersion.write(to: context.versionFile, atomically: true, encoding: .utf8)
             }
             try deployDLLs(for: backend)
+            if steamBridge { try deploySteamBridge() }
         }
     }
 
     func deployDLLs(for backend: GraphicsBackend) throws {
-        let fm = FileManager.default
         for (source, destination) in backend.prefixDLLs(layout: layout) {
             // A missing file must fail loudly: skipping one once left DXMT's dxgi paired with DXVK.
-            guard fm.fileExists(atPath: source.path(percentEncoded: false)) else {
+            guard FileManager.default.fileExists(atPath: source.path(percentEncoded: false)) else {
                 throw PrefixError.dllCopyFailed("\(destination): missing from the runtime (\(source.path(percentEncoded: false)))")
             }
-            let target = context.prefix.appending(path: destination)
-            do {
-                try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if fm.fileExists(atPath: target.path(percentEncoded: false)) { try fm.removeItem(at: target) }
-                try fm.copyItem(at: source, to: target)
-            } catch {
+            do { try install(source, at: destination) } catch {
                 throw PrefixError.dllCopyFailed("\(destination): \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Every launch, like the DLLs: prefixes made before the bridge existed get it too.
+    func deploySteamBridge() throws {
+        for (source, destination) in SteamBridge.prefixFiles(layout: layout) {
+            do { try install(source, at: destination) } catch {
+                throw PrefixError.steamBridgeCopyFailed("\(destination): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// For a game started without the bridge (launch option, or a runtime without it): its steam_api
+    /// loads the client DLL an earlier launch left (its registry values persist), and the bridge can
+    /// then abort the game. Without these files the game just finds no Steam.
+    public func removeSteamBridge() throws {
+        try withFileLock(at: context.lockFile) {
+            for name in ["steam.exe", "steamclient64.dll", "steamclient.dll"] {
+                try? FileManager.default.removeItem(at: context.prefix.appending(path: "\(SteamBridge.prefixFolder)/\(name)"))
+            }
+        }
+    }
+
+    private func install(_ source: URL, at destination: String) throws {
+        let fm = FileManager.default
+        let target = context.prefix.appending(path: destination)
+        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fm.fileExists(atPath: target.path(percentEncoded: false)) { try fm.removeItem(at: target) }
+        try fm.copyItem(at: source, to: target)
     }
 }
 

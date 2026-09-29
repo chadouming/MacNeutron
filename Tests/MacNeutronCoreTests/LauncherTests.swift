@@ -14,14 +14,21 @@ private struct Fixture {
     let runner: FakeRunner
     let notifier: RecordingNotifier
     let env: [String: String]
+    var launcherLog: String { (try? String(contentsOf: launcher.log.launcherLog, encoding: .utf8)) ?? "" }
 }
 
-private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta: Bool = true) throws -> Fixture {
+private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta: Bool = true,
+                         bridge: Bool = false, presenter: Bool = false) throws -> Fixture {
     let notifier = RecordingNotifier()
-    let launcher = Launcher(layout: try makeToolLayout(), runner: runner,
+    let layout = try makeToolLayout()
+    if bridge { try installFakeSteamBridge(in: layout) }
+    if presenter { try installFakePresenter(in: layout) }
+    let steam = try makeSteamLocation(loginUsers: loginUsersFile(loginUser(account: 1, timestamp: 100, mostRecent: true)))
+    let launcher = Launcher(layout: layout, runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
                             notifier: notifier, preflight: Preflight(rosettaAvailable: { rosetta }),
-                            settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")))
+                            settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")),
+                            steam: steam)
     let env = steamEnvironment(dataPath: try makeTempDir().appending(path: "compatdata/42"), appID: "42")
     return Fixture(launcher: launcher, runner: runner, notifier: notifier, env: env)
 }
@@ -117,7 +124,7 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
     let gameLog = f.launcher.log.gameLog(appID: "42")
     #expect(f.runner.calls.last?.output == gameLog)
-    #expect(try String(contentsOf: gameLog, encoding: .utf8).contains("WINEDEBUG=+err,+warn,+loaddll"))
+    #expect(try String(contentsOf: gameLog, encoding: .utf8).contains("WINEDEBUG=+err,+warn,+loaddll,+steamclient"))
 }
 
 @Test func everyLaunchIsLoggedWithVersions() throws {
@@ -142,7 +149,7 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
     let wine = try #require(f.runner.calls.last?.environment)
     #expect(wine["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)  // dxmt
-    #expect(wine["WINEDEBUG"] == "+err,+warn,+loaddll")
+    #expect(wine["WINEDEBUG"] == "+err,+warn,+loaddll,+steamclient")
     #expect(wine["WINEMSYNC"] == nil)
 }
 
@@ -151,4 +158,144 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     try write("{ not json", to: f.launcher.settings.directory.appending(path: "42.json"))
     #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
     #expect(try String(contentsOf: f.launcher.log.launcherLog, encoding: .utf8).contains("ignoring unreadable game settings for 42"))
+}
+
+@Test func gameGoesThroughSteamExeWhenTheBridgeIsInstalled() throws {
+    let f = try makeFixture(bridge: true)
+    #expect(f.launcher.launch(["waitforexitandrun", "/Steam Library/My Game/Game.exe", "-windowed"], environment: f.env) == 0)
+    let game = try #require(f.runner.calls.first { $0.arguments.first == SteamBridge.steamExe })
+    #expect(game.arguments == [#"C:\Program Files (x86)\Steam\steam.exe"#, #"Z:\Steam Library\My Game\Game.exe"#, "-windowed"])
+    #expect(game.environment["STEAM_COMPAT_CLIENT_INSTALL_PATH"]
+        == String(f.launcher.steam.bundleMacOS.path(percentEncoded: false).dropLast()))
+    #expect(game.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+    let prefix = try CompatContext(environment: f.env).prefix
+    #expect(FileManager.default.fileExists(
+        atPath: prefix.appending(path: "drive_c/Program Files (x86)/Steam/steamclient64.dll").path(percentEncoded: false)))
+}
+
+@Test func runInPrefixNeverGoesThroughSteamExe() throws {
+    let f = try makeFixture(bridge: true)
+    _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)
+    #expect(f.runner.calls.map(\.arguments) == [["/g/tool.exe"]])
+}
+
+@Test func escapeHatchStartsTheGameDirectly() throws {
+    let f = try makeFixture(bridge: true)
+    var env = f.env
+    env["MACNEUTRON_NO_STEAM_BRIDGE"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.arguments == ["/g/Game.exe"])
+    #expect(f.launcherLog.contains("note: Steam bridge disabled by launch option"))
+}
+
+@Test func missingBridgeStartsTheGameDirectly() throws {
+    let f = try makeFixture()
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.arguments == ["/g/Game.exe"])
+    #expect(f.launcherLog.contains("note: Steam bridge not installed"))
+}
+
+@Test func accountFromLaunchOptionsWins() throws {
+    let f = try makeFixture(bridge: true)
+    var env = f.env
+    env["MACNEUTRON_STEAM_ACCOUNT"] = "99"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "99")
+}
+
+@Test func steamsClientPathIsLoggedAndCheckedForTheLibrary() throws {
+    let f = try makeFixture(bridge: true)
+    try FileManager.default.removeItem(at: f.launcher.steam.bundleMacOS.appending(path: "steamclient.dylib"))
+    var env = f.env
+    env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/nowhere"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.launcherLog.contains("(Steam passed /nowhere)"))
+    #expect(f.launcherLog.contains("note: steamclient.dylib not found in"))
+}
+
+@Test func escapeHatchTakesTheBridgeOutOfThePrefix() throws {
+    // Seen in acceptance: a game's steam_api loads the client DLL an earlier launch left (its registry
+    // values persist), and without Steam's client path the bridge aborts the game. Without the files,
+    // the game just finds no Steam.
+    let f = try makeFixture(bridge: true)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let folder = try CompatContext(environment: f.env).prefix.appending(path: "drive_c/Program Files (x86)/Steam")
+    #expect(FileManager.default.fileExists(atPath: folder.appending(path: "steamclient64.dll").path(percentEncoded: false)))
+    var env = f.env
+    env["MACNEUTRON_NO_STEAM_BRIDGE"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    for name in ["steam.exe", "steamclient64.dll", "steamclient.dll"] {
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: name).path(percentEncoded: false)))
+    }
+}
+
+@Test func anyDirectStartTakesLeftoverBridgeFilesOut() throws {
+    // Same abort as with the escape hatch when the runtime or tool folder loses a bridge file.
+    let f = try makeFixture(bridge: true)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    try FileManager.default.removeItem(at: f.launcher.layout.steamHelper)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let folder = try CompatContext(environment: f.env).prefix.appending(path: "drive_c/Program Files (x86)/Steam")
+    #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "steamclient64.dll").path(percentEncoded: false)))
+}
+
+@Test func gameLogsHideTheSteamAccount() throws {
+    // People post game logs in bug reports; the account ID leads straight to a Steam profile.
+    let f = try makeFixture(bridge: true)
+    var env = f.env
+    env["MACNEUTRON_LOG"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    let log = try String(contentsOf: f.launcher.log.gameLog(appID: "42"), encoding: .utf8)
+    #expect(log.contains("MACNEUTRON_STEAM_ACCOUNT=<redacted>"))
+    #expect(!log.contains("MACNEUTRON_STEAM_ACCOUNT=1\n"))
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+}
+
+@Test func presenterIsInjectedByDefault() throws {
+    let f = try makeFixture(presenter: true)
+    _ = f.launcher.launch(["waitforexitandrun", "/g/Game.exe"], environment: f.env)
+    let game = try #require(f.runner.calls.first { $0.arguments == ["/g/Game.exe"] })
+    #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
+}
+
+@Test func presenterComesAfterTheUsersOwnLibraries() throws {
+    let f = try makeFixture(presenter: true)
+    var env = f.env
+    env["DYLD_INSERT_LIBRARIES"] = "/opt/mine.dylib"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"]
+        == "/opt/mine.dylib:" + f.launcher.layout.presenterLibrary.path(percentEncoded: false))
+}
+
+@Test func optingOutLeavesThePresenterOut() throws {
+    let f = try makeFixture(presenter: true)
+    var env = f.env
+    env["MACNEUTRON_NO_METALFX"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
+    try f.launcher.settings.save(GameSettings(metalFX: false), for: "42")
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
+}
+
+@Test func missingPresenterIsNoted() throws {
+    let f = try makeFixture()
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
+    #expect(f.launcherLog.contains("note: MetalFX presenter not installed"))
+}
+
+@Test func toolCommandsGetNoPresenter() throws {
+    let f = try makeFixture(presenter: true)
+    _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)
+    _ = f.launcher.launch(["getcompatpath", "/g/save"], environment: f.env)
+    #expect(f.runner.calls.allSatisfy { $0.environment["DYLD_INSERT_LIBRARIES"] == nil })
+}
+
+@Test func presenterAndSteamBridgeTravelTogether() throws {
+    let f = try makeFixture(bridge: true, presenter: true)
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let game = try #require(f.runner.calls.last)
+    #expect(game.arguments.first == SteamBridge.steamExe)
+    #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
 }

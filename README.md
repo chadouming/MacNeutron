@@ -18,7 +18,7 @@ make smoke   # real Wine; needs `brew install mingw-w64`
 ## The app
 
 ```sh
-make app                    # build/MacNeutron.app, ad-hoc signed, with the CLI inside
+make app                    # build/MacNeutron.app, ad-hoc signed, with the CLI and steam.exe inside (needs brew install mingw-w64)
 open build/MacNeutron.app
 ```
 
@@ -49,3 +49,22 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 | `/usr/bin/env MACNEUTRON_LOG=1 %command%` | Wine log in `~/Library/Logs/MacNeutron/steam-<appid>.log` |
 | `/usr/bin/env MACNEUTRON_NO_AVX=1 %command%` | Don't advertise AVX through Rosetta |
 | `/usr/bin/env MACNEUTRON_NO_MSYNC=1 %command%` | Turn off msync |
+| `/usr/bin/env MACNEUTRON_NO_STEAM_BRIDGE=1 %command%` | Start the game without the Steam bridge (the game then can't reach Steam) |
+| `/usr/bin/env MACNEUTRON_NO_METALFX=1 %command%` | Don't upscale with MetalFX (macOS then stretches smaller images with its nearest-neighbour filter) |
+
+## Steam API
+
+Windows games talk to your running Mac Steam through the runtime's Steam client bridge (Proton's `lsteamclient`,
+built for macOS by the runtime). MacNeutron's `steam.exe` tells each game that Steam is running. Anti-cheat
+that needs a Windows kernel driver (Easy Anti-Cheat, BattlEye, Vanguard and others) still won't run.
+
+Game logs (`MACNEUTRON_LOG=1`) hide your Steam account ID, but Wine's `+steamclient` lines in them can
+still contain your SteamID or persona name: check before posting a log publicly.
+
+## Upscaling
+
+When a game renders below the size of its window, or below your display's pixel density (Retina screens),
+MacNeutron upscales each frame with Apple's MetalFX instead of the blocky stretch macOS would apply. To trade
+sharpness for frame rate, pick a lower resolution in the game's windowed or borderless mode. It costs about 1 ms of
+GPU time per frame while active and nothing when the game renders at full size; switch "MetalFX upscaling" off for a
+game in the Games window if it misbehaves.

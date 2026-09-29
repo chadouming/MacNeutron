@@ -54,6 +54,8 @@ struct GamesView: View {
                     Toggle("Log", isOn: binding(row, \.log, default: false))
                     Toggle("AVX", isOn: binding(row, \.avx, default: true))
                     Toggle("msync", isOn: binding(row, \.msync, default: true))
+                    Toggle("MetalFX upscaling", isOn: binding(row, \.metalFX, default: true))
+                        .help("Upscales with Apple's MetalFX when the game renders below its window or the display's pixel density.")
                     Spacer()
                 }
                 .padding(10)

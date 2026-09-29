@@ -39,6 +39,7 @@ private func makeEchoLauncher() throws -> URL {
     let manifest = try String(contentsOf: layout.root.appending(path: "toolmanifest.vdf"), encoding: .utf8)
     #expect(manifest.contains(#""commandline" "/proton %verb%""#))
     #expect(!fm.fileExists(atPath: layout.root.appending(path: "runtime.staging").path(percentEncoded: false)))
+    #expect(!fm.fileExists(atPath: layout.steamHelper.path(percentEncoded: false)))  // none next to the echo launcher
 }
 
 @Test func protonStubForwardsArgumentsFromAPathWithSpaces() throws {
@@ -80,4 +81,71 @@ private func makeEchoLauncher() throws -> URL {
     try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: try makeEchoLauncher())
     let dxgi = layout.wineLib.appending(path: "wine/x86_64-windows/dxgi.dll")
     #expect(try String(contentsOf: dxgi, encoding: .utf8) == "apple dxgi")
+}
+
+@Test func installPutsSteamExeNextToTheLauncher() throws {
+    let (tarball, pin) = try makeRuntimeTarball()
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    let launcher = try makeEchoLauncher()
+    try write("steam.exe v1", to: launcher.deletingLastPathComponent().appending(path: "steam.exe"))
+    try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.steamHelper, encoding: .utf8) == "steam.exe v1")
+}
+
+@Test func toolFilesRefreshReplacesAChangedLauncher() throws {
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    let launcher = try makeEchoLauncher()
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    try write("#!/bin/sh\necho v2\n", to: launcher, executable: true)
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.launcherBinary, encoding: .utf8) == "#!/bin/sh\necho v2\n")
+    #expect(FileManager.default.isExecutableFile(atPath: layout.launcherBinary.path(percentEncoded: false)))
+}
+
+@Test func identicalToolFilesAreLeftAlone() throws {
+    // The app refreshes tool files at every start; a game Steam launches meanwhile must never
+    // find bin/macneutron missing or half-written.
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    let launcher = try makeEchoLauncher()
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    func inode() throws -> Int? {
+        (try FileManager.default.attributesOfItem(atPath: layout.launcherBinary.path(percentEncoded: false))[.systemFileNumber]
+            as? NSNumber)?.intValue
+    }
+    let before = try inode()
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try inode() == before)
+}
+
+@Test func installFindsSteamExeInTheAppsResources() throws {
+    // In MacNeutron.app the launcher is Contents/Helpers/macneutron; steam.exe isn't Mach-O code,
+    // so codesign only accepts it in Contents/Resources.
+    let contents = try makeTempDir().appending(path: "MacNeutron.app/Contents", directoryHint: .isDirectory)
+    let launcher = contents.appending(path: "Helpers/macneutron")
+    try write("#!/bin/sh\n", to: launcher, executable: true)
+    try write("steam.exe from resources", to: contents.appending(path: "Resources/steam.exe"))
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.steamHelper, encoding: .utf8) == "steam.exe from resources")
+}
+
+@Test func installPutsThePresenterInTheToolFolder() throws {
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    let launcher = try makeEchoLauncher()
+    #expect(!layout.presenterInstalled)
+    try write("presenter v1", to: launcher.deletingLastPathComponent().appending(path: "libmacneutron-present.dylib"))
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.presenterLibrary, encoding: .utf8) == "presenter v1")
+    #expect(layout.presenterInstalled)
+}
+
+@Test func installFindsThePresenterInTheAppsFrameworks() throws {
+    // In MacNeutron.app the launcher is Contents/Helpers/macneutron and the library is in Contents/Frameworks.
+    let contents = try makeTempDir().appending(path: "MacNeutron.app/Contents", directoryHint: .isDirectory)
+    let launcher = contents.appending(path: "Helpers/macneutron")
+    try write("#!/bin/sh\n", to: launcher, executable: true)
+    try write("presenter from frameworks", to: contents.appending(path: "Frameworks/libmacneutron-present.dylib"))
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    #expect(try String(contentsOf: layout.presenterLibrary, encoding: .utf8) == "presenter from frameworks")
 }

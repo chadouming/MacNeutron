@@ -37,7 +37,9 @@ public enum AppInfoReader {
     public static let magicV29: UInt32 = 0x0756_4429
 
     public static func read(_ url: URL) throws -> [AppInfo] {
-        try parse(Data(contentsOf: url, options: .alwaysMapped))
+        // Not memory-mapped: Steam rewrites this file on exit, and a mapped file that shrinks mid-parse
+        // kills the process with SIGBUS. A short read just fails to parse.
+        try parse(Data(contentsOf: url))
     }
 
     public static func parse(_ data: Data) throws(AppInfoError) -> [AppInfo] {

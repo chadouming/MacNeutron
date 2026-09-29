@@ -9,7 +9,7 @@ public enum LaunchEnvironment {
         env["WINEPREFIX"] = context.prefix.path(percentEncoded: false)
         env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides, user: base["WINEDLLOVERRIDES"])
         if base["WINEDEBUG"] == nil {
-            env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll" : "-all"
+            env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll,+steamclient" : "-all"
         }
         if base["MACNEUTRON_NO_AVX"] != "1", base["ROSETTA_ADVERTISE_AVX"] == nil {
             env["ROSETTA_ADVERTISE_AVX"] = "1"
