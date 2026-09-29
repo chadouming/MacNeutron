@@ -106,7 +106,7 @@ expect "the unsupported op is named in the log" "$(tail -n +$((before + 1)) "$LO
 X="$ROOT/dxmt/tests/dxil"
 run ours exec-ours dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
 run ours exec-ref d3dmetal "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
-for g in buffers math transcendental textures groupshared wave half packed; do
+for g in buffers math transcendental textures groupshared wave half packed atomics quad; do
   expect "DXIL $g matches D3DMetal" "$(python3 "$ROOT/dxmt/tests/compare.py" "$WORK/exec-ours.txt" "$WORK/exec-ref.txt" $g)" match
 done
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
@@ -151,7 +151,7 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 
 # 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
-expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "8/9"
+expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "10/11"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
 expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "5/5"
 

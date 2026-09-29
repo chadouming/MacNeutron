@@ -7,8 +7,10 @@ struct S { float4 a; uint b; };
 StructuredBuffer<S> Structured : register(t3);                             // 64 elements, a = (i, 2i, 3i, 4i), b = i ^ 0x5a5a
 Buffer<float4> Arr[2] : register(t4);                                      // t4: element i = (i,0,0,0); t5: element i = (0,i,0,0)
 RWByteAddressBuffer Out : register(u0);                                    // 64 threads x 16 words, zeroed
-RWBuffer<uint> RWTyped : register(u1);                                     // 64 elements, zeroed
+RWBuffer<uint> RWTyped : register(u1);                                     // 64 elements, zeroed before each group
 RWTexture2D<float4> RWTex : register(u2);                                  // 8x8 RGBA32F
+RWStructuredBuffer<int2> AtomicS : register(u3);                           // 65 elements, zeroed before each group
+RWTexture2D<uint> AtomicTex : register(u4);                                // 8x8 R32_UINT, zeroed before each group
 SamplerState Linear : register(s0);                                        // static: linear, clamp
 SamplerState Point : register(s1);                                         // static: point, clamp
 uint InWord(uint i) { return In.Load(i * 4); }

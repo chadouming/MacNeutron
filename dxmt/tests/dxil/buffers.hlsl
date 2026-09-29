@@ -1,4 +1,7 @@
 #include "common.hlsli"
+// Dynamically indexed static const arrays stay globals in DXIL (SMITE 2: Unreal's sample tables).
+static const float kFloats[8] = {0.5, -1, 2, 3.25, -4, 5, 6.5, -7};
+static const uint kWords[4] = {0x11, 0x2200, 0x330000, 0x44000000};
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     uint i = id.x;
@@ -12,4 +15,5 @@ void main(uint3 id : SV_DispatchThreadID) {
     RWTyped[i] = i * 3; AllMemoryBarrier(); Put(id, 9, RWTyped[i]);
     Out.Store((i * 16 + 10) * 4, InWord(i) >> 3);
     Out.Store2((i * 16 + 11) * 4, uint2(i, i + 1));
+    PutF(id, 13, kFloats[i & 7]); Put(id, 14, kWords[(i * 3) & 3]);
 }

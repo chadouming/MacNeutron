@@ -92,10 +92,10 @@ int main(int argc, char **argv) {
     CHECK(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&fence));
     fence_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
 
-    // Root signature: b0 root CBV; one table of t0-t5 then u0-u2; static samplers s0 (linear) and s1 (point).
+    // Root signature: b0 root CBV; one table of t0-t5 then u0-u4; static samplers s0 (linear) and s1 (point).
     D3D12_DESCRIPTOR_RANGE ranges[2] = {};
     ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 6; ranges[0].BaseShaderRegister = 0;
-    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 3; ranges[1].BaseShaderRegister = 0;
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 5; ranges[1].BaseShaderRegister = 0;
     ranges[1].OffsetInDescriptorsFromTableStart = 6;
     D3D12_ROOT_PARAMETER params[2] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[0].Descriptor.ShaderRegister = 0;
@@ -175,12 +175,14 @@ int main(int argc, char **argv) {
     list->CopyBufferRegion(rwtyped, 0, zerobuf, 0, 256);
     Barrier(rwtyped, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ID3D12Resource *rwtex = Texture(8, 8, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    ID3D12Resource *atomics = Buffer(65 * 8, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    ID3D12Resource *atomictex = Texture(8, 8, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     ID3D12Resource *readback = Buffer(4096, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
     Flush();
 
-    // Descriptors: t0-t5 at 0-5, u0-u2 at 6-8.
+    // Descriptors: t0-t5 at 0-5, u0-u4 at 6-10.
     ID3D12DescriptorHeap *heap;
-    D3D12_DESCRIPTOR_HEAP_DESC hd = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 9, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+    D3D12_DESCRIPTOR_HEAP_DESC hd = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 11, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
     CHECK(device->CreateDescriptorHeap(&hd, __uuidof(ID3D12DescriptorHeap), (void **)&heap));
     UINT inc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap->GetCPUDescriptorHandleForHeapStart();
@@ -203,8 +205,11 @@ int main(int argc, char **argv) {
     u.Format = DXGI_FORMAT_R32_UINT; u.Buffer.NumElements = 64; u.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
     device->CreateUnorderedAccessView(rwtyped, nullptr, &u, slot(7));
     device->CreateUnorderedAccessView(rwtex, nullptr, nullptr, slot(8));
+    u.Format = DXGI_FORMAT_UNKNOWN; u.Buffer.NumElements = 65; u.Buffer.StructureByteStride = 8;
+    device->CreateUnorderedAccessView(atomics, nullptr, &u, slot(9));
+    device->CreateUnorderedAccessView(atomictex, nullptr, nullptr, slot(10));
 
-    const char *all[] = {"buffers", "math", "transcendental", "textures", "groupshared", "wave", "half", "packed"};
+    const char *all[] = {"buffers", "math", "transcendental", "textures", "groupshared", "wave", "half", "packed", "atomics", "quad"};
     std::vector<std::string> groups;
     for (int i = 2; i < argc; i++) groups.push_back(argv[i]);
     if (groups.empty()) groups.assign(std::begin(all), std::end(all));
@@ -216,8 +221,19 @@ int main(int argc, char **argv) {
         ID3D12PipelineState *pso = nullptr;
         HRESULT hr = device->CreateComputePipelineState(&d, __uuidof(ID3D12PipelineState), (void **)&pso);
         if (FAILED(hr)) { printf("group %s fail 0x%08lx\n", name.c_str(), (unsigned long)hr); fflush(stdout); continue; }
+        // Every group starts from zeroed UAVs (RWTyped, AtomicS and AtomicTex are zeroed here too; RWTex isn't read).
         list->CopyBufferRegion(out, 0, zerobuf, 0, 4096);
         Barrier(out, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Barrier(rwtyped, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+        list->CopyBufferRegion(rwtyped, 0, zerobuf, 0, 256);
+        Barrier(rwtyped, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        list->CopyBufferRegion(atomics, 0, zerobuf, 0, 65 * 8);
+        Barrier(atomics, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_TEXTURE_COPY_LOCATION to = {atomictex, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; to.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION from = {zerobuf, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        from.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_UINT, 8, 8, 1, 256};
+        list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+        Barrier(atomictex, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         list->SetComputeRootSignature(root);
         list->SetDescriptorHeaps(1, &heap);
         list->SetComputeRootConstantBufferView(0, cbuf->GetGPUVirtualAddress());
@@ -227,6 +243,8 @@ int main(int argc, char **argv) {
         Barrier(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         list->CopyBufferRegion(readback, 0, out, 0, 4096);
         Barrier(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        Barrier(atomics, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+        Barrier(atomictex, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
         Flush();
         uint32_t *words; D3D12_RANGE whole = {0, 4096};
         CHECK(readback->Map(0, &whole, (void **)&words));
