@@ -106,3 +106,21 @@ func installFakeSteamBridge(in layout: ToolLayout, i386: Bool = true) throws {
 func installFakePresenter(in layout: ToolLayout) throws {
     try write("presenter", to: layout.presenterLibrary)
 }
+
+/// A fake `make dxmt` output. Both halves go in `folder`, or the Mac half goes in `unixFolder`, as in MacNeutron.app.
+/// `omitting` ("x86_64-windows/dxgi.dll") leaves one file out.
+@discardableResult
+func makeDXMTBuild(in folder: URL, unixFolder: URL? = nil, version: String = "abc123",
+                   omitting: String? = nil) throws -> DXMTBuild {
+    try write(version + "\n", to: folder.appending(path: "version"))
+    for (arch, dlls) in [("x86_64-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll", "d3d12.dll"]),
+                         ("i386-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll"])] {
+        for dll in dlls where "\(arch)/\(dll)" != omitting {
+            try write("ours \(arch) \(dll)", to: folder.appending(path: "\(arch)/\(dll)"))
+        }
+    }
+    let unix = unixFolder ?? folder
+    try write("ours winemetal.so", to: unix.appending(path: "x86_64-unix/winemetal.so"))
+    guard let build = DXMTBuild(windows: folder, unix: unix) else { throw CocoaError(.fileNoSuchFile) }
+    return build
+}

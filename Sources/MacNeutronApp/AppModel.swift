@@ -70,8 +70,11 @@ final class AppModel {
         self.loginItem = loginItem
         // Keep the passthrough script current across app updates (it's only rewritten here and on enable).
         if mode.isWanted { try? mode.installNativeTool() }
-        // An updated app brings a new launcher and steam.exe: install them without a runtime reinstall.
-        if layout.runtimeVersion != nil { try? RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: helper) }
+        // An updated app brings a new launcher, steam.exe and DXMT: install them without a runtime reinstall.
+        if layout.runtimeVersion != nil {
+            try? RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: helper)
+            _ = try? DXMTInstaller.installBundled(layout: layout, launcherBinary: helper)
+        }
         // Read now, not in the first refresh: the scene decides at launch whether to open the setup window.
         runtimeVersion = layout.runtimeVersion
         gptkVersion = layout.gptkVersion

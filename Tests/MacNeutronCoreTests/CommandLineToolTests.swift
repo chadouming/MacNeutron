@@ -30,3 +30,21 @@ import Testing
         environment: [:], executable: URL(filePath: "/x"))
     #expect(status == 1)
 }
+
+@Test func installDXMTRejectsAFolderThatIsNotABuild() async throws {
+    let status = await CommandLineTool.run(
+        ["install-dxmt", "--tool-dir", try makeToolLayout().root.path(percentEncoded: false), try makeTempDir().path(percentEncoded: false)],
+        environment: [:], executable: URL(filePath: "/x"))
+    #expect(status == 1)
+}
+
+@Test func installDXMTInstallsABuild() async throws {
+    let layout = try makeToolLayout()
+    let folder = try makeTempDir()
+    try makeDXMTBuild(in: folder)
+    let status = await CommandLineTool.run(
+        ["install-dxmt", "--tool-dir", layout.root.path(percentEncoded: false), folder.path(percentEncoded: false)],
+        environment: [:], executable: URL(filePath: "/x"))
+    #expect(status == 0)
+    #expect(layout.dxmtVersion == "abc123")
+}

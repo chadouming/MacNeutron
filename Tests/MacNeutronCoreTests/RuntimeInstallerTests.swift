@@ -149,3 +149,25 @@ private func makeEchoLauncher() throws -> URL {
     try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
     #expect(try String(contentsOf: layout.presenterLibrary, encoding: .utf8) == "presenter from frameworks")
 }
+
+@Test func reinstallAppliesTheBundledDXMTAfterGPTK() throws {
+    let (tarball, pin) = try makeRuntimeTarball()
+    let layout = try makeToolLayout()
+    // Stands in for any GPTK file at the same path: our DXMT is applied last (spec §5).
+    try write("apple winemetal", to: layout.gptkStore.appending(path: "lib/wine/x86_64-windows/winemetal.dll"))
+    let launcher = try makeEchoLauncher()
+    try makeDXMTBuild(in: launcher.deletingLastPathComponent().appending(path: "DXMT", directoryHint: .isDirectory))
+    try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: launcher)
+    #expect(layout.dxmtVersion == "abc123")
+    #expect(try String(contentsOf: layout.wineLib.appending(path: "wine/x86_64-windows/winemetal.dll"), encoding: .utf8)
+        == "ours x86_64-windows winemetal.dll")
+}
+
+@Test func reinstallWithoutABundledDXMTForgetsTheOldOne() throws {
+    // The fresh runtime brings DXMT 0.80 back; dxmt-version must not keep claiming ours.
+    let (tarball, pin) = try makeRuntimeTarball()
+    let layout = try makeToolLayout()
+    try write("abc123", to: layout.dxmtVersionFile)
+    try RuntimeInstaller.install(tarball: tarball, pin: pin, layout: layout, launcherBinary: try makeEchoLauncher())
+    #expect(layout.dxmtVersion == nil)
+}

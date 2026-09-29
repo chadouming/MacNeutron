@@ -7,6 +7,7 @@ public enum CommandLineTool {
         usage: macneutron launch <verb> <target> [args...]
                macneutron import-gptk [--tool-dir <dir>] <GPTK volume | redist | redist/lib>
                macneutron install-runtime [--tool-dir <dir>] [--tarball <Libraries.tar.gz>]
+               macneutron install-dxmt [--tool-dir <dir>] <build/dxmt>
         """
 
     public static func run(_ args: [String], environment: [String: String], executable: URL) async -> Int32 {
@@ -36,6 +37,19 @@ public enum CommandLineTool {
                 let tarball = if let tarballPath { URL(filePath: tarballPath) } else { try await RuntimeInstaller.cachedDownload(.current) }
                 try RuntimeInstaller.install(tarball: tarball, pin: .current, layout: layout, launcherBinary: executable)
                 print("Installed \(RuntimePin.current.version) into \(layout.root.path(percentEncoded: false))")
+                return 0
+            } catch {
+                return failure(error)
+            }
+        case "install-dxmt":
+            let layout = toolLayout(option("--tool-dir", in: &rest))
+            guard rest.count == 1 else { return usageError() }
+            do {
+                guard let build = DXMTBuild(folder: URL(filePath: rest[0], directoryHint: .isDirectory)) else {
+                    throw DXMTInstallError.notABuild(rest[0])
+                }
+                try DXMTInstaller.install(layout: layout, from: build)
+                print("Installed DXMT \(build.version) into \(layout.root.path(percentEncoded: false))")
                 return 0
             } catch {
                 return failure(error)

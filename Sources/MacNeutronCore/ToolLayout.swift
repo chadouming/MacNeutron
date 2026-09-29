@@ -46,6 +46,15 @@ public struct ToolLayout: Equatable, Sendable {
     public var presenterLibrary: URL { root.appending(path: "lib/libmacneutron-present.dylib") }
     public var presenterInstalled: Bool { FileManager.default.fileExists(atPath: presenterLibrary.path(percentEncoded: false)) }
 
+    /// The fork commit of MacNeutron's DXMT, installed over the runtime's; nil while the runtime's DXMT 0.80 is in place.
+    public var dxmtVersionFile: URL { root.appending(path: "dxmt-version") }
+    public var dxmtVersion: String? {
+        (try? String(contentsOf: dxmtVersionFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// Our DXMT's Direct3D 12 front end; the runtime's DXMT 0.80 has none.
+    public var dxmtD3D12: URL { dxmt.appending(path: "x64/d3d12.dll") }
+    public var dxmtHasD3D12: Bool { FileManager.default.fileExists(atPath: dxmtD3D12.path(percentEncoded: false)) }
+
     public var runtimeVersion: String? {
         (try? String(contentsOf: runtimeVersionFile, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)

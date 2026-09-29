@@ -70,7 +70,7 @@ public enum RuntimeInstaller {
     }
 
     /// Verifies the tarball, extracts it to a staging folder, and only then replaces the old runtime.
-    /// Re-applies an imported GPTK, since the new Wine tree does not contain it.
+    /// Re-applies an imported GPTK, then MacNeutron's DXMT when one ships with the launcher, since the new Wine tree has neither.
     public static func install(tarball: URL, pin: RuntimePin, layout: ToolLayout, launcherBinary: URL,
                                runner: any ProcessRunner = SystemProcessRunner()) throws {
         let actual = try sha256(of: tarball)
@@ -94,11 +94,13 @@ public enum RuntimeInstaller {
         }
         try? fm.removeItem(at: layout.libraries)
         try fm.moveItem(at: extracted.libraries, to: layout.libraries)
+        try? fm.removeItem(at: layout.dxmtVersionFile)  // the new runtime brings its own DXMT 0.80
         try writeToolFiles(layout: layout, launcherBinary: launcherBinary)
         try pin.version.write(to: layout.runtimeVersionFile, atomically: true, encoding: .utf8)
         if fm.fileExists(atPath: layout.gptkStore.path(percentEncoded: false)) {
             try GPTKImporter.applyOverlay(layout: layout, runner: runner)
         }
+        try DXMTInstaller.installBundled(layout: layout, launcherBinary: launcherBinary)
     }
 
     /// Writes Steam's tool files, then installs the launcher and, when it can find one, `steam.exe`.
