@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check
 
 APP = build/MacNeutron.app
 MINGW = x86_64-w64-mingw32-gcc -O2 -static -s
@@ -44,6 +44,18 @@ presenter-check: presenter
 # First run: about 500 MB of downloads and a 30-60 minute LLVM build; see dxmt/build.sh.
 dxmt:
 	sh dxmt/build.sh
+
+# D3D12 test programs for our DXMT.
+dxmt-tests:
+	@command -v x86_64-w64-mingw32-g++ >/dev/null || { echo "dxmt-tests: needs brew install mingw-w64" >&2; exit 1; }
+	mkdir -p build/dxmt-tests
+	x86_64-w64-mingw32-g++ -O2 -static -s -o build/dxmt-tests/d3d12_clear.exe dxmt/tests/d3d12_clear.cpp -ld3d12 -ldxgi -luser32
+	x86_64-w64-mingw32-g++ -O2 -static -s -o build/dxmt-tests/d3d12_dxil.exe dxmt/tests/d3d12_dxil.cpp -ld3d12
+
+# Our DXMT under the installed runtime (real Wine, no Steam); see dxmt/check.sh.
+dxmt-check: build dxmt presenter dxmt-tests
+	sh dxmt/tests/build_test.sh
+	sh dxmt/check.sh
 
 # Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
 app: build bridge presenter
