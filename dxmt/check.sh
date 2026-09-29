@@ -149,5 +149,11 @@ expect "the probe answers a huge part count at once" "$quick:$(reason < "$WORK/m
 expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/past-part.dxil" | reason)" \
   "bitcode lies outside the DXIL part"
 
+# 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
+"$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
+expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "8/9"
+"$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "5/5"
+
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

@@ -17,8 +17,27 @@ build_probe() {  # build_probe <folder>
     -lLLVMDemangle -lz -lcurses > "$SRC/dxil-probe.log" 2>&1 || die "dxil-probe failed to build; see $SRC/dxil-probe.log"
 }
 
+# The offline corpus tool (DXIL translator plan, Task 5), against the fork's native airconv. The -lLLVM list is
+# src/airconv/meson.build's llvm_deps, in order.
+build_translate() {  # build_translate <folder>
+  W="$SRC/win64"
+  clang++ -arch x86_64 -std=c++20 -O1 -fno-rtti -fno-exceptions -fobjc-arc -I"$LLVM/include" -I"$SRC/dxmt/src/airconv" \
+    -I"$SRC/dxmt/include" -I"$SRC/dxmt/libs" -I"$SRC/dxmt/include/native/windows" -I"$SRC/dxmt/include/native/directx" \
+    "$ROOT/dxmt/tools/dxil-translate.mm" -o "$1/dxil-translate" \
+    "$W/src/airconv/darwin/libairconv.a" "$W/libs/DXBCParser/libDXBCParserNative.a" \
+    -L"$LLVM/lib" -lLLVMPasses -lLLVMTarget -lLLVMObjCARCOpts -lLLVMCoroutines -lLLVMipo -lLLVMInstrumentation \
+    -lLLVMVectorize -lLLVMLinker -lLLVMIRReader -lLLVMAsmParser -lLLVMFrontendOpenMP -lLLVMScalarOpts \
+    -lLLVMInstCombine -lLLVMAggressiveInstCombine -lLLVMTransformUtils -lLLVMBitWriter -lLLVMAnalysis \
+    -lLLVMProfileData -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoMSF -lLLVMDebugInfoDWARF -lLLVMObject \
+    -lLLVMTextAPI -lLLVMMCParser -lLLVMMC -lLLVMDebugInfoCodeView -lLLVMBitReader -lLLVMCore -lLLVMRemarks \
+    -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMSupport -lLLVMDemangle -lm -lz -lcurses -lxml2 \
+    -framework Metal -framework Foundation > "$SRC/dxil-translate.log" 2>&1 \
+    || die "dxil-translate failed to build; see $SRC/dxil-translate.log"
+}
+
 if [ "$(cat "$OUT/version" 2> /dev/null)" = "$DXMT_COMMIT" ] && [ -x "$OUT/dxil-probe" ]; then
   [ "$OUT/dxil-probe" -nt "$ROOT/dxmt/tools/dxil-probe.cpp" ] || build_probe "$OUT"
+  [ "$OUT/dxil-translate" -nt "$ROOT/dxmt/tools/dxil-translate.mm" ] || build_translate "$OUT"
   echo "dxmt: $OUT is up to date ($DXMT_COMMIT)"
   exit 0
 fi
@@ -108,7 +127,8 @@ done
 [ -f "$T/x86_64-unix/winemetal.so" ] || die "the build has no x86_64-unix/winemetal.so"
 echo "$DXMT_COMMIT" > "$T/version"
 
-# 6. The DXIL probe.
+# 6. The DXIL probe and the offline corpus tool.
 build_probe "$T"
+build_translate "$T"
 rm -rf "$OUT"; mv "$T" "$OUT"
 echo "dxmt: built $OUT ($DXMT_COMMIT)"

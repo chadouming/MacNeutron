@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check dxil-corpus
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -53,6 +53,10 @@ dxmt-tests:
 	$(MINGWXX) -o build/dxmt-tests/d3d12_dxil.exe dxmt/tests/d3d12_dxil.cpp -ld3d12
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_dxil_exec.exe dxmt/tests/d3d12_dxil_exec.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_triangle.exe dxmt/tests/d3d12_triangle.cpp -ld3d12 -ldxgi
+
+# Translate a folder of captured DXIL shaders offline (DIR=~/dxil-smite2); never commit a game's shaders.
+dxil-corpus: dxmt
+	build/dxmt/dxil-translate "$(DIR)"
 
 # Our DXMT under the installed runtime (real Wine, no Steam); see dxmt/check.sh.
 dxmt-check: build dxmt presenter dxmt-tests

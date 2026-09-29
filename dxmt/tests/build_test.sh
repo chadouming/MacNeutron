@@ -45,8 +45,7 @@ out=$(sh "$ROOT/dxmt/published.sh" "$T/clone" "$(git -C "$T/clone" rev-parse HEA
 expect "an unpushed fork commit may not" "$st:$(echo "$out" | grep -c 'push it before shipping')" "1:1"
 
 # A build already at the pinned commit is left alone, even without the tools.
-mkdir -p "$T/b3/dxmt"; echo "$DXMT_COMMIT" > "$T/b3/dxmt/version"; printf '#!/bin/sh\n' > "$T/b3/dxmt/dxil-probe"
-chmod +x "$T/b3/dxmt/dxil-probe"
+mkdir -p "$T/b3/dxmt"; echo "$DXMT_COMMIT" > "$T/b3/dxmt/version"; for f in dxil-probe dxil-translate; do printf '#!/bin/sh\n' > "$T/b3/dxmt/$f"; chmod +x "$T/b3/dxmt/$f"; done
 out=$(PATH="/usr/bin:/bin" BUILD_DIR="$T/b3" sh "$ROOT/dxmt/build.sh" 2>&1) && st=0 || st=$?
 expect "an up-to-date build is kept" "$st:$(echo "$out" | grep -c 'is up to date')" "0:1"
 
