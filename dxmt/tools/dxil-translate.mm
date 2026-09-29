@@ -128,6 +128,7 @@ Result Translate(id<MTLDevice> device, const std::vector<char> &bytes) {
     pipeline = [device newComputePipelineStateWithFunction:function error:&err];
   } else {
     auto desc = [MTLRenderPipelineDescriptor new];
+    desc.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle; // as D3D12 sets it; layered rendering needs it
     if (entry.kind == ShaderKind::Vertex) {
       // Metal rejects a non-void vertex function with rasterization off, so an empty fragment function stands in.
       desc.vertexFunction = function;
