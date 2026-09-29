@@ -8,7 +8,7 @@
 - **`SM50Initialize`** recognises a DXIL container. It reads the entry point's metadata (stage, `numthreads`, signatures, resources) with LLVM 15, fills the same `SM50ShaderInternal` the DXBC path uses (resource maps, signature handlers, reflection) and keeps the bitcode.
 - **`SM50Compile`** loads that bitcode into its per-compile typed-pointer context. It builds the Metal entry point with airconv's `FunctionSignatureBuilder`, moves the DXIL body into it and lowers every `dx.op` call through the root-signature binding map and `AIRBuilder`. Then it runs airconv's usual passes and writes a metallib.
 
-**Tech Stack:** C++20, LLVM 15.0.7 (typed pointers), airconv (`nt/air_builder`, `air_signature`, `dxbc_binding_rootsig`, `metallib_writer`), Microsoft DXC under Wine for test shaders, mingw-w64 C++ for D3D12 test programs, and Objective-C++ with Metal for the corpus tool.
+**Tech Stack:** C++20, LLVM 15.0.7 (typed pointers), llvm-mingw 20260908 (Clang) for every Windows-side binary, airconv (`nt/air_builder`, `air_signature`, `dxbc_binding_rootsig`, `metallib_writer`), Microsoft DXC under Wine for test shaders, llvm-mingw C++ for D3D12 test programs, and Objective-C++ with Metal for the corpus tool.
 
 **Spec:** `docs/superpowers/specs/2026-09-29-macneutron-dxil-translator-design.md`
 
@@ -72,6 +72,131 @@
 | `dxmt/build.sh`, `Makefile` | Build `dxil-translate`; `make dxil-corpus DIR=` |
 | `dxmt/check.sh`, `dxmt/tests/d3d12_dxil.cpp` | New comparisons; pipelines now succeed; `heap` stays `E_NOTIMPL` |
 | `docs/testing/acceptance-dxil-translator.md` (new) | Results |
+
+---
+
+### Task 0: Build every Windows-side binary with Clang (llvm-mingw)
+
+Chosen by the maintainer on 2026-09-29, so the translator is built and tested with the final toolchain. llvm-mingw is the Clang-based mingw toolchain DXMT's own CI uses. It provides `x86_64-w64-mingw32-gcc`/`g++` wrappers around Clang, so DXMT's meson cross files work unchanged once its `bin` is first on `PATH`.
+
+**Files:**
+- Create: `dxmt/lib.sh` (shared `die` and `fetch`), `dxmt/toolchain.sh`.
+- Modify: `dxmt/pins`, `dxmt/build.sh`, `dxmt/tests/build_test.sh`, `Makefile`, `Tests/Smoke/smoke.sh`, `README.md`.
+
+**Interfaces:**
+- Produces: `sh dxmt/toolchain.sh` prints the llvm-mingw `bin` folder on stdout, fetching and unpacking the pinned release into `build/dxmt-src/llvm-mingw` on first use; messages go to stderr. The Makefile's `MINGW` and `MINGWXX` use it.
+
+- [ ] **Step 1: Pin, and write the fetch helpers**
+
+Append to `dxmt/pins`:
+```sh
+# Clang-based mingw cross toolchain for every Windows-side binary; the release DXMT's CI pins. SHA-256 recorded at first download.
+LLVM_MINGW_URL=https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-macos-universal.tar.xz
+LLVM_MINGW_SHA256=
+```
+
+`dxmt/lib.sh` (sourced; the `die` and `fetch` that `build.sh` has today, moved here unchanged):
+```sh
+# Shared by dxmt/build.sh and dxmt/toolchain.sh (sourced). Messages go to stderr.
+die() { echo "dxmt: $*" >&2; exit 1; }
+fetch() {  # fetch <url> <file> <sha256>
+  if [ ! -f "$2" ]; then
+    echo "dxmt: downloading $1" >&2
+    curl -fL --retry 3 -o "$2.part" "$1" >&2 || die "download failed: $1"
+    mv "$2.part" "$2"
+  fi
+  sum=$(shasum -a 256 "$2" | cut -d ' ' -f 1)
+  if [ "$sum" != "$3" ]; then
+    mv "$2" "$2.bad"  # so the next run downloads it again
+    die "checksum mismatch for $(basename "$2"): expected $3, got $sum (moved to $(basename "$2").bad)"
+  fi
+}
+```
+
+`dxmt/toolchain.sh`:
+```sh
+#!/bin/sh
+# Prints the bin folder of the pinned llvm-mingw (Clang) toolchain, fetching it into build/dxmt-src once.
+# Every Windows-side binary is built with it: DXMT (dxmt/build.sh), steam.exe, the presenter and D3D12 test programs.
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/dxmt/pins"
+. "$ROOT/dxmt/lib.sh"
+SRC="${BUILD_DIR:-$ROOT/build}/dxmt-src"
+T="$SRC/llvm-mingw"
+if [ ! -x "$T/bin/x86_64-w64-mingw32-clang" ]; then
+  mkdir -p "$SRC"
+  fetch "$LLVM_MINGW_URL" "$SRC/llvm-mingw.tar.xz" "$LLVM_MINGW_SHA256"
+  rm -rf "$T.tmp"; mkdir -p "$T.tmp"
+  tar -xJf "$SRC/llvm-mingw.tar.xz" -C "$T.tmp" --strip-components 1 || die "can't unpack llvm-mingw.tar.xz"
+  mv "$T.tmp" "$T"
+fi
+echo "$T/bin"
+```
+
+- [ ] **Step 2: Write the failing tests (RED)**
+
+In `dxmt/tests/build_test.sh`:
+- The two tool loops no longer link `x86_64-w64-mingw32-gcc` and `i686-w64-mingw32-gcc`: the toolchain is fetched, not required.
+- Add:
+```sh
+# The Windows compiler is Clang from the pinned llvm-mingw, not Homebrew's GCC.
+bin=$(sh "$ROOT/dxmt/toolchain.sh")
+expect "the Windows compiler is Clang" "$("$bin/x86_64-w64-mingw32-gcc" --version | head -1 | grep -c clang)" 1
+expect "make uses it" "$(make -s -C "$ROOT" -n bridge | grep -c "$bin/x86_64-w64-mingw32-clang")" 3
+```
+
+Run: `sh dxmt/tests/build_test.sh`
+Expected:
+- the first run downloads llvm-mingw and stops with `checksum mismatch for llvm-mingw.tar.xz: expected , got <64 hex>`;
+- put the sum into `LLVM_MINGW_SHA256=` and rerun;
+- then `FAIL make uses it: got [0], want [3]`, and everything else `ok`.
+
+- [ ] **Step 3: Switch the builds**
+
+- **`dxmt/build.sh`:**
+  - source `dxmt/lib.sh` and delete its own `die` and `fetch`;
+  - remove the two `need …-mingw32-gcc mingw-w64` checks;
+  - before `echo "dxmt: building DXMT …"`, add
+    ```sh
+    PATH="$(sh "$ROOT/dxmt/toolchain.sh"):$PATH"; export PATH  # DXMT's cross files name x86_64/i686-w64-mingw32-gcc: llvm-mingw's Clang wrappers
+    ```
+- **`Makefile`:**
+  - replace `MINGW = x86_64-w64-mingw32-gcc -O2 -static -s` with
+    ```make
+    # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
+    MINGW_BIN = $(shell sh dxmt/toolchain.sh)
+    MINGW = $(MINGW_BIN)/x86_64-w64-mingw32-clang -O2 -static -s
+    MINGWXX = $(MINGW_BIN)/x86_64-w64-mingw32-clang++ -O2 -static -s
+    ```
+    (a recursively expanded `=`, so `make test` never fetches it);
+  - delete the three `@command -v x86_64-w64-mingw32-gcc …` / `g++` guards;
+  - `dxmt-tests` uses `$(MINGWXX)` in place of `x86_64-w64-mingw32-g++ -O2 -static -s`.
+- **`Tests/Smoke/smoke.sh`:** use `"$(sh "$ROOT/dxmt/toolchain.sh")/x86_64-w64-mingw32-clang"` in place of `x86_64-w64-mingw32-gcc`, and change its "Needs" comment line to name llvm-mingw.
+- **`README.md`:** the `make smoke` comment and the requirements line now read `brew install cmake ninja meson` plus Xcode's Metal Toolchain; llvm-mingw is fetched automatically.
+
+- [ ] **Step 4: Rebuild everything and verify (GREEN)**
+
+`build/dxmt` must be rebuilt with the new compiler even though the fork commit hasn't changed: `rm -rf build/dxmt`.
+
+Run: `sh dxmt/tests/build_test.sh | grep -c '^ok'; make dxmt > build/dxmt-make.log 2>&1; tail -1 build/dxmt-make.log; make bridge-check 2>&1 | tail -3; make presenter-check 2>&1 | tail -3; make dxmt-check 2>&1 | grep -E "^FAIL|all passed"; make smoke 2>&1 | tail -3`
+Expected:
+- all build-test checks `ok`;
+- `dxmt: built …`;
+- bridge-check, presenter-check and smoke end as they do today (all ok);
+- `dxmt-check: all passed`, including "D3D11 frame time within 10% of DXMT 0.80";
+- `file build/dxmt/x86_64-windows/d3d11.dll` still reports a PE32+ DLL.
+
+If DXMT fails to compile with Clang, read `build/dxmt-src/win64.log`. The fix belongs in the fork (DXMT's CI builds ARM64EC with this same Clang); commit it there with a ledger ruling.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add dxmt/pins dxmt/lib.sh dxmt/toolchain.sh dxmt/build.sh dxmt/tests/build_test.sh Makefile Tests/Smoke/smoke.sh README.md
+git commit -m "build: every Windows-side binary with Clang (llvm-mingw 20260908, as DXMT's CI)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
 
 ---
 
@@ -291,7 +416,7 @@ The harness, in order:
 
 Add to `Makefile`'s `dxmt-tests` recipe:
 ```make
-	x86_64-w64-mingw32-g++ -O2 -static -s -std=c++17 -o build/dxmt-tests/d3d12_dxil_exec.exe dxmt/tests/d3d12_dxil_exec.cpp -ld3d12 -ldxgi
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_dxil_exec.exe dxmt/tests/d3d12_dxil_exec.cpp -ld3d12 -ldxgi
 ```
 
 - [ ] **Step 4: Write `compare.py`**
@@ -873,7 +998,7 @@ dxc -T ps_6_6 -E psmain -Fo triangle2.ps.dxil triangle2.hlsl
 
 Add to `Makefile` `dxmt-tests`:
 ```make
-	x86_64-w64-mingw32-g++ -O2 -static -s -std=c++17 -o build/dxmt-tests/d3d12_triangle.exe dxmt/tests/d3d12_triangle.cpp -ld3d12 -ldxgi
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_triangle.exe dxmt/tests/d3d12_triangle.cpp -ld3d12 -ldxgi
 ```
 Add to `check.sh` after item 3b:
 ```sh
