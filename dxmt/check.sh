@@ -111,6 +111,18 @@ for g in buffers math transcendental textures groupshared wave half packed; do
 done
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
 expect "DXIL pipelines compile on 8 threads at once" "$(grep -o 'threads ok 8/8' "$WORK/exec-threads.txt" || true)" "threads ok 8/8"
+run ours tri-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
+run ours tri-ref d3dmetal "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
+expect "DXIL triangle matches D3DMetal (8 pixels within 1/255)" "$(python3 - "$WORK/tri-ours.txt" "$WORK/tri-ref.txt" <<'PY'
+import sys
+def px(p):
+    for l in open(p):
+        s = l.split()
+        if s[:2] == ["triangle", "ok"]: return [int(x, 16) for x in s[3:11]]
+a, b = px(sys.argv[1]), px(sys.argv[2])
+print("yes" if a and b and all(abs(((x >> k) & 255) - ((y >> k) & 255)) <= 1 for x, y in zip(a, b) for k in (0, 8, 16, 24)) else f"no {a} {b}")
+PY
+)" yes
 
 # 4. D3DMetal still works.
 run ours d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0
@@ -119,7 +131,7 @@ expect "present_loop completes on D3DMetal" "$(grep -c 'avg frame' "$WORK/d3dmet
 # 5. The DXIL probe: results recorded, not graded; one line per shader, and a non-container is refused.
 "$DXMT/dxil-probe" "$S"/*.dxil > "$WORK/probe.txt" || true
 cat "$WORK/probe.txt"
-expect "the probe reports every shader" "$(grep -cE '^(ok|fail) ' "$WORK/probe.txt")" 3
+expect "the probe reports every shader" "$(grep -cE '^(ok|fail) ' "$WORK/probe.txt")" "$(ls "$S"/*.dxil | wc -l | tr -d ' ')"
 expect "the probe refuses a non-container" "$("$DXMT/dxil-probe" "$DXMT/version" | cut -d ' ' -f 1)" fail
 # Malformed containers: a part count of 2^32-1, and bitcode that lies past the end of its DXIL part.
 python3 - "$WORK" <<'PY'
