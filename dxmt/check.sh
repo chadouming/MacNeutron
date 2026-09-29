@@ -73,6 +73,9 @@ export DXMT_DXIL_DUMP="$D"
 dxil dxil
 expect "DXIL pipelines are created" "$(grep -cE '^(graphics|compute) hr=0x00000000$' "$WORK/dxil.txt" || true)" 2
 expect "an out-of-scope DXIL op fails only its pipeline" "$(grep -c '^heap hr=0x80004001$' "$WORK/dxil.txt" || true)" 1
+run ours dxil-ref d3dmetal "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil" "Z:$H"
+expect "a graphics pipeline with sample count 0 fares as on D3DMetal" "$(grep '^graphics-samples0' "$WORK/dxil.txt" | tr -d '\r')" \
+  "$(grep '^graphics-samples0' "$WORK/dxil-ref.txt" | tr -d '\r')"
 expect "the capture folder is created" "$([ -d "$D" ] && echo yes || echo no)" yes
 expect "four shaders captured" "$(ls "$D" | wc -l | tr -d ' ')" 4
 expect "each capture is its shader, byte for byte" "$(for src in "$S/triangle.vs.dxil" "$S/triangle.ps.dxil" "$S/compute.cs.dxil" "$H"; do
@@ -111,18 +114,24 @@ for g in buffers math transcendental textures groupshared wave half packed atomi
 done
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
 expect "DXIL pipelines compile on 8 threads at once" "$(grep -o 'threads ok 8/8' "$WORK/exec-threads.txt" || true)" "threads ok 8/8"
-run ours tri-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
-run ours tri-ref d3dmetal "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
-expect "DXIL triangle matches D3DMetal (8 pixels within 1/255)" "$(python3 - "$WORK/tri-ours.txt" "$WORK/tri-ref.txt" <<'PY'
+same_pixels() {  # same_pixels <ours> <ref>: yes when both drew and the 12 sampled pixels are within 1/255
+  python3 - "$1" "$2" <<'PY'
 import sys
 def px(p):
     for l in open(p):
         s = l.split()
-        if s[:2] == ["triangle", "ok"]: return [int(x, 16) for x in s[3:11]]
+        if s[:2] == ["triangle", "ok"]: return [int(x, 16) for x in s[3:15]]
 a, b = px(sys.argv[1]), px(sys.argv[2])
-print("yes" if a and b and all(abs(((x >> k) & 255) - ((y >> k) & 255)) <= 1 for x, y in zip(a, b) for k in (0, 8, 16, 24)) else f"no {a} {b}")
+print("yes" if a and b and len(a) == len(b) == 12 and all(abs(((x >> k) & 255) - ((y >> k) & 255)) <= 1 for x, y in zip(a, b) for k in (0, 8, 16, 24)) else f"no {a} {b}")
 PY
-)" yes
+}
+run ours tri-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
+run ours tri-ref d3dmetal "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
+expect "DXIL triangle matches D3DMetal (12 pixels within 1/255)" "$(same_pixels "$WORK/tri-ours.txt" "$WORK/tri-ref.txt")" yes
+run ours trigs-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
+run ours trigs-ref d3dmetal "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
+expect "DXIL geometry shader triangle matches D3DMetal (12 pixels within 1/255)" \
+  "$(same_pixels "$WORK/trigs-ours.txt" "$WORK/trigs-ref.txt")" yes
 
 # 4. D3DMetal still works.
 run ours d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0
@@ -153,7 +162,7 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "10/11"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "5/5"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "6/6"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

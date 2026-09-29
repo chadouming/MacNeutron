@@ -59,6 +59,10 @@ int main(int argc, char **argv) {
     ID3D12PipelineState *pso = nullptr;
     hr = device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&pso);
     printf("graphics hr=0x%08lx\n", (unsigned long)hr);
+    // A sample count of 0 (SMITE 2 creates one): D3DMetal is the reference for what it gives.
+    gd.SampleDesc.Count = 0;
+    hr = device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&pso);
+    printf("graphics-samples0 hr=0x%08lx\n", (unsigned long)hr);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
     cd.pRootSignature = root;

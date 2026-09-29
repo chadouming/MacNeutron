@@ -1,6 +1,8 @@
 // dxil-translate <folder>: translates every .dxil in <folder> with airconv and hands it to Metal (DXIL translator
-// plan, Task 5). Compute: a compute pipeline; vertex: a vertex pipeline with rasterization off; pixel: a render
-// pipeline with a pass-through vertex function. The root signature comes from each shader's own resources.
+// plan, Task 5). Compute: a compute pipeline; vertex: a render pipeline with an empty fragment function; pixel: a
+// render pipeline with a pass-through vertex function; geometry: a mesh pipeline with a vertex shader from the folder
+// whose outputs cover its inputs (geometry shaders are translated last). The root signature comes from the shaders'
+// own resources.
 #import <Metal/Metal.h>
 #define BOOL WIN_BOOL // airconv's Windows headers define BOOL as int; Objective-C's is signed char
 #include "airconv_public.h"
@@ -12,6 +14,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -33,16 +36,16 @@ std::string FirstLine(std::string s) {
 
 // A DXBC container with an RTS0 (root signature 1.0) part: one descriptor table per resource range, visible to all
 // stages, each range at offset 0 of its own table (so an unbounded range can't push another one out of place).
-std::vector<uint32_t> RootSignature(const EntryInfo &entry) {
+std::vector<uint32_t> RootSignature(const std::vector<Resource> &resources) {
   const uint32_t header = 6, param = 3, table = 2, range = 5;
-  uint32_t n = entry.resources.size();
+  uint32_t n = resources.size();
   std::vector<uint32_t> rts0{1, n, header * 4, 0, 0, 0};
   for (uint32_t i = 0; i < n; i++) {
     uint32_t payload = (header + param * n + (table + range) * i) * 4;
     rts0.insert(rts0.end(), {0 /* table */, 0 /* all stages */, payload});
   }
   for (uint32_t i = 0; i < n; i++) {
-    auto &r = entry.resources[i];
+    auto &r = resources[i];
     uint32_t ranges = (header + param * n + (table + range) * i + table) * 4;
     uint32_t type = r.cls == ResourceClass::SRV ? 0 : r.cls == ResourceClass::UAV ? 1 : r.cls == ResourceClass::CBuffer ? 2 : 3;
     rts0.insert(rts0.end(), {1, ranges, type, r.size, r.lower_bound, r.space, 0});
@@ -54,12 +57,113 @@ std::vector<uint32_t> RootSignature(const EntryInfo &entry) {
 }
 
 struct Result {
-  bool ok = false;
+  bool ok = false, deferred = false;
   const char *stage = "";
   std::string reason;
 };
 
-Result Translate(id<MTLDevice> device, const std::vector<char> &bytes) {
+// A vertex shader seen in the folder, for pairing with geometry shaders: its bytecode and output semantics.
+struct VertexShader {
+  std::vector<char> bytes;
+  std::set<std::string> outputs;
+};
+
+std::string Semantic(const SignatureElement &e, uint32_t row) {
+  return e.kind == SemanticKind::Position ? "SV_POSITION" : UserName(e, row);
+}
+
+// One R32G32B32A32_FLOAT input layout element per vertex shader input register, slot 0.
+std::vector<SM50_IA_INPUT_ELEMENT> InputLayout(const EntryInfo &vs) {
+  std::vector<SM50_IA_INPUT_ELEMENT> elements;
+  for (auto &e : vs.inputs)
+    if (e.kind == SemanticKind::Arbitrary)
+      for (uint32_t r = 0; r < e.rows; r++)
+        elements.push_back({uint32_t(e.start_row) + r, 0, 16 * (uint32_t(e.start_row) + r), MTLAttributeFormatFloat4, 0, 0});
+  return elements;
+}
+
+id<MTLLibrary> Library(id<MTLDevice> device, sm50_bitcode_t bitcode, Result &result) {
+  SM50_COMPILED_BITCODE data;
+  SM50GetCompiledBitcode(bitcode, &data);
+  auto dispatch = dispatch_data_create(data.Data, data.Size, nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+  SM50DestroyBitcode(bitcode);
+  NSError *err = nil;
+  id<MTLLibrary> lib = [device newLibraryWithData:dispatch error:&err];
+  if (!lib)
+    result.reason = FirstLine(err.localizedDescription.UTF8String);
+  return lib;
+}
+
+// A geometry shader's mesh pipeline: `vs` (a folder vertex shader covering its inputs) as the object function.
+void TranslateGeometry(id<MTLDevice> device, sm50_shader_t gs, const std::vector<VertexShader> &vertex_shaders,
+                       bool last_chance, Result &result) {
+  auto &entry = ((dxmt::dxbc::SM50ShaderInternal *)gs)->dxil->entry;
+  std::set<std::string> needs;
+  for (auto &e : entry.inputs)
+    if (e.kind == SemanticKind::Arbitrary || e.kind == SemanticKind::Position)
+      for (uint32_t r = 0; r < e.rows; r++)
+        needs.insert(Semantic(e, r));
+  const VertexShader *partner = nullptr;
+  for (auto &v : vertex_shaders)
+    if (std::includes(v.outputs.begin(), v.outputs.end(), needs.begin(), needs.end())) {
+      partner = &v;
+      break;
+    }
+  if (!partner) {
+    result.deferred = !last_chance;
+    result.reason = "no vertex shader in the folder writes its inputs";
+    return;
+  }
+  sm50_shader_t vs = nullptr;
+  sm50_error_t error = nullptr;
+  MTL_SHADER_REFLECTION refl{};
+  if (SM50Initialize(partner->bytes.data(), partner->bytes.size(), &vs, &refl, &error)) {
+    result.reason = FirstLine(ErrorText(error));
+    return;
+  }
+  auto &vs_entry = ((dxmt::dxbc::SM50ShaderInternal *)vs)->dxil->entry;
+  auto resources = vs_entry.resources;
+  resources.insert(resources.end(), entry.resources.begin(), entry.resources.end());
+  auto rootsig_blob = RootSignature(resources);
+  SM50_SHADER_COMMON_DATA common{nullptr, SM50_SHADER_COMMON, SM50_SHADER_METAL_310, {}};
+  SM50_SHADER_PSO_GEOMETRY_SHADER_DATA list{&common, SM50_SHADER_PSO_GEOMETRY_SHADER, false};
+  auto elements = InputLayout(vs_entry);
+  SM50_SHADER_IA_INPUT_LAYOUT_DATA ia{&list, SM50_SHADER_IA_INPUT_LAYOUT, SM50_INDEX_BUFFER_FORMAT_NONE,
+                                      elements.empty() ? 0u : 1u, (uint32_t)elements.size(), elements.data()};
+  SM50_SHADER_ROOT_SIGNATURE_DATA object_args{&ia, SM50_SHADER_ROOT_SIGNATURE, rootsig_blob.data(), rootsig_blob.size() * 4};
+  SM50_SHADER_ROOT_SIGNATURE_DATA mesh_args{&list, SM50_SHADER_ROOT_SIGNATURE, rootsig_blob.data(), rootsig_blob.size() * 4};
+  sm50_bitcode_t object_bitcode = nullptr, mesh_bitcode = nullptr;
+  if (SM50CompileGeometryPipelineVertex(vs, gs, (SM50_SHADER_COMPILATION_ARGUMENT_DATA *)&object_args, "vs_object",
+                                        &object_bitcode, &error) ||
+      SM50CompileGeometryPipelineGeometry(vs, gs, (SM50_SHADER_COMPILATION_ARGUMENT_DATA *)&mesh_args, "gs_mesh",
+                                          &mesh_bitcode, &error)) {
+    result.reason = FirstLine(ErrorText(error));
+    if (object_bitcode)
+      SM50DestroyBitcode(object_bitcode);
+    SM50Destroy(vs);
+    return;
+  }
+  SM50Destroy(vs);
+  auto desc = [MTLMeshRenderPipelineDescriptor new];
+  desc.objectFunction = [Library(device, object_bitcode, result) newFunctionWithName:@"vs_object"];
+  desc.meshFunction = [Library(device, mesh_bitcode, result) newFunctionWithName:@"gs_mesh"];
+  if (!desc.objectFunction || !desc.meshFunction) {
+    if (result.reason.empty())
+      result.reason = "no object or mesh function in the library";
+    return;
+  }
+  desc.payloadMemoryLength = 16256; // as airconv's geometry pipeline and DXMT's D3D11 declare it
+  desc.rasterizationEnabled = NO;
+  NSError *err = nil;
+  if (![device newRenderPipelineStateWithMeshDescriptor:desc options:MTLPipelineOptionNone reflection:nil error:&err]) {
+    result.reason = FirstLine(err ? err.localizedDescription.UTF8String : "no pipeline");
+    return;
+  }
+  result.ok = true;
+}
+
+Result Translate(id<MTLDevice> device, const std::vector<char> &bytes, std::vector<VertexShader> &vertex_shaders,
+                 bool last_chance) {
   Result result;
   sm50_shader_t shader = nullptr;
   sm50_error_t error = nullptr;
@@ -75,15 +179,21 @@ Result Translate(id<MTLDevice> device, const std::vector<char> &bytes) {
     return result;
   }
   auto &entry = internal->dxil->entry;
-  result.stage = entry.kind == ShaderKind::Vertex ? "vs" : entry.kind == ShaderKind::Pixel ? "ps" : "cs";
+  result.stage = entry.kind == ShaderKind::Vertex     ? "vs"
+                 : entry.kind == ShaderKind::Pixel    ? "ps"
+                 : entry.kind == ShaderKind::Geometry ? "gs"
+                                                      : "cs";
+  if (entry.kind == ShaderKind::Geometry) {
+    TranslateGeometry(device, shader, vertex_shaders, last_chance, result);
+    SM50Destroy(shader);
+    return result;
+  }
 
-  auto rootsig_blob = RootSignature(entry);
+  auto rootsig_blob = RootSignature(entry.resources);
   SM50_SHADER_COMMON_DATA common{nullptr, SM50_SHADER_COMMON, SM50_SHADER_METAL_310, {}};
   std::vector<SM50_IA_INPUT_ELEMENT> elements;
-  for (auto &e : entry.inputs)
-    if (entry.kind == ShaderKind::Vertex && e.kind == SemanticKind::Arbitrary)
-      for (uint32_t r = 0; r < e.rows; r++)
-        elements.push_back({uint32_t(e.start_row) + r, 0, 16 * (uint32_t(e.start_row) + r), MTLAttributeFormatFloat4, 0, 0});
+  if (entry.kind == ShaderKind::Vertex)
+    elements = InputLayout(entry);
   SM50_SHADER_IA_INPUT_LAYOUT_DATA ia{&common, SM50_SHADER_IA_INPUT_LAYOUT, SM50_INDEX_BUFFER_FORMAT_NONE,
                                       elements.empty() ? 0u : 1u, (uint32_t)elements.size(), elements.data()};
   SM50_SHADER_PSO_PIXEL_SHADER_DATA pso{&common, SM50_SHADER_PSO_PIXEL_SHADER, 0xffffffff, false, false, 0, {}};
@@ -95,17 +205,7 @@ Result Translate(id<MTLDevice> device, const std::vector<char> &bytes) {
                                                                             : (void *)&common,
                                           SM50_SHADER_ROOT_SIGNATURE, rootsig_blob.data(), rootsig_blob.size() * 4};
 
-  auto library = [&](sm50_bitcode_t bitcode) -> id<MTLLibrary> {
-    SM50_COMPILED_BITCODE data;
-    SM50GetCompiledBitcode(bitcode, &data);
-    auto dispatch = dispatch_data_create(data.Data, data.Size, nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-    SM50DestroyBitcode(bitcode);
-    NSError *err = nil;
-    id<MTLLibrary> lib = [device newLibraryWithData:dispatch error:&err];
-    if (!lib)
-      result.reason = FirstLine(err.localizedDescription.UTF8String);
-    return lib;
-  };
+  auto library = [&](sm50_bitcode_t bitcode) { return Library(device, bitcode, result); };
 
   sm50_bitcode_t bitcode = nullptr;
   if (SM50Compile(shader, (SM50_SHADER_COMPILATION_ARGUMENT_DATA *)&rootsig, "main", &bitcode, &error)) {
@@ -157,6 +257,14 @@ Result Translate(id<MTLDevice> device, const std::vector<char> &bytes) {
     }
     pipeline = [device newRenderPipelineStateWithDescriptor:desc error:&err];
   }
+  if (pipeline && entry.kind == ShaderKind::Vertex) { // before SM50Destroy: `entry` is the shader's
+    VertexShader v{bytes, {}};
+    for (auto &e : entry.outputs)
+      if (e.kind == SemanticKind::Arbitrary || e.kind == SemanticKind::Position)
+        for (uint32_t r = 0; r < e.rows; r++)
+          v.outputs.insert(Semantic(e, r));
+    vertex_shaders.push_back(std::move(v));
+  }
   SM50Destroy(shader);
   if (!pipeline) {
     result.reason = FirstLine(err ? err.localizedDescription.UTF8String : "no pipeline");
@@ -187,14 +295,20 @@ int main(int argc, char **argv) {
   uint32_t ok = 0;
   double total_ms = 0, slowest_ms = 0;
   std::string slowest = "-";
-  for (auto &path : files) {
+  std::vector<VertexShader> vertex_shaders;
+  std::vector<std::filesystem::path> deferred; // geometry shaders whose vertex shader may come later
+  auto translate = [&](const std::filesystem::path &path, bool last_chance) {
     std::ifstream in(path, std::ios::binary);
     std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     auto name = path.filename().string();
     auto start = std::chrono::steady_clock::now();
     Result r;
     @autoreleasepool {
-      r = Translate(device, bytes);
+      r = Translate(device, bytes, vertex_shaders, last_chance);
+    }
+    if (r.deferred) {
+      deferred.push_back(path);
+      return;
     }
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     if (r.ok) {
@@ -207,7 +321,11 @@ int main(int argc, char **argv) {
       printf("fail %s %s\n", name.c_str(), r.reason.c_str());
     }
     fflush(stdout);
-  }
+  };
+  for (auto &path : files)
+    translate(path, false);
+  for (auto &path : std::vector(deferred))
+    translate(path, true);
   printf("summary %u/%zu ok, mean %.1f ms, slowest %.1f ms %s\n", ok, files.size(), ok ? total_ms / ok : 0.0, slowest_ms,
          slowest.c_str());
   return ok == files.size() && !files.empty() ? 0 : 1;

@@ -57,9 +57,9 @@ static void Barrier(ID3D12GraphicsCommandList *list, ID3D12Resource *r, D3D12_RE
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3) { printf("usage: d3d12_triangle.exe <vs.dxil> <ps.dxil>\n"); return 2; }
-    std::vector<char> vs = load(argv[1]), ps = load(argv[2]);
-    if (vs.empty() || ps.empty()) { printf("can't read the shaders\n"); return 1; }
+    if (argc != 3 && argc != 4) { printf("usage: d3d12_triangle.exe <vs.dxil> <ps.dxil> [gs.dxil]\n"); return 2; }
+    std::vector<char> vs = load(argv[1]), ps = load(argv[2]), gs = argc == 4 ? load(argv[3]) : std::vector<char>();
+    if (vs.empty() || ps.empty() || (argc == 4 && gs.empty())) { printf("can't read the shaders\n"); return 1; }
     const UINT size = 64;
     CHECK(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void **)&device));
     ID3D12CommandQueue *queue; ID3D12CommandAllocator *allocator; ID3D12GraphicsCommandList *list; ID3D12Fence *fence;
@@ -91,6 +91,7 @@ int main(int argc, char **argv) {
     D3D12_INPUT_ELEMENT_DESC corner = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0};
     gd.InputLayout = {&corner, 1};
     gd.PS = {ps.data(), ps.size()};
+    gd.GS = {gs.data(), gs.size()};
     gd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     gd.SampleMask = UINT_MAX;
     gd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -175,7 +176,9 @@ int main(int argc, char **argv) {
     uint64_t hash = 0xcbf29ce484222325ull;
     for (UINT y = 0; y < size; y++)
         for (UINT x = 0; x < size * 4; x++) hash = (hash ^ pixels[y * 256 + x]) * 0x100000001b3ull;
-    const int at[8][2] = {{8, 8}, {20, 8}, {40, 8}, {8, 20}, {20, 20}, {8, 40}, {30, 30}, {50, 50}};
+    // The last four are inside what triangle2's geometry shader draws: its small copy (top right), its shrunk triangle.
+    const int at[12][2] = {{8, 8}, {20, 8}, {40, 8}, {8, 20}, {20, 20}, {8, 40}, {30, 30}, {50, 50}, {52, 8}, {56, 12},
+                           {60, 6}, {14, 14}};
     printf("triangle ok %016llx", (unsigned long long)hash);
     for (auto &xy : at) { uint32_t px; memcpy(&px, &pixels[xy[1] * 256 + xy[0] * 4], 4); printf(" %08x", px); }
     printf("\n");

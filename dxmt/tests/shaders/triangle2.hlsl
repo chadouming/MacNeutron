@@ -21,3 +21,18 @@ float4 psmain(float4 pos : SV_Position, float2 uv : TEXCOORD0, uint layer : SV_R
     float4 t = Tex.Sample(Point, uv * 0.5);
     return float4(t.rgb * (1 - uv.y) + ddx(uv.x) * 8, 1 - layer * 0.25);
 }
+// Geometry shader (Task 7: SMITE 2's volume passes need one): relinks the vertex outputs by semantic, reads the
+// primitive ID, and emits two strips: the triangle shrunk to 3/4, then a small copy in the top right corner.
+struct GSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; uint layer : SV_RenderTargetArrayIndex; };
+[maxvertexcount(6)]
+void gsmain(triangle VSOut input[3], uint prim : SV_PrimitiveID, inout TriangleStream<GSOut> stream) {
+    for (uint i = 0; i < 3; i++) {
+        GSOut o; o.pos = float4(input[i].pos.xy * 0.75, input[i].pos.zw); o.uv = input[i].uv; o.layer = prim;
+        stream.Append(o);
+    }
+    stream.RestartStrip();
+    for (uint j = 0; j < 3; j++) {
+        GSOut o; o.pos = float4(input[j].pos.xy * 0.2 + 0.7, input[j].pos.zw); o.uv = input[j].uv.yx; o.layer = prim;
+        stream.Append(o);
+    }
+}
