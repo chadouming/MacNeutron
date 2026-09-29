@@ -1,8 +1,9 @@
-.PHONY: build test smoke app bridge bridge-check
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check
 
 APP = build/MacNeutron.app
 MINGW = x86_64-w64-mingw32-gcc -O2 -static -s
 BRIDGE = build/bridge
+PRESENTER = build/presenter
 
 build:
 	swift build -c release
@@ -25,6 +26,19 @@ bridge:
 # steam.exe under the installed runtime (real Wine, no Steam).
 bridge-check: bridge
 	sh bridge/check.sh
+
+# MetalFX presenter (docs/superpowers/specs/2026-09-28-macneutron-metalfx-upscaler-design.md) and its test program.
+presenter:
+	@command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "presenter: needs brew install mingw-w64" >&2; exit 1; }
+	mkdir -p $(PRESENTER)
+	clang -arch x86_64 -arch arm64 -fobjc-arc -O2 -dynamiclib -framework Foundation -framework AppKit \
+		-framework QuartzCore -framework Metal -framework MetalFX \
+		-o $(PRESENTER)/libmacneutron-present.dylib presenter/present.m
+	$(MINGW) -o $(PRESENTER)/present_loop.exe presenter/tests/present_loop.c -ld3d11 -ldxgi -luser32 -lgdi32 -ldxguid -luuid
+
+# The presenter under the installed runtime on D3DMetal (real Wine, no Steam).
+presenter-check: presenter
+	sh presenter/check.sh
 
 # Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
 app: build bridge
