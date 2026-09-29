@@ -40,7 +40,7 @@ When a game's image is smaller than the pixels its window covers, because the pl
 
 `presenter/present.m` → `libmacneutron-present.dylib` (universal, Objective-C, ARC; frameworks Foundation, AppKit, QuartzCore, Metal, MetalFX), built by `make presenter` into `build/presenter/`.
 
-**At load:** it swaps `-[CAMetalLayer setDrawableSize:]` and `-[CAMetalLayer nextDrawable]` at class level and does nothing else. It is a no-op in any process that never draws.
+**At load:** it swaps `-[CAMetalLayer nextDrawable]` at class level and does nothing else. It is a no-op in any process that never draws. (`setDrawableSize:` needs no hook: each decision reads `drawableSize` when a drawable is requested.)
 
 **On a process's first `nextDrawable`:** it swaps `presentDrawable:` on that device's command-buffer class, once per process.
 
