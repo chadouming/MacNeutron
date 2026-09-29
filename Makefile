@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt
 
 APP = build/MacNeutron.app
 MINGW = x86_64-w64-mingw32-gcc -O2 -static -s
@@ -39,6 +39,11 @@ presenter:
 # The presenter under the installed runtime on D3DMetal (real Wine, no Steam).
 presenter-check: presenter
 	sh presenter/check.sh
+
+# MacNeutron's DXMT fork with Direct3D 12 (docs/superpowers/specs/2026-09-28-macneutron-dxmt-fork-design.md).
+# First run: about 500 MB of downloads and a 30-60 minute LLVM build; see dxmt/build.sh.
+dxmt:
+	sh dxmt/build.sh
 
 # Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
 app: build bridge presenter
