@@ -1,6 +1,6 @@
-// Creates a graphics and a compute pipeline from DXIL shaders (DXMT fork spec §6):
-//   d3d12_dxil.exe <vs.dxil> <ps.dxil> <cs.dxil>
-// Prints each HRESULT. DXMT returns E_NOTIMPL (0x80004001) until it can translate DXIL.
+// Creates a graphics and a compute pipeline from DXIL shaders, plus one from an out-of-scope shader (DXIL translator plan):
+//   d3d12_dxil.exe <vs.dxil> <ps.dxil> <cs.dxil> <heap.dxil>
+// Prints each HRESULT; heap.dxil uses dynamic resources, which DXMT refuses with E_NOTIMPL (0x80004001).
 #define WIDL_EXPLICIT_AGGREGATE_RETURNS
 #include <windows.h>
 #include <d3d12.h>
@@ -19,9 +19,9 @@ static std::vector<char> load(const char *path) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) { printf("usage: d3d12_dxil.exe <vs.dxil> <ps.dxil> <cs.dxil>\n"); return 2; }
-    std::vector<char> vs = load(argv[1]), ps = load(argv[2]), cs = load(argv[3]);
-    if (vs.empty() || ps.empty() || cs.empty()) { printf("can't read the shaders\n"); return 1; }
+    if (argc != 5) { printf("usage: d3d12_dxil.exe <vs.dxil> <ps.dxil> <cs.dxil> <heap.dxil>\n"); return 2; }
+    std::vector<char> vs = load(argv[1]), ps = load(argv[2]), cs = load(argv[3]), heap = load(argv[4]);
+    if (vs.empty() || ps.empty() || cs.empty() || heap.empty()) { printf("can't read the shaders\n"); return 1; }
 
     ID3D12Device *device;
     HRESULT hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void **)&device);
@@ -65,5 +65,9 @@ int main(int argc, char **argv) {
     cd.CS = {cs.data(), cs.size()};
     hr = device->CreateComputePipelineState(&cd, __uuidof(ID3D12PipelineState), (void **)&pso);
     printf("compute hr=0x%08lx\n", (unsigned long)hr);
+
+    cd.CS = {heap.data(), heap.size()};
+    hr = device->CreateComputePipelineState(&cd, __uuidof(ID3D12PipelineState), (void **)&pso);
+    printf("heap hr=0x%08lx\n", (unsigned long)hr);
     return 0;
 }

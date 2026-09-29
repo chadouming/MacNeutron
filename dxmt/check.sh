@@ -64,20 +64,21 @@ expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' 
 expect "the D3D12 device is our DXMT (shader model 5.1)" "$(grep -c '^shader model 0x51 ' "$WORK/clear.txt" || true)" 1
 expect "it reports its real limits" "$(grep -c '^feature level 0xb100, wave ops 0, atomic64 0$' "$WORK/clear.txt" || true)" 1
 
-# 3. DXIL pipelines return E_NOTIMPL, and DXMT_DXIL_DUMP captures each shader once, byte for byte.
-#    $WORK has a space in it, like the Application Support paths users will pass; the folder doesn't exist yet.
-dxil() { run ours "$1" dxmt "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil"; }
+# 3. DXIL pipelines are created (an out-of-scope op fails only its own pipeline, named in the log), and DXMT_DXIL_DUMP
+#    captures each shader once, byte for byte. $WORK has a space in it, like the Application Support paths users pass.
+H="$ROOT/dxmt/tests/dxil/heap.dxil"
+dxil() { run ours "$1" dxmt "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil" "Z:$H"; }
 D="$WORK/dxil"
 export DXMT_DXIL_DUMP="$D"
 dxil dxil
-expect "DXIL pipelines return E_NOTIMPL" "$(grep -c 'hr=0x80004001' "$WORK/dxil.txt" || true)" 2
+expect "DXIL pipelines are created" "$(grep -cE '^(graphics|compute) hr=0x00000000$' "$WORK/dxil.txt" || true)" 2
+expect "an out-of-scope DXIL op fails only its pipeline" "$(grep -c '^heap hr=0x80004001$' "$WORK/dxil.txt" || true)" 1
 expect "the capture folder is created" "$([ -d "$D" ] && echo yes || echo no)" yes
-expect "three shaders captured" "$(ls "$D" | wc -l | tr -d ' ')" 3
-expect "each capture is the shader, byte for byte" "$(for s in triangle.vs:vs triangle.ps:ps compute.cs:cs; do
-    f=$(ls "$D/${s#*:}"-*.dxil 2> /dev/null | head -1)
-    [ -n "$f" ] && cmp -s "$S/${s%%:*}.dxil" "$f" && printf y || printf n
-  done)" yyy
-expect "capture names are <stage>-<16 hex>.dxil" "$(ls "$D" | grep -cE '^(vs|ps|cs)-[0-9a-f]{16}\.dxil$')" 3
+expect "four shaders captured" "$(ls "$D" | wc -l | tr -d ' ')" 4
+expect "each capture is its shader, byte for byte" "$(for src in "$S/triangle.vs.dxil" "$S/triangle.ps.dxil" "$S/compute.cs.dxil" "$H"; do
+    found=n; for f in "$D"/*.dxil; do cmp -s "$src" "$f" && found=y; done; printf %s $found
+  done)" yyyy
+expect "capture names are <stage>-<16 hex>.dxil" "$(ls "$D" | grep -cE '^(vs|ps|cs)-[0-9a-f]{16}\.dxil$')" 4
 vs=$(ls "$D"/vs-*.dxil 2> /dev/null | head -1)
 [ -z "$vs" ] || echo keep > "$vs"
 dxil dxil-again
@@ -90,12 +91,16 @@ expect "capture mode reports feature level 12_1, wave ops and 64-bit atomics" \
   "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-capture.txt" || true)" 1
 export DXMT_DXIL_DUMP="$WORK/dxil é"
 dxil dxil-unicode
-expect "a capture folder named outside ASCII works" "$(ls "$WORK/dxil é" 2> /dev/null | grep -c '\.dxil$')" 3
+expect "a capture folder named outside ASCII works" "$(ls "$WORK/dxil é" 2> /dev/null | grep -c '\.dxil$')" 4
 expect "no capture is left half-written" "$(ls "$D" "$WORK/dxil é" 2> /dev/null | grep -c '\.tmp$')" 0
 export DXMT_DXIL_DUMP="/nonexistent/macneutron dxil"
 dxil dxil-unwritable
-expect "an unwritable capture folder changes nothing for the game" "$(grep -c 'hr=0x80004001' "$WORK/dxil-unwritable.txt" || true)" 2
+expect "an unwritable capture folder changes nothing for the game" "$(grep -c '^compute hr=0x00000000$' "$WORK/dxil-unwritable.txt" || true)" 1
 unset DXMT_DXIL_DUMP
+# The unsupported op is named in the game log (MACNEUTRON_LOG=1 sends the output there).
+LOG="$HOME/Library/Logs/MacNeutron/steam-0.log"; before=$(cat "$LOG" 2> /dev/null | wc -l)
+export MACNEUTRON_LOG=1; dxil dxil-logged; unset MACNEUTRON_LOG
+expect "the unsupported op is named in the log" "$(tail -n +$((before + 1)) "$LOG" | grep -c 'Failed to compile cs shader: DXIL: dx.op.createHandleFromHeap')" 1
 
 # 3b. DXIL behaviour groups: our DXMT against D3DMetal on the same GPU.
 X="$ROOT/dxmt/tests/dxil"
