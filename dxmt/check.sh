@@ -97,6 +97,16 @@ dxil dxil-unwritable
 expect "an unwritable capture folder changes nothing for the game" "$(grep -c 'hr=0x80004001' "$WORK/dxil-unwritable.txt" || true)" 2
 unset DXMT_DXIL_DUMP
 
+# 3b. DXIL behaviour groups: our DXMT against D3DMetal on the same GPU.
+X="$ROOT/dxmt/tests/dxil"
+run ours exec-ours dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
+run ours exec-ref d3dmetal "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
+for g in buffers math transcendental textures groupshared wave half packed; do
+  expect "DXIL $g matches D3DMetal" "$(python3 "$ROOT/dxmt/tests/compare.py" "$WORK/exec-ours.txt" "$WORK/exec-ref.txt" $g)" match
+done
+run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
+expect "DXIL pipelines compile on 8 threads at once" "$(grep -o 'threads ok 8/8' "$WORK/exec-threads.txt" || true)" "threads ok 8/8"
+
 # 4. D3DMetal still works.
 run ours d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0
 expect "present_loop completes on D3DMetal" "$(grep -c 'avg frame' "$WORK/d3dmetal.txt" || true)" 1

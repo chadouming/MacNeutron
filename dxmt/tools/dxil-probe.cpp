@@ -1,5 +1,6 @@
 // dxil-probe: can LLVM 15 read DXIL? (DXMT fork spec §6)
 //   dxil-probe <file.dxil>...
+//   dxil-probe -S <file.dxil>   prints the module as LLVM IR text
 // One line per file:
 //   ok <file> dxil=<major>.<minor> <stage>_<major>_<minor> entry=<names> ops=<dx.op callee>:<calls>,... (top 10)
 //   fail <file> <reason, or LLVM's error>
@@ -11,6 +12,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/raw_ostream.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -30,6 +32,8 @@ static uint32_t read32(const std::vector<char> &blob, size_t at) {
 // DXIL's shader kinds (DxilProgramHeader's high 16 bits).
 static const char *const stages[] = {"ps", "vs", "gs", "hs", "ds", "cs", "lib", "raygen",
                                      "intersection", "anyhit", "closesthit", "miss", "callable", "ms", "as", "node"};
+
+static bool print_ir = false;
 
 // Fills `line` and returns "", or returns why the file can't be read.
 static std::string probe(const std::vector<char> &blob, std::string &line) {
@@ -52,9 +56,11 @@ static std::string probe(const std::vector<char> &blob, std::string &line) {
   if (size < 4 || start + size > end) return "bitcode lies outside the DXIL part";
 
   llvm::LLVMContext context;
+  context.setOpaquePointers(false);  // airconv's contexts use typed pointers (AIR needs them)
   auto module = llvm::parseBitcodeFile(
       llvm::MemoryBufferRef(llvm::StringRef(blob.data() + start, size), "dxil"), context);
   if (!module) return "llvm: " + llvm::toString(module.takeError());
+  if (print_ir) (*module)->print(llvm::outs(), nullptr);
 
   std::string entries;
   if (auto *points = (*module)->getNamedMetadata("dx.entryPoints"))
@@ -82,8 +88,9 @@ static std::string probe(const std::vector<char> &blob, std::string &line) {
 }
 
 int main(int argc, char **argv) {
-  int failures = 0;
-  for (int i = 1; i < argc; i++) {
+  int failures = 0, first = 1;
+  if (argc > 1 && std::string(argv[1]) == "-S") print_ir = true, first = 2;
+  for (int i = first; i < argc; i++) {
     std::ifstream in(argv[i], std::ios::binary);
     std::vector<char> blob;
     if (in.is_open()) blob.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());

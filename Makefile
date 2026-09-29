@@ -51,6 +51,7 @@ dxmt-tests:
 	mkdir -p build/dxmt-tests
 	$(MINGWXX) -o build/dxmt-tests/d3d12_clear.exe dxmt/tests/d3d12_clear.cpp -ld3d12 -ldxgi -luser32
 	$(MINGWXX) -o build/dxmt-tests/d3d12_dxil.exe dxmt/tests/d3d12_dxil.cpp -ld3d12
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_dxil_exec.exe dxmt/tests/d3d12_dxil_exec.cpp -ld3d12 -ldxgi
 
 # Our DXMT under the installed runtime (real Wine, no Steam); see dxmt/check.sh.
 dxmt-check: build dxmt presenter dxmt-tests
