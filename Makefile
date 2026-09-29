@@ -1,7 +1,10 @@
 .PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check
 
 APP = build/MacNeutron.app
-MINGW = x86_64-w64-mingw32-gcc -O2 -static -s
+# Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
+MINGW_BIN = $(shell sh dxmt/toolchain.sh)
+MINGW = $(MINGW_BIN)/x86_64-w64-mingw32-clang -O2 -static -s
+MINGWXX = $(MINGW_BIN)/x86_64-w64-mingw32-clang++ -O2 -static -s
 BRIDGE = build/bridge
 PRESENTER = build/presenter
 
@@ -17,7 +20,6 @@ smoke: build
 
 # Windows helpers for the Steam bridge (docs/superpowers/specs/2026-09-28-macneutron-steam-bridge-design.md).
 bridge:
-	@command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "bridge: needs brew install mingw-w64" >&2; exit 1; }
 	mkdir -p $(BRIDGE)/tests
 	$(MINGW) -o $(BRIDGE)/steam.exe bridge/steam.c -ladvapi32
 	$(MINGW) -o $(BRIDGE)/steamprobe.exe bridge/probe.c
@@ -29,7 +31,6 @@ bridge-check: bridge
 
 # MetalFX presenter (docs/superpowers/specs/2026-09-28-macneutron-metalfx-upscaler-design.md) and its test program.
 presenter:
-	@command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "presenter: needs brew install mingw-w64" >&2; exit 1; }
 	mkdir -p $(PRESENTER)
 	clang -arch x86_64 -arch arm64 -fobjc-arc -O2 -dynamiclib -framework Foundation -framework AppKit \
 		-framework QuartzCore -framework Metal -framework MetalFX \
@@ -47,10 +48,9 @@ dxmt:
 
 # D3D12 test programs for our DXMT.
 dxmt-tests:
-	@command -v x86_64-w64-mingw32-g++ >/dev/null || { echo "dxmt-tests: needs brew install mingw-w64" >&2; exit 1; }
 	mkdir -p build/dxmt-tests
-	x86_64-w64-mingw32-g++ -O2 -static -s -o build/dxmt-tests/d3d12_clear.exe dxmt/tests/d3d12_clear.cpp -ld3d12 -ldxgi -luser32
-	x86_64-w64-mingw32-g++ -O2 -static -s -o build/dxmt-tests/d3d12_dxil.exe dxmt/tests/d3d12_dxil.cpp -ld3d12
+	$(MINGWXX) -o build/dxmt-tests/d3d12_clear.exe dxmt/tests/d3d12_clear.cpp -ld3d12 -ldxgi -luser32
+	$(MINGWXX) -o build/dxmt-tests/d3d12_dxil.exe dxmt/tests/d3d12_dxil.cpp -ld3d12
 
 # Our DXMT under the installed runtime (real Wine, no Steam); see dxmt/check.sh.
 dxmt-check: build dxmt presenter dxmt-tests

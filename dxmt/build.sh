@@ -8,7 +8,7 @@ B="${BUILD_DIR:-$ROOT/build}"
 SRC="$B/dxmt-src"
 OUT="$B/dxmt"
 LLVM="$SRC/llvm"
-die() { echo "dxmt: $*" >&2; exit 1; }
+. "$ROOT/dxmt/lib.sh"
 
 # The DXIL probe (spec §6), against the same LLVM. -fno-rtti matches LLVM's own build.
 build_probe() {  # build_probe <folder>
@@ -27,25 +27,12 @@ fi
 missing=""
 need() { command -v "$1" > /dev/null 2>&1 || missing="$missing, $1 (brew install $2)"; }
 need cmake cmake; need ninja ninja; need meson meson
-need x86_64-w64-mingw32-gcc mingw-w64; need i686-w64-mingw32-gcc mingw-w64
 # DXMT compiles its own Metal shaders; Xcode ships the compiler as a separate component.
 xcrun metal --version > /dev/null 2>&1 || missing="$missing, Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"
 [ -z "$missing" ] || die "missing tools: ${missing#, }"
 
 # 2. Fetch. Checksummed archives first, so a bad download stops before anything is built or staged.
 mkdir -p "$SRC"
-fetch() {  # fetch <url> <file> <sha256>
-  if [ ! -f "$2" ]; then
-    echo "dxmt: downloading $1"
-    curl -fL --retry 3 -o "$2.part" "$1" || die "download failed: $1"
-    mv "$2.part" "$2"
-  fi
-  sum=$(shasum -a 256 "$2" | cut -d ' ' -f 1)
-  if [ "$sum" != "$3" ]; then
-    mv "$2" "$2.bad"  # so the next run downloads it again
-    die "checksum mismatch for $(basename "$2"): expected $3, got $sum (moved to $(basename "$2").bad)"
-  fi
-}
 fetch "$WINE_URL" "$SRC/wine.tar.gz" "$WINE_SHA256"
 fetch "$DXC_URL" "$SRC/dxc.zip" "$DXC_SHA256"
 if [ ! -d "$SRC/wine" ]; then
@@ -89,11 +76,15 @@ fi
 meson_build() {  # meson_build <cross file> <name> <options...>
   cross=$1 name=$2; shift 2
   rm -rf "$SRC/$name" "$SRC/$name-install"
-  { meson setup "$SRC/$name" "$SRC/dxmt" --cross-file "$SRC/dxmt/$cross" --buildtype release --strip \
+  ( PATH="$MINGW_BIN:$PATH"
+    meson setup "$SRC/$name" "$SRC/dxmt" --cross-file "$SRC/dxmt/$cross" --buildtype release --strip \
       --prefix "$SRC/$name-install" -Dwine_builtin_dll=false -Dwine_install_path="$SRC/wine" "$@" &&
-    meson compile -C "$SRC/$name" && meson install -C "$SRC/$name"; } > "$SRC/$name.log" 2>&1 \
+    meson compile -C "$SRC/$name" && meson install -C "$SRC/$name" ) > "$SRC/$name.log" 2>&1 \
     || die "DXMT $name build failed; see $SRC/$name.log"
 }
+# DXMT's cross files name x86_64/i686-w64-mingw32-gcc: put llvm-mingw's Clang wrappers first, for the meson builds only
+# (native Mac code must keep Apple's clang).
+MINGW_BIN=$(sh "$ROOT/dxmt/toolchain.sh")
 echo "dxmt: building DXMT $DXMT_COMMIT"
 meson_build build-win64.txt win64 -Denable_d3d12=true -Dnative_llvm_path="$LLVM"
 meson_build build-win32.txt win32

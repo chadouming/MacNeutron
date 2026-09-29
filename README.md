@@ -12,13 +12,14 @@ client and translated by Wine and DXMT (Apple's D3DMetal optional, per game).
 ```sh
 make build   # swift build -c release
 make test    # unit tests
-make smoke   # real Wine; needs `brew install mingw-w64`
+make smoke   # real Wine
 make dxmt         # our DXMT fork with Direct3D 12 into build/dxmt; first run ~500 MB of downloads and a 30-60 min LLVM build
 make dxmt-check   # our DXMT under real Wine (needs GPTK imported)
 ```
 
-`make dxmt` and `make app` need `brew install cmake ninja meson mingw-w64` and Xcode's Metal Toolchain
-(`xcodebuild -downloadComponent MetalToolchain`).
+`make dxmt` and `make app` need `brew install cmake ninja meson` and Xcode's Metal Toolchain
+(`xcodebuild -downloadComponent MetalToolchain`). Windows-side binaries are built with Clang from the pinned llvm-mingw,
+which the build fetches once (118 MB).
 
 ## The app
 

@@ -9,7 +9,7 @@ expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2]
 . "$ROOT/dxmt/pins"
 
 # A missing tool is named with its Homebrew formula: a PATH with every tool but meson.
-for t in cmake ninja x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do ln -s "$(command -v $t)" "$T/bin/$t"; done
+for t in cmake ninja; do ln -s "$(command -v $t)" "$T/bin/$t"; done
 out=$(PATH="$T/bin:/usr/bin:/bin" BUILD_DIR="$T/b1" sh "$ROOT/dxmt/build.sh" 2>&1) && st=0 || st=$?
 expect "a missing tool stops the build" "$st" 1
 expect "and is named with its formula" "$(echo "$out" | grep -c 'meson (brew install meson)')" 1
@@ -25,7 +25,7 @@ expect "and moves the bad file aside, so the next run downloads it again" \
 
 # Xcode's Metal Toolchain is a separate download; without it DXMT's Metal shaders can't compile.
 mkdir -p "$T/bin2"
-for t in cmake ninja meson x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do ln -s "$(command -v $t)" "$T/bin2/$t"; done
+for t in cmake ninja meson; do ln -s "$(command -v $t)" "$T/bin2/$t"; done
 printf '#!/bin/sh\nexit 1\n' > "$T/bin2/xcrun"; chmod +x "$T/bin2/xcrun"
 mkdir -p "$T/b4/dxmt-src"; echo "not wine" > "$T/b4/dxmt-src/wine.tar.gz"  # a regression stops here, not at a download
 out=$(PATH="$T/bin2:/usr/bin:/bin" BUILD_DIR="$T/b4" sh "$ROOT/dxmt/build.sh" 2>&1) && st=0 || st=$?
@@ -49,5 +49,10 @@ mkdir -p "$T/b3/dxmt"; echo "$DXMT_COMMIT" > "$T/b3/dxmt/version"; printf '#!/bi
 chmod +x "$T/b3/dxmt/dxil-probe"
 out=$(PATH="/usr/bin:/bin" BUILD_DIR="$T/b3" sh "$ROOT/dxmt/build.sh" 2>&1) && st=0 || st=$?
 expect "an up-to-date build is kept" "$st:$(echo "$out" | grep -c 'is up to date')" "0:1"
+
+# The Windows compiler is Clang from the pinned llvm-mingw, not Homebrew's GCC.
+bin=$(sh "$ROOT/dxmt/toolchain.sh")
+expect "the Windows compiler is Clang" "$("$bin/x86_64-w64-mingw32-gcc" --version | head -1 | grep -c clang)" 1
+expect "make uses it" "$(make -s -C "$ROOT" -n bridge | grep -c "$bin/x86_64-w64-mingw32-clang")" 3
 
 exit $fail
