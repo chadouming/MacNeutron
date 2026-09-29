@@ -1,6 +1,7 @@
 // Clears and presents N frames through Direct3D 12 (DXMT fork spec §6):
 //   d3d12_clear.exe [frames]
-// Prints the adapter, the highest shader model, the resource binding tier and the average frame time.
+// Prints the adapter, what Unreal Engine's SM6 check reads (shader model, binding tier, feature level, wave ops,
+// 64-bit atomics) and the average frame time.
 #define WIDL_EXPLICIT_AGGREGATE_RETURNS  // D3D12 methods that return structs: the MSVC ABI under mingw
 #include <windows.h>
 #include <d3d12.h>
@@ -29,12 +30,22 @@ int main(int argc, char **argv) {
     CHECK(factory->EnumAdapters1(0, &adapter));
     CHECK(adapter->GetDesc1(&ad));
     CHECK(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void **)&device));
-    D3D12_FEATURE_DATA_SHADER_MODEL sm = {D3D_SHADER_MODEL_6_0};
+    D3D12_FEATURE_DATA_SHADER_MODEL sm = {D3D_SHADER_MODEL_6_6};
     HRESULT smhr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof sm);
     D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
     device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof options);
     printf("adapter %ls\nshader model 0x%x (hr 0x%08lx)\nresource binding tier %d\n",
            ad.Description, (unsigned)sm.HighestShaderModel, (unsigned long)smhr, (int)options.ResourceBindingTier);
+    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_12_0,
+                                        D3D_FEATURE_LEVEL_12_1};
+    D3D12_FEATURE_DATA_FEATURE_LEVELS fl = {4, levels};
+    D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1 = {};
+    D3D12_FEATURE_DATA_D3D12_OPTIONS9 options9 = {};
+    device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &fl, sizeof fl);
+    device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof options1);
+    device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS9, &options9, sizeof options9);
+    printf("feature level 0x%x, wave ops %d, atomic64 %d\n", (unsigned)fl.MaxSupportedFeatureLevel, (int)options1.WaveOps,
+           (int)options9.AtomicInt64OnTypedResourceSupported);
 
     ID3D12CommandQueue *queue;
     D3D12_COMMAND_QUEUE_DESC qd = {D3D12_COMMAND_LIST_TYPE_DIRECT};

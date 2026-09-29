@@ -61,14 +61,16 @@ expect "the D3D11 game ran our d3d11.dll" \
 run ours clear dxmt "$TESTS/d3d12_clear.exe" 300
 expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' "$WORK/clear.txt" || true)" 1
 expect "the D3D12 device is our DXMT (shader model 5.1)" "$(grep -c '^shader model 0x51 ' "$WORK/clear.txt" || true)" 1
+expect "it reports its real limits" "$(grep -c '^feature level 0xb100, wave ops 0, atomic64 0$' "$WORK/clear.txt" || true)" 1
 
 # 3. DXIL pipelines return E_NOTIMPL, and DXMT_DXIL_DUMP captures each shader once, byte for byte.
-#    $WORK has a space in it, like the Application Support paths users will pass.
+#    $WORK has a space in it, like the Application Support paths users will pass; the folder doesn't exist yet.
 dxil() { run ours "$1" dxmt "$TESTS/d3d12_dxil.exe" "Z:$S/triangle.vs.dxil" "Z:$S/triangle.ps.dxil" "Z:$S/compute.cs.dxil"; }
-D="$WORK/dxil"; mkdir -p "$D"
+D="$WORK/dxil"
 export DXMT_DXIL_DUMP="$D"
 dxil dxil
 expect "DXIL pipelines return E_NOTIMPL" "$(grep -c 'hr=0x80004001' "$WORK/dxil.txt" || true)" 2
+expect "the capture folder is created" "$([ -d "$D" ] && echo yes || echo no)" yes
 expect "three shaders captured" "$(ls "$D" | wc -l | tr -d ' ')" 3
 expect "each capture is the shader, byte for byte" "$(for s in triangle.vs:vs triangle.ps:ps compute.cs:cs; do
     f=$(ls "$D/${s#*:}"-*.dxil 2> /dev/null | head -1)
@@ -79,6 +81,12 @@ vs=$(ls "$D"/vs-*.dxil 2> /dev/null | head -1)
 [ -z "$vs" ] || echo keep > "$vs"
 dxil dxil-again
 expect "an existing capture is left alone" "$(cat "$vs" 2> /dev/null)" keep
+# Capture mode reports what Unreal Engine's SM6 check needs, so SM6-only games get as far as creating pipelines.
+run ours clear-capture dxmt "$TESTS/d3d12_clear.exe" 10
+expect "capture mode reports shader model 6.6 and binding tier 3" \
+  "$(grep -cE '^(shader model 0x66 |resource binding tier 3$)' "$WORK/clear-capture.txt" || true)" 2
+expect "capture mode reports feature level 12_1, wave ops and 64-bit atomics" \
+  "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-capture.txt" || true)" 1
 export DXMT_DXIL_DUMP="/nonexistent/macneutron dxil"
 dxil dxil-unwritable
 expect "an unwritable capture folder changes nothing for the game" "$(grep -c 'hr=0x80004001' "$WORK/dxil-unwritable.txt" || true)" 2

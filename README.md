@@ -69,7 +69,10 @@ DXMT's Direct3D 12 is early. Games with Shader Model 6 (DXIL) shaders, which cov
 titles, don't start on it yet. For those, import GPTK and set **Graphics: D3DMetal** for the game in the Games window
 (or use `/usr/bin/env MACNEUTRON_GRAPHICS=d3dmetal %command%`).
 
-For DXMT development, `/usr/bin/env DXMT_DXIL_DUMP=<folder> %command%` saves each DXIL shader a game creates.
+For DXMT development, `/usr/bin/env DXMT_DXIL_DUMP=/Users/<you>/dxil %command%` saves each DXIL shader a game creates
+into that folder. Give an absolute path: Steam runs launch options without a shell, so `~` and `$HOME` aren't expanded.
+While it's set, DXMT reports the Direct3D 12 features that Shader Model 6 games check for, so they get as far as
+creating their shaders. They can't render that way; it's for capture runs only.
 
 ## Steam API
 
