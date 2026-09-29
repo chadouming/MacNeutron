@@ -1,15 +1,15 @@
 // Render test (DXIL translator plan, Task 3): constant buffer, texture sample, discard, derivatives, and an extra
 // varying the pixel shader ignores, so its TEXCOORD0 is packed at a different row than the vertex shader's; and the
-// render target array index (always 0: the target isn't an array), written by the vertex shader (Task 6).
+// render target array index (always 0: the target isn't an array), written by the vertex shader; and a corner read
+// from a vertex buffer through the input layout (Task 6: every game vertex shader reads one).
 cbuffer Constants : register(b0) { float2 scale; float2 offset; };
 Texture2D<float4> Tex : register(t0);
 SamplerState Point : register(s0);
 struct VSOut {
     float4 pos : SV_Position; float2 extra : TEXCOORD1; float2 uv : TEXCOORD0; uint layer : SV_RenderTargetArrayIndex;
 };
-VSOut vsmain(uint id : SV_VertexID) {
+VSOut vsmain(uint id : SV_VertexID, float2 uv : POSITION) {
     VSOut o;
-    float2 uv = float2((id << 1) & 2, id & 2);
     o.pos = float4((uv * float2(2, -2) + float2(-1, 1)) * scale + offset, 0, 1);
     o.extra = uv * 3;
     o.uv = uv;

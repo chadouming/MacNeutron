@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
     sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
-    D3D12_ROOT_SIGNATURE_DESC rd = {2, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    D3D12_ROOT_SIGNATURE_DESC rd = {2, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
     ID3DBlob *blob = nullptr, *error = nullptr;
     CHECK(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &error));
     ID3D12RootSignature *root;
@@ -88,6 +88,8 @@ int main(int argc, char **argv) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC gd = {};
     gd.pRootSignature = root;
     gd.VS = {vs.data(), vs.size()};
+    D3D12_INPUT_ELEMENT_DESC corner = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0};
+    gd.InputLayout = {&corner, 1};
     gd.PS = {ps.data(), ps.size()};
     gd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     gd.SampleMask = UINT_MAX;
@@ -107,6 +109,12 @@ int main(int argc, char **argv) {
     ID3D12Resource *cbuf = Resource(D3D12_HEAP_TYPE_UPLOAD, BufferDesc(256), D3D12_RESOURCE_STATE_GENERIC_READ);
     void *p; D3D12_RANGE none = {0, 0};
     CHECK(cbuf->Map(0, &none, &p)); memcpy(p, cb, sizeof cb); cbuf->Unmap(0, nullptr);
+
+    // Vertex buffer: the three corners, in texture coordinates.
+    const float corners[6] = {0, 0, 2, 0, 0, 2};
+    ID3D12Resource *vbuf = Resource(D3D12_HEAP_TYPE_UPLOAD, BufferDesc(256), D3D12_RESOURCE_STATE_GENERIC_READ);
+    CHECK(vbuf->Map(0, &none, &p)); memcpy(p, corners, sizeof corners); vbuf->Unmap(0, nullptr);
+    D3D12_VERTEX_BUFFER_VIEW vbv = {vbuf->GetGPUVirtualAddress(), sizeof corners, 8};
 
     // Texture: 2x2 red, green, blue, white, uploaded through a 256-byte-pitched buffer.
     ID3D12Resource *tex = Resource(D3D12_HEAP_TYPE_DEFAULT, TextureDesc(2, 2, D3D12_RESOURCE_FLAG_NONE), D3D12_RESOURCE_STATE_COPY_DEST);
@@ -147,6 +155,7 @@ int main(int argc, char **argv) {
     list->SetGraphicsRootDescriptorTable(1, srv_heap->GetGPUDescriptorHandleForHeapStart());
     list->SetPipelineState(pso);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list->IASetVertexBuffers(0, 1, &vbv);
     list->DrawInstanced(3, 1, 0, 0);
     Barrier(list, target, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
     D3D12_TEXTURE_COPY_LOCATION from = {target, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; from.SubresourceIndex = 0;
