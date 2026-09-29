@@ -31,9 +31,28 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
 @Test func aFailedInstallLeavesNoVersionSoTheNextStartRetries() throws {
     let layout = try makeToolLayout()
     try write("old", to: layout.dxmtVersionFile)
-    let build = try makeDXMTBuild(in: try makeTempDir(), omitting: "x86_64-windows/dxgi.dll")
+    let build = try makeDXMTBuild(in: try makeTempDir())
+    // A copy that fails mid-install: a non-empty folder where d3d12.dll goes.
+    try write("x", to: layout.dxmtD3D12.appending(path: "blocker"))
     #expect(throws: (any Error).self) { try DXMTInstaller.install(layout: layout, from: build) }
     #expect(layout.dxmtVersion == nil)
+}
+
+@Test func anIncompleteBuildIsNotABuild() throws {
+    let folder = try makeTempDir()
+    try makeDXMTBuild(in: folder)
+    try FileManager.default.removeItem(at: folder.appending(path: "x86_64-windows/dxgi.dll"))
+    #expect(DXMTBuild(folder: folder) == nil)
+}
+
+@Test func anIncompleteBundleInstallsNothing() throws {
+    // Spec §5: both halves always come from the same build, so a bundle missing a file touches nothing.
+    let layout = try makeToolLayout()
+    let helpers = try makeTempDir()
+    try makeDXMTBuild(in: helpers.appending(path: "DXMT", directoryHint: .isDirectory))
+    try FileManager.default.removeItem(at: helpers.appending(path: "DXMT/i386-windows/winemetal.dll"))
+    #expect(try DXMTInstaller.installBundled(layout: layout, launcherBinary: helpers.appending(path: "macneutron")) == false)
+    #expect(!exists(layout.wineLib.appending(path: "wine/x86_64-unix/winemetal.so")))
 }
 
 @Test func refusesAToolFolderWithoutARuntime() throws {

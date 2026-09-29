@@ -19,11 +19,13 @@ public struct DXMTBuild: Equatable, Sendable {
     public let windows: URL
     public let unix: URL
 
+    /// Refuses a build missing any file an install copies: both halves always come from the same build (spec §5).
     public init?(windows: URL, unix: URL) {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: windows.appending(path: "version").path(percentEncoded: false)),
-              fm.fileExists(atPath: unix.appending(path: "x86_64-unix/winemetal.so").path(percentEncoded: false))
-        else { return nil }
+        let windowsFiles = ["version"] + DXMTInstaller.frontEnds.flatMap { arch, _, dlls in
+            (["winemetal.dll"] + dlls).map { "\(arch)/\($0)" }
+        }
+        let required = windowsFiles.map { windows.appending(path: $0) } + [unix.appending(path: "x86_64-unix/winemetal.so")]
+        guard required.allSatisfy({ FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }) else { return nil }
         self.windows = windows
         self.unix = unix
     }
