@@ -46,12 +46,13 @@ for tool in stock ours; do  # the prefixes, created outside the 120 s watchdog
       "$WORK/$tool/bin/macneutron" launch getcompatpath "$WORK" > /dev/null 2>&1 || die "creating the $tool prefix failed"
 done
 
-# 1. D3D11 on our DXMT is as fast as on DXMT 0.80: best of two runs each, within 10%.
-for i in 1 2; do
+# 1. D3D11 on our DXMT is as fast as on DXMT 0.80: best of three runs each, within 10%. Both builds swing between
+#    two speeds from run to run (about 4.7 and 5.7 ms here), so fewer runs can compare a fast run with a slow one.
+for i in 1 2 3; do
   run stock "stock$i" dxmt "$LOOP" 1280 720 0 0 600 0
   run ours "ours$i" dxmt "$LOOP" 1280 720 0 0 600 0
 done
-best() { cat "$WORK/${1}1.txt" "$WORK/${1}2.txt" | grep -o 'avg frame [0-9.]*' | awk '{print $3}' | sort -n | head -1; }
+best() { cat "$WORK/${1}1.txt" "$WORK/${1}2.txt" "$WORK/${1}3.txt" | grep -o 'avg frame [0-9.]*' | awk '{print $3}' | sort -n | head -1; }
 expect "D3D11 frame time within 10% of DXMT 0.80" \
   "$(awk -v a="$(best ours)" -v b="$(best stock)" 'BEGIN { print (a != "" && b != "" && a <= b * 1.10) ? "yes" : "no (" a " vs " b " ms)" }')" "yes"
 expect "the D3D11 game ran our d3d11.dll" \
@@ -87,6 +88,10 @@ expect "capture mode reports shader model 6.6 and binding tier 3" \
   "$(grep -cE '^(shader model 0x66 |resource binding tier 3$)' "$WORK/clear-capture.txt" || true)" 2
 expect "capture mode reports feature level 12_1, wave ops and 64-bit atomics" \
   "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-capture.txt" || true)" 1
+export DXMT_DXIL_DUMP="$WORK/dxil é"
+dxil dxil-unicode
+expect "a capture folder named outside ASCII works" "$(ls "$WORK/dxil é" 2> /dev/null | grep -c '\.dxil$')" 3
+expect "no capture is left half-written" "$(ls "$D" "$WORK/dxil é" 2> /dev/null | grep -c '\.tmp$')" 0
 export DXMT_DXIL_DUMP="/nonexistent/macneutron dxil"
 dxil dxil-unwritable
 expect "an unwritable capture folder changes nothing for the game" "$(grep -c 'hr=0x80004001' "$WORK/dxil-unwritable.txt" || true)" 2

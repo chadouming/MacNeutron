@@ -26,7 +26,14 @@ int main(int argc, char **argv) {
     ID3D12Device *device;
     HRESULT hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void **)&device);
     if (FAILED(hr)) { printf("D3D12CreateDevice hr=0x%08lx\n", (unsigned long)hr); return 1; }
+    // One root UAV at u0, which compute.hlsl writes; the triangle binds nothing.
+    D3D12_ROOT_PARAMETER uav = {};
+    uav.ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    uav.Descriptor.ShaderRegister = 0;
+    uav.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_ROOT_SIGNATURE_DESC rd = {};
+    rd.NumParameters = 1;
+    rd.pParameters = &uav;
     rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     ID3DBlob *blob = nullptr, *error = nullptr;
     hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &error);
