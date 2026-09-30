@@ -174,6 +174,13 @@ run ours null-ref d3dmetal "$TESTS/d3d12_null.exe" "Z:$S/null.cs.dxil"
 expect "null descriptors read and report as on D3DMetal" \
   "$(grep '^null ' "$WORK/null-ours.txt" | tr '\n' ' ')" "$(grep '^null ' "$WORK/null-ref.txt" | tr '\n' ' ')"
 expect "d3d12_null ran its 18 slots" "$(grep -c '^null ' "$WORK/null-ours.txt" || true)" 18
+# GPU timestamps by D3D12's rules (D3DMetal has none), and a timestamp between draws never splits their pass.
+rm -rf "$WORK/ts"; export DXMT_DXIL_DUMP="$WORK/ts" DXMT_DUMP_FRAME=0
+run ours ts-ours dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME
+expect "timestamps: frequency, increasing, advancing, calibrated, across lists and counter buffers" \
+  "$(grep '^timestamp rules' "$WORK/ts-ours.txt" || true)" "timestamp rules 1 1 1 1 1 1"
+expect "a timestamp between draws keeps them one render pass" "$(grep -c ' render ' "$WORK/ts/passes.txt" 2> /dev/null || true)" 1
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \
   "$(grep '^caps ' "$WORK/api-ours.txt" || true)" "caps rt=0 mesh=0 vrs=0 sfb=0"
 
