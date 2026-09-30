@@ -116,7 +116,7 @@ expect "the unsupported op is named in the log" "$(tail -n +$((before + 1)) "$LO
 X="$ROOT/dxmt/tests/dxil"
 run ours exec-ours dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
 run ours exec-ref d3dmetal "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
-for g in buffers math transcendental textures groupshared wave half packed atomics quad; do
+for g in buffers math transcendental textures groupshared wave half packed atomics quad specials; do
   expect "DXIL $g matches D3DMetal" "$(python3 "$ROOT/dxmt/tests/compare.py" "$WORK/exec-ours.txt" "$WORK/exec-ref.txt" $g)" match
 done
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
@@ -159,10 +159,23 @@ rm -rf "$WORK/pixel"; export DXMT_DXIL_DUMP="$WORK/pixel" DXMT_DUMP_FRAME=0 DXMT
 run ours depth-pixel dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
 expect "pixel history: each quad's draw alone, named by its shaders and blending" \
-  "$(grep -cE '^pass-5 draw-(0|1) gfx vs=[0-9a-f]{16} ps=[0-9a-f]{16} .* blend0=off mask0=15 c0 000000ff->(ff0000ff|00ff00ff)$' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 2
+  "$(grep -cE '^pass-5 draw-(0|1) gfx vs=[0-9a-f]{16} ps=[0-9a-f]{16} .* blend0=off mask0=15 c0 000000ff->(ff0000ff|00ff00ff) at 32,32$' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 2
 expect "a draw the pass's starting depth rejects isn't listed" "$(grep -c '^pass-6 ' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 0
 expect "pixel history leaves the frame's own passes as they were" \
   "$(cmp -s "$WORK/pixel/pass-5-c0-64x64-70.raw" "$WORK/passes/pass-5-c0-64x64-70.raw" && echo same || echo differ)" same
+# In sequence (",seq"), each draw goes on top of the pass's earlier draws: the far quad, behind the near one, no longer
+# changes (32,32), but it does change (48,8), which only it covers. Pixels join with '+'; passes 5-6 only are redrawn.
+# draws.txt lists every draw redrawn; pixels.txt also says what each pass redrew.
+rm -rf "$WORK/pixelseq"; export DXMT_DXIL_DUMP="$WORK/pixelseq" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=32,32+48,8,5,6,seq
+run ours depth-pixelseq dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
+expect "in sequence, only the near quad changes (32,32) in pass-5" \
+  "$(grep -c '^pass-5 draw-.* at 32,32$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true):$(grep -c '^pass-5 draw-0 .* c0 000000ff->ff0000ff at 32,32$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" "1:1"
+expect "and the far quad changes (48,8), a second watched pixel" \
+  "$(grep -c '^pass-5 draw-1 .* c0 000000ff->00ff00ff at 48,8$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
+expect "only passes 5-6 are redrawn" "$(grep -c '^# pass-' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 2
+expect "draws.txt lists both of pass-5's draws" "$(grep -c '^pass-5 draw-[01] gfx ' "$WORK/pixelseq/draws.txt" 2> /dev/null || true)" 2
+expect "pixels.txt says what pass-5 redrew" "$(grep -c '^# pass-5: 2 draws redrawn in sequence$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
 run ours query-ours dxmt "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 run ours query-ref d3dmetal "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 expect "occlusion queries match D3DMetal" "$(grep '^query' "$WORK/query-ours.txt" || true)" "$(grep '^query' "$WORK/query-ref.txt" || echo 'D3DMetal ran no query')"
@@ -237,9 +250,17 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 
 # 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
-expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "10/11"
+expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
 expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "10/10"
+# DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
+# shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
+# the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
+"$DXMT/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
+expect "no translated shader assumes NaN or infinity away" \
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "10:10"
+expect "vertex and geometry shaders keep their math unfused" \
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 4
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

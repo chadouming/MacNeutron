@@ -22,6 +22,6 @@ dxc -T cs_6_0 -E main -Fo null.cs.dxil null.hlsl
 ls -l ./*.dxil
 # DXIL translator behaviour groups (dxmt/tests/dxil; see common.hlsli). 16-bit types where the group needs them.
 cd "$HERE/../dxil"
-for g in buffers math transcendental textures groupshared wave atomics quad heap; do dxc -T cs_6_6 -E main -Fo "$g.dxil" "$g.hlsl"; done
+for g in buffers math transcendental textures groupshared wave atomics quad heap specials; do dxc -T cs_6_6 -E main -Fo "$g.dxil" "$g.hlsl"; done
 for g in half packed; do dxc -T cs_6_6 -E main -enable-16bit-types -Fo "$g.dxil" "$g.hlsl"; done
 ls -l ./*.dxil

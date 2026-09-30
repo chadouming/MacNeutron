@@ -2,12 +2,19 @@
 // plan, Task 5). Compute: a compute pipeline; vertex: a render pipeline with an empty fragment function; pixel: a
 // render pipeline with a pass-through vertex function; geometry: a mesh pipeline with a vertex shader from the folder
 // whose outputs cover its inputs (geometry shaders are translated last). The root signature comes from the shaders'
-// own resources.
+// own resources. With --flags, each result line also counts the fast-math flags left in the translated AIR
+// (nnan, ninf, fast compares; reassoc, contract, arcp), for checking what the translator keeps.
 #import <Metal/Metal.h>
 #define BOOL WIN_BOOL // airconv's Windows headers define BOOL as int; Objective-C's is signed char
 #include "airconv_public.h"
 #include "dxbc_converter.hpp"
 #include "dxil/dxil_public.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Operator.h"
+#include "llvm/Support/MemoryBuffer.h"
 #undef BOOL
 #include <algorithm>
 #include <chrono>
@@ -56,11 +63,46 @@ std::vector<uint32_t> RootSignature(const std::vector<Resource> &resources) {
   return container;
 }
 
+struct Flags {
+  unsigned nnan = 0, ninf = 0, cmp = 0, reassoc = 0, contract = 0, arcp = 0;
+};
+
 struct Result {
   bool ok = false, deferred = false;
   const char *stage = "";
   std::string reason;
+  Flags flags; // --flags: summed over the pipeline's translated functions
 };
+
+bool count_flags = false;
+
+// Counts the fast-math flags of a translated metallib's AIR (its bitcode starts at the wrapper magic).
+void CountFlags(const void *data, size_t size, Flags &flags) {
+  std::string_view bytes((const char *)data, size);
+  auto at = bytes.find(std::string_view("\xde\xc0\x17\x0b", 4));
+  if (at == std::string_view::npos)
+    return;
+  auto buffer = llvm::MemoryBuffer::getMemBuffer(llvm::StringRef(bytes.data() + at, size - at), "", false);
+  llvm::LLVMContext context;
+  context.setOpaquePointers(false);
+  auto module = llvm::parseBitcodeFile(buffer->getMemBufferRef(), context);
+  if (!module) {
+    llvm::consumeError(module.takeError());
+    return;
+  }
+  for (auto &function : **module)
+    for (auto &block : function)
+      for (auto &inst : block)
+        if (llvm::isa<llvm::FPMathOperator>(&inst)) {
+          auto f = inst.getFastMathFlags();
+          flags.nnan += f.noNaNs();
+          flags.ninf += f.noInfs();
+          flags.cmp += llvm::isa<llvm::FCmpInst>(&inst) && f.any();
+          flags.reassoc += f.allowReassoc();
+          flags.contract += f.allowContract();
+          flags.arcp += f.allowReciprocal();
+        }
+}
 
 // A vertex shader seen in the folder, for pairing with geometry shaders: its bytecode and output semantics.
 struct VertexShader {
@@ -85,6 +127,8 @@ std::vector<SM50_IA_INPUT_ELEMENT> InputLayout(const EntryInfo &vs) {
 id<MTLLibrary> Library(id<MTLDevice> device, sm50_bitcode_t bitcode, Result &result) {
   SM50_COMPILED_BITCODE data;
   SM50GetCompiledBitcode(bitcode, &data);
+  if (count_flags)
+    CountFlags(data.Data, data.Size, result.flags);
   auto dispatch = dispatch_data_create(data.Data, data.Size, nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
   SM50DestroyBitcode(bitcode);
   NSError *err = nil;
@@ -277,8 +321,9 @@ Result Translate(id<MTLDevice> device, const std::vector<char> &bytes, std::vect
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    fprintf(stderr, "usage: dxil-translate <folder>\n");
+  count_flags = argc == 3 && std::string(argv[2]) == "--flags";
+  if (argc != 2 && !count_flags) {
+    fprintf(stderr, "usage: dxil-translate <folder> [--flags]\n");
     return 2;
   }
   std::vector<std::filesystem::path> files;
@@ -316,7 +361,11 @@ int main(int argc, char **argv) {
       total_ms += ms;
       if (ms > slowest_ms)
         slowest_ms = ms, slowest = name;
-      printf("ok %s %s %.1f\n", name.c_str(), r.stage, ms);
+      if (count_flags)
+        printf("ok %s %s %.1f nnan=%u ninf=%u cmp=%u reassoc=%u contract=%u arcp=%u\n", name.c_str(), r.stage, ms,
+               r.flags.nnan, r.flags.ninf, r.flags.cmp, r.flags.reassoc, r.flags.contract, r.flags.arcp);
+      else
+        printf("ok %s %s %.1f\n", name.c_str(), r.stage, ms);
     } else {
       printf("fail %s %s\n", name.c_str(), r.reason.c_str());
     }
