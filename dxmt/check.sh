@@ -174,6 +174,13 @@ expect "in sequence, only the near quad changes (32,32) in pass-5" \
 expect "and the far quad changes (48,8), a second watched pixel" \
   "$(grep -c '^pass-5 draw-1 .* c0 000000ff->00ff00ff at 48,8$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
 expect "only passes 5-6 are redrawn" "$(grep -c '^# pass-' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 2
+# A pixel list longer than 260 characters (Windows' MAX_PATH) still arrives whole.
+long="32,32"; for y in 900 1000 1100 1200 1300; do for x in 100 300 500 700 900 1100 1300 1500 1700 1900; do long="$long+$x,$y"; done; done
+rm -rf "$WORK/pixellong"; export DXMT_DXIL_DUMP="$WORK/pixellong" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL="$long,5,5"
+run ours depth-pixellong dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
+expect "a pixel list over 260 characters works" \
+  "${#long}:$(grep -c '^pass-5 draw-0 .* at 32,32$' "$WORK/pixellong/pixels.txt" 2> /dev/null || true)" "${#long}:1"
 expect "draws.txt lists both of pass-5's draws" "$(grep -c '^pass-5 draw-[01] gfx ' "$WORK/pixelseq/draws.txt" 2> /dev/null || true)" 2
 expect "pixels.txt says what pass-5 redrew" "$(grep -c '^# pass-5: 2 draws redrawn in sequence$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
 run ours query-ours dxmt "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
