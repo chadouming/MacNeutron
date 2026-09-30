@@ -162,6 +162,12 @@ same_lines() {  # same_lines <prefix>: d3d12_api's lines starting with <prefix> 
   [ -n "$a" ] && [ "$a" = "$b" ] && echo yes || echo "no: ours [$a] D3DMetal [$b]"
 }
 for s in markers cachedblob nulldsv list1 heap1 residency multifence feature library; do expect "d3d12_api $s answers as D3DMetal" "$(same_lines $s)" yes; done
+# Batch 2: copies between formats D3D12 lets reinterpret.
+run ours copy-ours dxmt "$TESTS/d3d12_copy.exe"
+run ours copy-ref d3dmetal "$TESTS/d3d12_copy.exe"
+expect "reinterpreting copies match D3DMetal byte for byte" \
+  "$(grep '^copy ' "$WORK/copy-ours.txt" | tr '\n' ' ')" "$(grep '^copy ' "$WORK/copy-ref.txt" | tr '\n' ' ')"
+expect "d3d12_copy ran its eight cases" "$(grep -c '^copy .* ok ' "$WORK/copy-ours.txt" || true)" 8
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \
   "$(grep '^caps ' "$WORK/api-ours.txt" || true)" "caps rt=0 mesh=0 vrs=0 sfb=0"
 
