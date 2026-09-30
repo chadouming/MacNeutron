@@ -121,14 +121,14 @@ for g in buffers math transcendental textures groupshared wave half packed atomi
 done
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
 expect "DXIL pipelines compile on 8 threads at once" "$(grep -o 'threads ok 8/8' "$WORK/exec-threads.txt" || true)" "threads ok 8/8"
-same_pixels() {  # same_pixels <ours> <ref>: yes when both drew ("<test> ok") and the 12 sampled pixels are within 1/255
-  python3 - "$1" "$2" <<'PY'
+same_pixels() {  # same_pixels <ours> <ref> [prefix]: yes when both drew ("<prefix> ok") and 12 pixels are within 1/255
+  python3 - "$1" "$2" "${3:-}" <<'PY'
 import sys
-def px(p):
+def px(p, prefix):
     for l in open(p):
         s = l.split()
-        if s[1:2] == ["ok"]: return [int(x, 16) for x in s[3:15]]
-a, b = px(sys.argv[1]), px(sys.argv[2])
+        if s[1:2] == ["ok"] and (not prefix or s[0] == prefix): return [int(x, 16) for x in s[3:15]]
+a, b = px(sys.argv[1], sys.argv[3]), px(sys.argv[2], sys.argv[3])
 print("yes" if a and b and len(a) == len(b) == 12 and all(abs(((x >> k) & 255) - ((y >> k) & 255)) <= 1 for x, y in zip(a, b) for k in (0, 8, 16, 24)) else f"no {a} {b}")
 PY
 }
@@ -142,13 +142,15 @@ expect "DXIL geometry shader triangle matches D3DMetal (12 pixels within 1/255)"
 # Depth and stencil as Unreal uses them; occlusion queries, which Unreal culls meshes by (SMITE 2's lobby).
 run ours depth-ours dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
 run ours depth-ref d3dmetal "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
-expect "depth and stencil match D3DMetal (12 pixels within 1/255)" "$(same_pixels "$WORK/depth-ours.txt" "$WORK/depth-ref.txt")" yes
+expect "depth and stencil match D3DMetal (12 pixels within 1/255)" "$(same_pixels "$WORK/depth-ours.txt" "$WORK/depth-ref.txt" depth)" yes
+expect "read-only depth and stencil views match D3DMetal (12 pixels within 1/255)" \
+  "$(same_pixels "$WORK/depth-ours.txt" "$WORK/depth-ref.txt" depth2)" yes
 # The pass dump (capture mode, DXMT_DUMP_FRAME): frame 0 of a test that never presents, saved as its queue goes.
 rm -rf "$WORK/passes"; export DXMT_DXIL_DUMP="$WORK/passes" DXMT_DUMP_FRAME=0
 run ours depth-dump dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME
-expect "the pass dump saves the depth test's 3 render passes (5 attachments)" \
-  "$(grep -c ' render ' "$WORK/passes/passes.txt" 2> /dev/null || true) $(ls "$WORK/passes" 2> /dev/null | grep -c '\.raw$')" "3 5"
+expect "the pass dump saves the depth test's 6 render passes (11 attachments)" \
+  "$(grep -c ' render ' "$WORK/passes/passes.txt" 2> /dev/null || true) $(ls "$WORK/passes" 2> /dev/null | grep -c '\.raw$')" "6 11"
 run ours query-ours dxmt "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 run ours query-ref d3dmetal "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 expect "occlusion queries match D3DMetal" "$(grep '^query' "$WORK/query-ours.txt" || true)" "$(grep '^query' "$WORK/query-ref.txt" || echo 'D3DMetal ran no query')"
