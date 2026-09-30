@@ -181,6 +181,10 @@ unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME
 expect "timestamps: frequency, increasing, advancing, calibrated, across lists and counter buffers" \
   "$(grep '^timestamp rules' "$WORK/ts-ours.txt" || true)" "timestamp rules 1 1 1 1 1 1"
 expect "a timestamp between draws keeps them one render pass" "$(grep -c ' render ' "$WORK/ts/passes.txt" 2> /dev/null || true)" 1
+expect "a timestamp resolve into a default heap never shows a previous submission's value" \
+  "$(grep '^timestamp default-heap' "$WORK/ts-ours.txt" || true)" "timestamp default-heap 1"
+run ours ts-leak dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" leak
+expect "1500 timestamp resolves grow memory by under 16 MB" "$(grep -o 'ok [01]$' "$WORK/ts-leak.txt" || true)" "ok 1"
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \
   "$(grep '^caps ' "$WORK/api-ours.txt" || true)" "caps rt=0 mesh=0 vrs=0 sfb=0"
 

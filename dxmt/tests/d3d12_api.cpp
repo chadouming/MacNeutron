@@ -2,7 +2,9 @@
 //   d3d12_api.exe <vs.dxil> <ps.dxil> [section]   (shaders/depth.hlsl's vsmain and psmain)
 // Each line starts with its section; check.sh compares them with D3DMetal's. "caps" is checked on our DXMT only.
 #include "d3d12_common.hpp"
+#include <atomic>
 #include <string>
+#include <thread>
 
 static Gpu *gpu;
 static std::vector<char> vs, ps;
@@ -186,6 +188,23 @@ static void Library(ID3D12RootSignature *root) {
         step("load-from-blob", lib2->LoadGraphicsPipeline(L"a", &gd, __uuidof(ID3D12PipelineState), (void **)&got));
     char junk[64] = {1, 2, 3};
     step("junk", d1->CreatePipelineLibrary(junk, sizeof junk, __uuidof(ID3D12PipelineLibrary), (void **)&lib2));
+    // Serialize while another thread stores pipelines (libraries are free-threaded): it never writes past the size
+    // it was given (guard bytes after the buffer stay untouched).
+    ID3D12PipelineState *another = QuadPipeline(*gpu, root, vs, ps);
+    std::atomic<bool> stop{false};
+    std::thread storer([&] {
+        for (int k = 0; !stop; k++) lib->StorePipeline((L"s" + std::to_wstring(k)).c_str(), another);
+    });
+    int overflow = 0;
+    for (int i = 0; i < 3000 && !overflow; i++) {
+        SIZE_T n = lib->GetSerializedSize();
+        std::vector<unsigned char> buffer(n + 64, 0x5a);
+        lib->Serialize(buffer.data(), n);
+        for (SIZE_T j = n; j < n + 64; j++) overflow |= buffer[j] != 0x5a;
+    }
+    stop = true;
+    storer.join();
+    printf("library serialize-race overflow %d\n", overflow);
 }
 
 int main(int argc, char **argv) {
