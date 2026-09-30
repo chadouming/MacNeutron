@@ -151,6 +151,18 @@ run ours depth-dump dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/dep
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME
 expect "the pass dump saves the depth test's 6 render passes (11 attachments)" \
   "$(grep -c ' render ' "$WORK/passes/passes.txt" 2> /dev/null || true) $(ls "$WORK/passes" 2> /dev/null | grep -c '\.raw$')" "6 11"
+# Pixel history (DXMT_DUMP_PIXEL=x,y): each draw of the dumped frame redrawn alone from its pass's starting state, and
+# the draws that change the pixel listed with their pipeline in pixels.txt. At (32,32): pass-5 (the depth test's
+# first) draws the near red quad and the far green quad, each alone passing its depth test; pass-6's yellow quad
+# (depth EQUAL 0.25) is rejected by the 0.75 the near quad left, so pass-6 lists nothing.
+rm -rf "$WORK/pixel"; export DXMT_DXIL_DUMP="$WORK/pixel" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=32,32
+run ours depth-pixel dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
+expect "pixel history: each quad's draw alone, named by its shaders and blending" \
+  "$(grep -cE '^pass-5 draw-(0|1) gfx vs=[0-9a-f]{16} ps=[0-9a-f]{16} .* blend0=off mask0=15 c0 000000ff->(ff0000ff|00ff00ff)$' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 2
+expect "a draw the pass's starting depth rejects isn't listed" "$(grep -c '^pass-6 ' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 0
+expect "pixel history leaves the frame's own passes as they were" \
+  "$(cmp -s "$WORK/pixel/pass-5-c0-64x64-70.raw" "$WORK/passes/pass-5-c0-64x64-70.raw" && echo same || echo differ)" same
 run ours query-ours dxmt "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 run ours query-ref d3dmetal "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 expect "occlusion queries match D3DMetal" "$(grep '^query' "$WORK/query-ours.txt" || true)" "$(grep '^query' "$WORK/query-ref.txt" || echo 'D3DMetal ran no query')"
