@@ -133,5 +133,47 @@ int main() {
     }
     gpu->Barrier(b, DST, SRC);
     Print("mip1", b, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 16, 16, 64, 16);
+
+    // dplane: the depth plane (0.25) and stencil plane (7) of a two-plane depth-stencil texture, CopyTextureRegion into
+    // R32_FLOAT and R8_UINT (the copies D3D12 lets planes make).
+    D3D12_CLEAR_VALUE ds_clear = {DXGI_FORMAT_D32_FLOAT_S8X24_UINT}; ds_clear.DepthStencil = {0.25f, 7};
+    a = gpu->Texture(Tex2D(16, 16, DXGI_FORMAT_R32G8X24_TYPELESS, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),
+                     D3D12_RESOURCE_STATE_DEPTH_WRITE, &ds_clear);
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv2 = {DXGI_FORMAT_D32_FLOAT_S8X24_UINT, D3D12_DSV_DIMENSION_TEXTURE2D};
+    gpu->device->CreateDepthStencilView(a, &dsv2, dh->GetCPUDescriptorHandleForHeapStart());
+    gpu->list->ClearDepthStencilView(dh->GetCPUDescriptorHandleForHeapStart(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
+                                     0.25f, 7, 0, nullptr);
+    gpu->Barrier(a, D3D12_RESOURCE_STATE_DEPTH_WRITE, SRC);
+    b = gpu->Texture(Tex2D(16, 16, DXGI_FORMAT_R32_FLOAT), DST);
+    ID3D12Resource *st = gpu->Texture(Tex2D(16, 16, DXGI_FORMAT_R8_UINT), DST);
+    for (UINT plane = 0; plane < 2; plane++) {
+        D3D12_TEXTURE_COPY_LOCATION to = {plane ? st : b, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; to.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION from = {a, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; from.SubresourceIndex = plane;
+        gpu->list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+    }
+    gpu->Barrier(b, DST, SRC);
+    gpu->Barrier(st, DST, SRC);
+    Print("dplane-depth", b, 0, DXGI_FORMAT_R32_FLOAT, 16, 16, 64, 16);
+    Print("dplane-stencil", st, 0, DXGI_FORMAT_R8_UINT, 16, 16, 16, 16);
+
+    // bc7mip1: a 12x12 BC7 texture with mips (12, 6, 3) -> UNORM_SRGB, CopyResource; mip 1 is 6x6, two blocks each
+    // way with a partial one at the edge.
+    a = gpu->Texture(Tex2D(12, 12, DXGI_FORMAT_BC7_UNORM, 3), DST);
+    b = gpu->Texture(Tex2D(12, 12, DXGI_FORMAT_BC7_UNORM_SRGB, 3), DST);
+    {
+        ID3D12Resource *up = gpu->Buffer(D3D12_HEAP_TYPE_UPLOAD, 256 * 2, D3D12_RESOURCE_STATE_GENERIC_READ);
+        uint8_t *p; CHECK(up->Map(0, nullptr, (void **)&p));
+        auto bytes = Pattern(2 * 2 * 16, 7);
+        for (int r = 0; r < 2; r++) memcpy(p + r * 256, bytes.data() + r * 32, 32);
+        up->Unmap(0, nullptr);
+        D3D12_TEXTURE_COPY_LOCATION to = {a, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; to.SubresourceIndex = 1;
+        D3D12_TEXTURE_COPY_LOCATION from = {up, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        from.PlacedFootprint.Footprint = {DXGI_FORMAT_BC7_UNORM, 8, 8, 1, 256};
+        gpu->list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+    }
+    gpu->Barrier(a, DST, SRC);
+    gpu->list->CopyResource(b, a);
+    gpu->Barrier(b, DST, SRC);
+    Print("bc7mip1", b, 1, DXGI_FORMAT_BC7_UNORM_SRGB, 8, 8, 32, 2);
     return 0;
 }

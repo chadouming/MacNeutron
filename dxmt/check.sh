@@ -167,7 +167,7 @@ run ours copy-ours dxmt "$TESTS/d3d12_copy.exe"
 run ours copy-ref d3dmetal "$TESTS/d3d12_copy.exe"
 expect "reinterpreting copies match D3DMetal byte for byte" \
   "$(grep '^copy ' "$WORK/copy-ours.txt" | tr '\n' ' ')" "$(grep '^copy ' "$WORK/copy-ref.txt" | tr '\n' ' ')"
-expect "d3d12_copy ran its eight cases" "$(grep -c '^copy .* ok ' "$WORK/copy-ours.txt" || true)" 8
+expect "d3d12_copy ran its eleven cases" "$(grep -c '^copy .* ok ' "$WORK/copy-ours.txt" || true)" 11
 # Batch 2: null descriptors of every type.
 run ours null-ours dxmt "$TESTS/d3d12_null.exe" "Z:$S/null.cs.dxil"
 run ours null-ref d3dmetal "$TESTS/d3d12_null.exe" "Z:$S/null.cs.dxil"
