@@ -19,6 +19,12 @@ dxc -T vs_6_6 -E vsmain -Fo depth.vs.dxil depth.hlsl
 dxc -T ps_6_6 -E psmain -Fo depth.ps.dxil depth.hlsl
 dxc -T ps_6_6 -E psdepth -Fo depth.psdepth.dxil depth.hlsl
 dxc -T cs_6_0 -E main -Fo null.cs.dxil null.hlsl
+dxc -T vs_6_6 -E vsmain -Fo layered.vs.dxil layered.hlsl
+dxc -T ps_6_6 -E psmain -Fo layered.ps.dxil layered.hlsl
+dxc -T cs_6_6 -E fill -Fo volume.fill.dxil volume.hlsl
+dxc -T cs_6_6 -E sample -Fo volume.sample.dxil volume.hlsl
+dxc -T vs_6_6 -E vsmain -Fo vsread.vs.dxil vsread.hlsl
+dxc -T ps_6_6 -E psmain -Fo vsread.ps.dxil vsread.hlsl
 ls -l ./*.dxil
 # DXIL translator behaviour groups (dxmt/tests/dxil; see common.hlsli). 16-bit types where the group needs them.
 cd "$HERE/../dxil"

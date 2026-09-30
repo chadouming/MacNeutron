@@ -58,6 +58,9 @@ dxmt-tests:
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_api.exe dxmt/tests/d3d12_api.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_copy.exe dxmt/tests/d3d12_copy.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_null.exe dxmt/tests/d3d12_null.cpp -ld3d12 -ldxgi
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_layered.exe dxmt/tests/d3d12_layered.cpp -ld3d12 -ldxgi
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_volume.exe dxmt/tests/d3d12_volume.cpp -ld3d12 -ldxgi
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_vsread.exe dxmt/tests/d3d12_vsread.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_timestamp.exe dxmt/tests/d3d12_timestamp.cpp -ld3d12 -ldxgi -lpsapi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_ffx_swapchain.exe dxmt/tests/d3d12_ffx_swapchain.cpp -ld3d12 -ldxgi -luser32
 

@@ -199,6 +199,28 @@ run ours null-ref d3dmetal "$TESTS/d3d12_null.exe" "Z:$S/null.cs.dxil"
 expect "null descriptors read and report as on D3DMetal" \
   "$(grep '^null ' "$WORK/null-ours.txt" | tr '\n' ' ')" "$(grep '^null ' "$WORK/null-ref.txt" | tr '\n' ' ')"
 expect "d3d12_null ran its 18 slots" "$(grep -c '^null ' "$WORK/null-ours.txt" || true)" 18
+# Paths Unreal's particles and translucency lighting use, each against D3DMetal: layered rendering into a 3D texture
+# from the vertex shader, a 3D texture written by compute then sampled and loaded, and resources a vertex shader reads.
+run ours layered-ours dxmt "$TESTS/d3d12_layered.exe" "Z:$S/layered.vs.dxil" "Z:$S/layered.ps.dxil"
+run ours layered-ref d3dmetal "$TESTS/d3d12_layered.exe" "Z:$S/layered.vs.dxil" "Z:$S/layered.ps.dxil"
+expect "layered rendering into a 3D texture matches D3DMetal (within 1/255)" "$(python3 - "$WORK/layered-ours.txt" "$WORK/layered-ref.txt" <<'PY'
+import sys
+def texels(p):
+    for l in open(p):
+        s = l.split()
+        if s[:2] == ["layered", "ok"]: return [int(x, 16) for x in s[2:]]
+a, b = texels(sys.argv[1]), texels(sys.argv[2])
+print("yes" if a and b and len(a) == len(b) == 4 and all(abs(((x >> k) & 255) - ((y >> k) & 255)) <= 1 for x, y in zip(a, b) for k in (0, 8, 16, 24)) else f"no {a} {b}")
+PY
+)" yes
+run ours volume-ours dxmt "$TESTS/d3d12_volume.exe" "Z:$S/volume.fill.dxil" "Z:$S/volume.sample.dxil"
+run ours volume-ref d3dmetal "$TESTS/d3d12_volume.exe" "Z:$S/volume.fill.dxil" "Z:$S/volume.sample.dxil"
+expect "a 3D texture written by compute, then sampled and loaded, matches D3DMetal" \
+  "$(grep '^volume ' "$WORK/volume-ours.txt" | tr '\n' ' ')" "$(grep '^volume ' "$WORK/volume-ref.txt" | tr '\n' ' ')"
+run ours vsread-ours dxmt "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vs.dxil" "Z:$S/vsread.ps.dxil"
+run ours vsread-ref d3dmetal "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vs.dxil" "Z:$S/vsread.ps.dxil"
+expect "a vertex shader reads typed, structured, 3D and cube resources as on D3DMetal" \
+  "$(grep '^vsread ' "$WORK/vsread-ours.txt" || echo none)" "$(grep '^vsread ' "$WORK/vsread-ref.txt" || echo 'D3DMetal printed nothing')"
 # GPU timestamps by D3D12's rules (D3DMetal has none), and a timestamp between draws never splits their pass.
 rm -rf "$WORK/ts"; export DXMT_DXIL_DUMP="$WORK/ts" DXMT_DUMP_FRAME=0
 run ours ts-ours dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
@@ -252,15 +274,15 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "10/10"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "16/16"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
 # the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
 "$DXMT/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
-  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "10:10"
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "16:16"
 expect "vertex and geometry shaders keep their math unfused" \
-  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 4
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 6
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
