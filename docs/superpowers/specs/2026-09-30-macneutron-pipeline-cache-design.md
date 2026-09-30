@@ -145,7 +145,7 @@ D3D12ShaderCache::Function(shaders, args, name)
 
 ### 3.4 Counters
 
-`D3D12ShaderCache` counts function hits, function misses, reflection hits and reflection misses in process-wide atomics. It logs them at info level when a device is released, and every 1000 function lookups (a game may exit without releasing its device):
+`D3D12ShaderCache` counts function hits, function misses, reflection hits and reflection misses in process-wide atomics. It logs them at info level every 1000 function lookups and when the process exits (`d3d12.dll`'s `DLL_PROCESS_DETACH`), because games and test programs often exit without releasing their device. A process that made no lookups logs nothing:
 
 ```
 d3d12 shader cache: functions <hits> hit <misses> missed, reflections <hits> hit <misses> missed
@@ -255,7 +255,7 @@ All in `make dxmt-check` (C++ under Wine) or `make test` (Swift), test-first, co
 
 **`HashCompileArgs`:** run 3 covers the argument types D3D12 uses today. An unknown type is covered by reading the code: §3.2's table is exhaustive for the fork's compile sites.
 
-**SM6 switch:** `d3d12_api`'s caps line, run with `DXMT_D3D12_SM6=1` and no dump folder, prints FL 12_1 / SM 6.7 / binding tier 3 / wave ops / 64-bit atomics and writes no `pipelines.txt`. Without the switch, the caps line is unchanged.
+**SM6 switch:** `d3d12_clear`, run with `DXMT_D3D12_SM6=1` and no dump folder, prints the capability lines capture mode prints (shader model 6.6, binding tier 3, feature level 12_1, wave ops, 64-bit atomics). Without the switch, check 2's lines (shader model 5.1) are unchanged.
 
 **Existing tests:** every D3D12 and D3D11 test still passes, now through the cache (cold, fresh folder per run).
 
