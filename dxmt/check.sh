@@ -159,7 +159,7 @@ same_lines() {  # same_lines <prefix>: d3d12_api's lines starting with <prefix> 
   a=$(grep "^$1 " "$WORK/api-ours.txt" || true); b=$(grep "^$1 " "$WORK/api-ref.txt" || true)
   [ -n "$a" ] && [ "$a" = "$b" ] && echo yes || echo "no: ours [$a] D3DMetal [$b]"
 }
-for s in markers cachedblob nulldsv list1 heap1 residency multifence feature; do expect "d3d12_api $s answers as D3DMetal" "$(same_lines $s)" yes; done
+for s in markers cachedblob nulldsv list1 heap1 residency multifence feature library; do expect "d3d12_api $s answers as D3DMetal" "$(same_lines $s)" yes; done
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \
   "$(grep '^caps ' "$WORK/api-ours.txt" || true)" "caps rt=0 mesh=0 vrs=0 sfb=0"
 
