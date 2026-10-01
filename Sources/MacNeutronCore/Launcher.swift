@@ -1,5 +1,14 @@
 import Foundation
 
+/// Set by `Launcher.terminate` (Steam's Stop): the launch in progress starts nothing more, as a shader replay can run
+/// for minutes before the game. Shared by every copy of the launcher.
+final class StopFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    var isSet: Bool { lock.withLock { stopped } }
+    func set() { lock.withLock { stopped = true } }
+}
+
 /// Implements the `proton` verbs Steam calls on a compatibility tool.
 public struct Launcher: Sendable {
     public let layout: ToolLayout
@@ -9,6 +18,7 @@ public struct Launcher: Sendable {
     public let preflight: Preflight
     public let settings: GameSettingsStore
     public let steam: SteamLocation
+    let stopRequested = StopFlag()
 
     public init(layout: ToolLayout, runner: any ProcessRunner = SystemProcessRunner(), log: LauncherLog = .standard,
                 notifier: any Notifier = AppleScriptNotifier(), preflight: Preflight = Preflight(),
@@ -79,14 +89,21 @@ public struct Launcher: Sendable {
                     ? ShaderPrecache(context: context, layout: layout) : nil
                 if let precache, precache.needsReplay {
                     notifier.post(title: "MacNeutron", message: "Preparing shaders for this game (DXMT or macOS changed)")
-                    for line in precache.replay(layout: layout, runner: runner, environment: env) { log.append(line) }
-                    precache.writeStamp()
+                    let lines = precache.replay(layout: layout, runner: runner, environment: env,
+                                                stopped: { stopRequested.isSet })
+                    for line in lines { log.append(line) }
+                    if !stopRequested.isSet { precache.writeStamp() }
                 }
-                status = try runGame(request, env, gameLog, throughSteam: steamBridge)
-                // Keep Steam's "running" state until every process in the prefix is gone
-                // (covers launchers that start the real game and exit).
-                _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
-                precache?.writeStampIfMissing()
+                if stopRequested.isSet {
+                    // Steam's Stop during the replay: start nothing; with the stamp unchanged, the next launch replays.
+                    status = 128 + SIGTERM
+                } else {
+                    status = try runGame(request, env, gameLog, throughSteam: steamBridge)
+                    // Keep Steam's "running" state until every process in the prefix is gone
+                    // (covers launchers that start the real game and exit).
+                    _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
+                    precache?.writeStampIfMissing()
+                }
             case .getcompatpath, .getnativepath:
                 try prefix.prepare(backend: backend, environment: env)
                 let flag = request.verb == .getcompatpath ? "-w" : "-u"
@@ -104,6 +121,7 @@ public struct Launcher: Sendable {
 
     /// Steam's Stop button sends SIGTERM: kill every Wine process in the game's prefix.
     public func terminate(environment: [String: String]) {
+        stopRequested.set()
         guard let context = try? CompatContext(environment: environment) else { return }
         var env = environment
         env["WINEPREFIX"] = context.prefix.path(percentEncoded: false)

@@ -16,7 +16,8 @@ private struct PrecacheFixture {
 
 /// A launcher whose tool folder has our DXMT with Direct3D 12 and the replayer. The fake dxmt-replay.exe writes a
 /// result line to its output and returns `replayStatus`.
-private func makePrecacheFixture(replayStatus: Int32 = 0) throws -> PrecacheFixture {
+private func makePrecacheFixture(replayStatus: Int32 = 0,
+                                 onReplay: (@Sendable (FakeRunner.Call) -> Void)? = nil) throws -> PrecacheFixture {
     let layout = try makeToolLayout()
     try write("ours d3d12", to: layout.dxmtD3D12)
     try write("ours replay", to: layout.dxmtReplay)
@@ -28,6 +29,7 @@ private func makePrecacheFixture(replayStatus: Int32 = 0) throws -> PrecacheFixt
         if call.arguments.first?.hasSuffix("dxmt-replay.exe") == true, let output = call.output {
             try? "replay progress 2/2\r\nreplay: 2 pipelines (1 graphics, 1 compute), 2 created, 0 failed, 0 bad records, 5 ms\r\n"
                 .write(to: output, atomically: true, encoding: .utf8)
+            onReplay?(call)
             return replayStatus
         }
         return 0
@@ -131,3 +133,19 @@ private let game = ["waitforexitandrun", "/g/Game.exe"]
     #expect(f.runner.calls.first { $0.arguments == ["/g/Game.exe"] }?.environment["DXMT_PIPELINE_RECORD"] == nil)
     #expect(f.stamp == "old 1A2\n")
 }
+
+@Test func stoppingDuringTheReplayStartsNoGame() throws {
+    final class Box: @unchecked Sendable { var launcher: Launcher? }
+    let box = Box()
+    // Steam's Stop (SIGTERM) arrives while the first recording replays.
+    let f = try makePrecacheFixture { call in box.launcher?.terminate(environment: call.environment) }
+    box.launcher = f.launcher
+    try write("rec", to: f.folder.appending(path: "A.exe.pipelines"))
+    try write("rec", to: f.folder.appending(path: "B.exe.pipelines"))
+    try write("old 1A2\n", to: f.folder.appending(path: "replayed"))
+    _ = f.launcher.launch(game, environment: f.env)
+    #expect(f.replays.count == 1)
+    #expect(!f.runner.calls.contains { $0.arguments == ["/g/Game.exe"] })
+    #expect(f.stamp == "old 1A2\n")  // the next launch prepares the shaders again
+}
+

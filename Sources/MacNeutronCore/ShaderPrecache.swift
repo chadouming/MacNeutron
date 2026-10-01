@@ -49,19 +49,24 @@ public struct ShaderPrecache: Sendable {
     }
 
     /// Runs `dxmt-replay.exe` on every recording in the game's environment, minus recording; one log line each.
-    public func replay(layout: ToolLayout, runner: any ProcessRunner, environment: [String: String]) -> [String] {
+    /// Stops before the next recording once `stopped` (Steam's Stop) says so.
+    public func replay(layout: ToolLayout, runner: any ProcessRunner, environment: [String: String],
+                       stopped: () -> Bool = { false }) -> [String] {
         var env = environment
         env.removeValue(forKey: "DXMT_PIPELINE_RECORD")
         let output = folder.appending(path: "replay.log")
-        return recordings.map { recording in
+        var lines: [String] = []
+        for recording in recordings {
+            if stopped() { break }
             try? FileManager.default.removeItem(at: output)
             let status = (try? runner.run(layout.wine, [layout.dxmtReplay.path(percentEncoded: false),
                                                         "Z:" + recording.path(percentEncoded: false)],
                                           environment: env, output: output)) ?? -1
             let text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""
             let result = text.split(whereSeparator: \.isNewline).last { $0.hasPrefix("replay: ") }
-            return "precache: \(recording.lastPathComponent) exit=\(status) \(result.map(String.init) ?? "no result")"
+            lines.append("precache: \(recording.lastPathComponent) exit=\(status) \(result.map(String.init) ?? "no result")")
         }
+        return lines
     }
 
     /// `kern.osversion`, the macOS build (e.g. 25A354): Metal's compiler changes with it.
