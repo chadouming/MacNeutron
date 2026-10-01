@@ -495,6 +495,59 @@ static void NoDraw() {
 }
 
 
+// Two queues. Queue 1 renders T0 (heavy) and signals f = 1; queue 2 waits for it, samples T0 into T1 (+1), reads T1
+// and signals done = 1; queue 1 waits for that, reads T1 again and signals f = 2, which the CPU waits for. With one
+// open command buffer per queue (spec §3.10) nothing may wait on uncommitted work: no deadlock, 257 257. DXMT_STATS,
+// this mode alone: 3 command buffers committed (Execute+Signal, Wait+Execute+Signal, Wait+Execute+Signal).
+static void Queues() {
+    ID3D12CommandQueue *q2;
+    ID3D12CommandAllocator *a2, *a3;
+    ID3D12GraphicsCommandList *l2, *l3;
+    ID3D12Fence *f, *done;
+    D3D12_COMMAND_QUEUE_DESC qd = {D3D12_COMMAND_LIST_TYPE_DIRECT};
+    CHECK(g->device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void **)&q2));
+    CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&a2));
+    CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&a3));
+    CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a2, nullptr, __uuidof(ID3D12GraphicsCommandList), (void **)&l2));
+    CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a3, nullptr, __uuidof(ID3D12GraphicsCommandList), (void **)&l3));
+    CHECK(g->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&f));
+    CHECK(g->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&done));
+    auto *l1 = g->list;
+    ID3D12CommandList *one[1];
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    CHECK(l1->Close());
+    one[0] = l1;
+    g->queue->ExecuteCommandLists(1, one);
+    CHECK(g->queue->Signal(f, 1));
+    g->list = l2;
+    g->Barrier(T[0].texture, RT, PSR);
+    Pass(T[1], sample, 1, 1, &T[0]);
+    g->Barrier(T[0].texture, PSR, RT);
+    Read(T[1], RT, 512, 512, 0);
+    CHECK(l2->Close());
+    one[0] = l2;
+    CHECK(q2->Wait(f, 1));
+    q2->ExecuteCommandLists(1, one);
+    CHECK(q2->Signal(done, 1));
+    g->list = l3;
+    Read(T[1], RT, 512, 512, 1);
+    CHECK(l3->Close());
+    one[0] = l3;
+    CHECK(g->queue->Wait(done, 1));
+    g->queue->ExecuteCommandLists(1, one);
+    CHECK(g->queue->Signal(f, 2));
+    g->list = l1;
+    HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    CHECK(f->SetEventOnCompletion(2, ev));
+    if (WaitForSingleObject(ev, 10000) != WAIT_OBJECT_0) { printf("hazard queues timeout\n"); exit(1); }
+    CloseHandle(ev);
+    CHECK(g->allocator->Reset());
+    CHECK(l1->Reset(g->allocator, nullptr));
+    printf("hazard queues %g %g\n", Texel(0), Texel(1));
+}
+
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -539,7 +592,7 @@ int main(int argc, char **argv) {
         {"indirect", Indirect},      {"aliasing", Aliasing},      {"occlusion", Occlusion},
         {"independent", Independent}, {"precise", Precise},       {"mid-pass", MidPass}, {"twice", Twice},
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
-        {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}};
+        {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
