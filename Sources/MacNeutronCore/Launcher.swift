@@ -90,9 +90,13 @@ public struct Launcher: Sendable {
                 if let precache, precache.needsReplay {
                     notifier.post(title: "MacNeutron", message: "Preparing shaders for this game (DXMT or macOS changed)")
                     let lines = precache.replay(layout: layout, runner: runner, environment: env,
-                                                stopped: { stopRequested.isSet })
+                                                stopped: { stopRequested.isSet },
+                                                progress: { [notifier] in notifier.post(title: "MacNeutron", message: $0) })
                     for line in lines { log.append(line) }
-                    if !stopRequested.isSet { precache.writeStamp() }
+                    if !stopRequested.isSet {
+                        precache.writeStamp()
+                        notifier.post(title: "MacNeutron", message: "Shaders ready, starting the game")
+                    }
                 }
                 if stopRequested.isSet {
                     // Steam's Stop during the replay: start nothing; with the stamp unchanged, the next launch replays.

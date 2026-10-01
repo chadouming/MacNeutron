@@ -98,7 +98,7 @@ private let game = ["waitforexitandrun", "/g/Game.exe"]
     let gameRun = try #require(calls.firstIndex { $0.arguments == ["/g/Game.exe"] })
     #expect(lastReplay < gameRun)
     #expect(f.stamp == f.builds + "\n")
-    #expect(f.notifier.posted == ["Preparing shaders for this game (DXMT or macOS changed)"])
+    #expect(f.notifier.posted == ["Preparing shaders for this game (DXMT or macOS changed)", "Shaders ready, starting the game"])
     #expect(f.launcherLog.contains(
         "precache: A.exe.pipelines exit=0 replay: 2 pipelines (1 graphics, 1 compute), 2 created, 0 failed, 0 bad records, 5 ms"))
 }
@@ -147,5 +147,35 @@ private let game = ["waitforexitandrun", "/g/Game.exe"]
     #expect(f.replays.count == 1)
     #expect(!f.runner.calls.contains { $0.arguments == ["/g/Game.exe"] })
     #expect(f.stamp == "old 1A2\n")  // the next launch prepares the shaders again
+}
+
+@Test func theReplayReportsItsProgressByQuarters() throws {
+    final class Messages: @unchecked Sendable {
+        private let lock = NSLock()
+        private var list: [String] = []
+        var all: [String] { lock.withLock { list } }
+        func add(_ message: String) { lock.withLock { list.append(message) } }
+    }
+    let layout = try makeToolLayout()
+    let data = try makeTempDir().appending(path: "compatdata/42", directoryHint: .isDirectory)
+    let precache = ShaderPrecache(context: try CompatContext(environment: steamEnvironment(dataPath: data, appID: "42")),
+                                  layout: layout, osBuild: "26A1")
+    try write("rec", to: precache.folder.appending(path: "Game.exe.pipelines"))
+    // A replay of 20 pipelines that prints its progress as it goes, as dxmt-replay.exe does.
+    let runner = FakeRunner { call in
+        guard let output = call.output else { return 0 }
+        for text in ["replay progress 5/20\r\n", "replay progress 10/20\r\n", "replay progress 15/20\r\n",
+                     "replay progress 20/20\r\nreplay: 20 pipelines (20 graphics, 0 compute), 20 created, 0 failed, 0 bad records, 9 ms\r\n"] {
+            try? text.write(to: output, atomically: true, encoding: .utf8)
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return 0
+    }
+    let messages = Messages()
+    let lines = precache.replay(layout: layout, runner: runner, environment: [:], progress: { messages.add($0) },
+                                pollInterval: 0.05)
+    #expect(messages.all == ["Preparing shaders: 25% (5 of 20)", "Preparing shaders: 50% (10 of 20)",
+                             "Preparing shaders: 75% (15 of 20)"])
+    #expect(lines == ["precache: Game.exe.pipelines exit=0 replay: 20 pipelines (20 graphics, 0 compute), 20 created, 0 failed, 0 bad records, 9 ms"])
 }
 

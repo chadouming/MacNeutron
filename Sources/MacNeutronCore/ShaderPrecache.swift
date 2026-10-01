@@ -49,9 +49,11 @@ public struct ShaderPrecache: Sendable {
     }
 
     /// Runs `dxmt-replay.exe` on every recording in the game's environment, minus recording; one log line each.
-    /// Stops before the next recording once `stopped` (Steam's Stop) says so.
+    /// Stops before the next recording once `stopped` (Steam's Stop) says so. While a replay runs, `progress` gets
+    /// "Preparing shaders: 25% (n of total)" at each quarter, from the replayer's own progress lines.
     public func replay(layout: ToolLayout, runner: any ProcessRunner, environment: [String: String],
-                       stopped: () -> Bool = { false }) -> [String] {
+                       stopped: () -> Bool = { false }, progress: @escaping @Sendable (String) -> Void = { _ in },
+                       pollInterval: TimeInterval = 1) -> [String] {
         var env = environment
         env.removeValue(forKey: "DXMT_PIPELINE_RECORD")
         let output = folder.appending(path: "replay.log")
@@ -59,6 +61,22 @@ public struct ShaderPrecache: Sendable {
         for recording in recordings {
             if stopped() { break }
             try? FileManager.default.removeItem(at: output)
+            let done = StopFlag()
+            let poller = Thread {
+                var quarter = 0
+                while !done.isSet {
+                    Thread.sleep(forTimeInterval: pollInterval)
+                    // ponytail: rereads the whole output each poll; it stays a few hundred bytes (one line per 10%).
+                    guard let (n, total) = Self.lastProgress(in: output), total > 0 else { continue }
+                    let reached = n * 4 / total
+                    if reached > quarter && reached < 4 {
+                        quarter = reached
+                        progress("Preparing shaders: \(reached * 25)% (\(n) of \(total))")
+                    }
+                }
+            }
+            poller.start()
+            defer { done.set() }
             let status = (try? runner.run(layout.wine, [layout.dxmtReplay.path(percentEncoded: false),
                                                         "Z:" + recording.path(percentEncoded: false)],
                                           environment: env, output: output)) ?? -1
@@ -67,6 +85,16 @@ public struct ShaderPrecache: Sendable {
             lines.append("precache: \(recording.lastPathComponent) exit=\(status) \(result.map(String.init) ?? "no result")")
         }
         return lines
+    }
+
+    /// The last `replay progress <n>/<total>` line dxmt-replay.exe wrote.
+    static func lastProgress(in output: URL) -> (Int, Int)? {
+        guard let text = try? String(contentsOf: output, encoding: .utf8),
+              let line = text.split(whereSeparator: \.isNewline).last(where: { $0.hasPrefix("replay progress ") })
+        else { return nil }
+        let parts = line.dropFirst("replay progress ".count).split(separator: "/")
+        guard parts.count == 2, let n = Int(parts[0]), let total = Int(parts[1]) else { return nil }
+        return (n, total)
     }
 
     /// `kern.osversion`, the macOS build (e.g. 25A354): Metal's compiler changes with it.
