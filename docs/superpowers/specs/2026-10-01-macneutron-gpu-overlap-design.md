@@ -1,17 +1,19 @@
 # MacNeutron — DXMT Fork, Sub-project 4 (second slice): GPU Work Overlap and Pass Structure
 
 - **Date:** 2026-10-01
-- **Status:** Draft for review
+- **Status:** M1 and M2 done (`docs/testing/acceptance-dxmt-gpu-overlap.md`); amended 2026-10-01 after their measurements with A (cheap waits) and B (fewer command buffers), and two M3 details
 - **Builds on:**
   - `2026-09-28-macneutron-dxmt-fork-design.md`: roadmap §2 item 4 (performance); `make dxmt-check`, capture mode.
   - `2026-09-30-macneutron-pipeline-cache-design.md`: the first performance slice (shader pre-caching), and `DXMT_STATS`, the pass labels and the measurements below.
 - **Scope:** the GPU side of our D3D12 path, in this order (biggest gain first):
   - **M1, barrier groups:** Metal encoders stop waiting on every earlier encoder; within a command list, work between two `ResourceBarrier` calls may overlap.
   - **M2, precise transitions:** a barrier that ends a render target, depth, copy or resolve write makes the next encoder wait only on that resource's writers.
+  - **A, cheap waits:** an encoder after a join waits on one fence, not on everything the join waited on, and only on the newest writer of each resource it writes.
+  - **B, fewer command buffers:** `ExecuteCommandLists` and queue `Wait` encode into an open Metal command buffer; `Signal` and `Present` commit it.
   - **M3, unsplit render passes:** the base pass no longer breaks into several Metal render passes at Unreal's per-command-list timestamp blits.
   - **M4, folded clears:** a clear-only pass becomes the next render pass's load action.
   - **M5, idle gaps:** the GPU idle time left after M1–M4, traced to its causes, then fixed or explained.
-  - **Out:** CPU-side work (the submission thread, Signal batching), anything Mac-model specific, D3D11, and any change to the game or its settings.
+  - **Out:** faster encoding on the CPU (one winemetal call per `ExecuteCommandLists`: deferred, the GPU waits for the CPU 0.17 ms per frame, §2), anything Mac-model specific, D3D11, and any change to the game or its settings.
 
 ## 1. Goal
 
@@ -28,6 +30,7 @@ SMITE 2 (and other D3D12 games) render more frames per second on our DXMT when t
 | Unknowns | Anything not provably safe is a full join (wait on all earlier work): UAV and aliasing barriers, transitions out of the UAV state or into a write state, unknown resources, command-list starts, GPU query resolves |
 | Off switch | `DXMT_D3D12_SERIAL=1` keeps today's single strict chain; F9 dumps and pixel history always use it |
 | Portability | No core, GPU-model or core-count assumptions: everything follows from what the game recorded |
+| Order after M1 and M2 (amendment) | A → B → M3 → M4 → M5, each measured in SMITE 2 before the next; faster CPU encoding deferred |
 
 ## 2. Evidence (2026-10-01; fork `b31e856`, M5 Pro, SMITE 2 practice match, `DXMT_D3D12_SM6=1`)
 
@@ -44,6 +47,16 @@ SMITE 2 (and other D3D12 games) render more frames per second on our DXMT when t
 **Why nothing overlaps.** `d3d12_command_queue.cpp` makes every Metal encoder `waitForFence(fence_)` (render passes before the vertex stage) and `updateFence(fence_)` after it (render passes after the fragment stage), one fence for the whole queue. `ResourceBarrier` records nothing (it only counts, for `DXMT_STATS`).
 
 **The frame's shape** (F9 dumps `f9-5`, `f9-6`): about 200 encoders and 68 command lists per frame; about two-thirds of encoder boundaries fall inside a command list. `DXMT_STATS` (2026-09-30): 139 in-list encoder boundaries per frame, 46 of them with no barrier between the two encoders; 447 barriers per frame. In the passes list, the base pass (7 color targets + depth, 1728×1120) splits into about 6 Metal render passes at command-list boundaries, each separated by Unreal's timestamp blits ("null blit blit null blit"); there are about 16 clear-only passes per frame.
+
+**After M1 and M2** (Metal traces of the acceptance runs; GPU idle per frame by where it falls):
+
+| GPU idle per frame | M2 with overlap | M2 strict (`DXMT_D3D12_SERIAL=1`) |
+|---|---|---|
+| Between encoders inside one command buffer | 2.92 ms | 2.02 ms |
+| Between command buffers (committed in time) | 0.86 ms | 0.87 ms |
+| Waiting for the CPU to commit | 0.17 ms | 0.13 ms |
+
+Overlap took 1.3 ms of GPU work out of each frame and added 0.9 ms of idle between encoders: an encoder after a join re-waits on every fence the join waited on. About 32 Metal command buffers per frame, 10 with GPU work. The GPU, not the CPU, sets the pace.
 
 **Expected gains** (estimates; M1's measurement calibrates them): M1 0.5–1 ms, M2 another 1–2 ms, M3 1–2 ms, M4 about 0.3 ms per frame, so about 15 → 10–12 ms of GPU time per frame in this scene, 20–40% more frames per second while the GPU limits. Fragment work (about 6.6 ms) is the floor this slice doesn't touch.
 
@@ -98,6 +111,9 @@ Each Metal encoder updates its own fence and waits only on the fences of the enc
 
 ### 3.5 Unsplit render passes (M3)
 
+- **Within one Metal command buffer.** A Metal render pass can't span command buffers, so passes merge only among the encoders of one command buffer: one `ExecuteCommandLists` call's lists, or several calls B coalesced with no `Signal` between them.
+- **Planned before encoding.** The queue first collects the command buffer's encoders, decides which render passes merge and which timestamp-only blits fold into them, then creates the Metal encoders: a merged pass's timestamp samples are attachments it is created with. The merged pass takes the earlier pass's waits; positions of the later pass's list that depended on the later pass resolve to the merged pass's fence.
+
 - **Timestamp-only blits:** `EndTimestamp` marks the blit encoder it opens for a lone timestamp (its only command is the 4-byte fill that keeps Metal from dropping it) as timestamp-only.
 - **Merge rule:** the queue encodes two render-pass encoders as one Metal render pass when everything between them is command-list boundaries and timestamp-only blits, and:
   - their attachments are identical (same textures, levels, slices and planes) and the later one loads every attachment;
@@ -114,9 +130,20 @@ A clear-only render pass followed, in the same command list and with no barrier 
 
 With M1–M4 in place, a Metal trace of the SMITE scene lists the GPU idle intervals with the encoder labels on either side. Each cause found is fixed in this slice if it is in our encoding, or recorded with its evidence if it is not (for example presentation pacing).
 
+### 3.9 Cheap waits (A)
+
+- **A join's early fence.** A join render pass also updates a second fence, from the ring, after its first stage (vertex, or pre-raster for geometry-shader pipelines): by then every fence it waited on before that stage has been reached. The encoders of its group wait on that fence instead of on the join's whole wait list. A join's waits are always before its first stage (a join clear pass waits before the vertex stage; it has no vertex work). A compute or blit join has no earlier stage: its group waits on its own fence.
+- **Newest writer only.** An encoder's dependency list names, per resource, only the newest earlier encoder of its group that writes it (or wrote it before the transition that orders it): that writer itself waited on the older ones. An encoder that may write anything stays a dependency of everything after it in its group.
+
+### 3.10 Fewer command buffers (B)
+
+- The queue keeps one open Metal command buffer. `ExecuteCommandLists` encodes into it (opening one if none is open) and doesn't commit; a queue `Wait` encodes its event wait into it and doesn't commit either.
+- `Signal` encodes its event signal (or its deferred CPU signal, behind timestamps) into the open command buffer and commits it; `Present` does the same with its present.
+- Nothing can wait on uncommitted work: D3D12 lets the CPU and other queues wait only on fences, and every fence signal commits. A queue's destruction commits what is open.
+
 ### 3.8 Counters
 
-`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero.
+`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero. A adds every fence wait encoded (`encoder fence waits`); B, the Metal command buffers committed; M3, the render passes merged and the timestamp blits folded.
 
 ## 4. Error handling
 
@@ -140,6 +167,10 @@ All in `make dxmt-check`, test-first, compared with D3DMetal's pixels. Every haz
 | Occlusion | a render pass counts samples; `ResolveQueryData` on the GPU: the count |
 | Overlap happens | two independent render passes in one list: `DXMT_STATS` reports boundaries free to overlap; zero with `DXMT_D3D12_SERIAL=1` |
 | M2 precision | a barrier transitioning one render target: the next encoder's wait is a dependency list naming only that target's writer |
+| A: one wait | a join then two encoders in its group: each waits on one fence (`encoder fence waits`); every hazard mode unchanged |
+| A: newest writer | three passes into one target, no barrier: the third waits on the second alone |
+| B: one command buffer | Wait, ExecuteCommandLists, Signal: one Metal command buffer committed |
+| B: queues | a second queue waits on a fence the first signals mid-stream, then the CPU waits: no deadlock, right values |
 | M3 | the same-target test with a timestamp between passes: one Metal render pass in the F9 passes list, pixels unchanged |
 | M4 | a clear then a draw to the same target: no clear-only pass in the passes list, pixels unchanged |
 
