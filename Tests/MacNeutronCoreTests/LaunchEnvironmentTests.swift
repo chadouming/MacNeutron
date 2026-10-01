@@ -47,3 +47,16 @@ private let layout = ToolLayout(root: URL(filePath: "/nonexistent/", directoryHi
                                       layout: layout, logging: false)
     #expect(env["WINEDLLOVERRIDES"] == "dxgi=n,b;d3d10core=n,b;d3d11=n,b;d3d12=b;d3d9=b;d3d10=b")
 }
+
+@Test func recordsPipelinesOnlyForOurD3D12() throws {
+    let ours = try makeToolLayout()
+    try write("ours d3d12", to: ours.dxmtD3D12)
+    func record(_ base: [String: String], _ backend: GraphicsBackend, _ layout: ToolLayout) -> String? {
+        LaunchEnvironment.build(base: base, context: context, backend: backend, layout: layout, logging: false)["DXMT_PIPELINE_RECORD"]
+    }
+    #expect(record([:], .dxmt, ours) == "/c/42/dxmt-pipelines")
+    #expect(record(["MACNEUTRON_PRECACHE": "0"], .dxmt, ours) == nil)
+    #expect(record([:], .d3dmetal, ours) == nil)
+    #expect(record([:], .dxmt, layout) == nil)  // the runtime's DXMT 0.80: no d3d12.dll
+    #expect(record(["DXMT_PIPELINE_RECORD": "/mine"], .dxmt, ours) == "/mine")
+}

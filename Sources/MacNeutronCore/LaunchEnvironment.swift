@@ -17,6 +17,9 @@ public enum LaunchEnvironment {
         if base["MACNEUTRON_NO_MSYNC"] != "1", base["WINEMSYNC"] == nil {
             env["WINEMSYNC"] = "1"
         }
+        if ShaderPrecache.enabled(backend: backend, layout: layout, environment: base), base["DXMT_PIPELINE_RECORD"] == nil {
+            env["DXMT_PIPELINE_RECORD"] = ShaderPrecache.folder(for: context).path(percentEncoded: false)
+        }
         return env
     }
 

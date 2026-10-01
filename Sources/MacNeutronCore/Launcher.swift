@@ -74,10 +74,19 @@ public struct Launcher: Sendable {
                 try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
                 if !steamBridge { try prefix.removeSteamBridge() }
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
+                // Shader pre-caching: after a DXMT or macOS update, rebuild the recorded pipelines before the game.
+                let precache = ShaderPrecache.enabled(backend: backend, layout: layout, environment: env)
+                    ? ShaderPrecache(context: context, layout: layout) : nil
+                if let precache, precache.needsReplay {
+                    notifier.post(title: "MacNeutron", message: "Preparing shaders for this game (DXMT or macOS changed)")
+                    for line in precache.replay(layout: layout, runner: runner, environment: env) { log.append(line) }
+                    precache.writeStamp()
+                }
                 status = try runGame(request, env, gameLog, throughSteam: steamBridge)
                 // Keep Steam's "running" state until every process in the prefix is gone
                 // (covers launchers that start the real game and exit).
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
+                precache?.writeStampIfMissing()
             case .getcompatpath, .getnativepath:
                 try prefix.prepare(backend: backend, environment: env)
                 let flag = request.verb == .getcompatpath ? "-w" : "-u"

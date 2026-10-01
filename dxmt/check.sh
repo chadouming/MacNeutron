@@ -415,6 +415,22 @@ expect "a recorded pipeline that no longer builds is counted, not fatal" "$(repl
 printf 'nope' > "$WORK/foreign.pipelines"
 expect "a file that isn't a recording is refused" "$(replay foreign "$WORK/foreign.pipelines")" "replay: not a recording"
 unset CACHE
+# 10. The launcher (spec §3.7): recordings land in the compat folder and the first session stamps the builds; with
+#     another build in the stamp, the next launch replays every recording before the game, which then only hits.
+#     (d3d12_cache's recording there holds every mode section 7 ran: a, rt, layout and root.)
+P="$WORK/compat/ours/dxmt-pipelines"
+expect "the launcher records into the game's compat folder" "$([ -s "$P/d3d12_cache.exe.pipelines" ] && echo yes || echo no)" yes
+expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "$(cat "$WORK/ours/dxmt-version")"
+echo "old build" > "$P/replayed"
+LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; before=$(cat "$LLOG" 2> /dev/null | wc -l)
+CACHE="$WORK/cache/e2e"
+cachetest e2e a
+unset CACHE
+expect "a changed build replays d3d12_cache's recording before the game" \
+  "$(tail -n +$((before + 1)) "$LLOG" | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
+expect "then the game only hits" "$(counters e2e)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
+expect "and draws as D3DMetal" "$(drawn e2e)" "$(drawn cache-ref-a)"
+expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "$(cat "$WORK/ours/dxmt-version")"
 # AMD's FSR 3 swapchain proxy, which SMITE 2 (and other Unreal games with the FSR 3 plugin) create their swapchain
 # through: read from the game's install when it's there, never copied.
 FFX="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Hemingway/Binaries/Win64/amd_fidelityfx_dx12.dll"
