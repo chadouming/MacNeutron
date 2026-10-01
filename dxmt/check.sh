@@ -339,6 +339,28 @@ expect "a warm geometry-shader pipeline only hits" \
   "$(counters trigs-warm | grep -cE 'functions [1-9][0-9]* hit 0 missed, reflections [1-9][0-9]* hit 0 missed$' || true)" 1
 expect "and draws as D3DMetal" "$(same_pixels "$WORK/trigs-warm.txt" "$WORK/trigs-ref.txt")" yes
 unset CACHE
+# 8. Recording (spec §3.5, §5.2 runs 6-7): each pipeline once, a torn tail cut and re-recorded, a foreign file
+#    started over, and an unwritable folder that changes nothing drawn.
+REC="$WORK/rec"; f="$REC/d3d12_cache.exe.pipelines"
+export DXMT_PIPELINE_RECORD="$REC"
+CACHE="$WORK/cache/rec"
+cachetest rec6 a
+expect "run 6: the pipelines are recorded" "$(head -c 8 "$f" 2> /dev/null)" DXMTPRC1
+full=$(wc -c < "$f" | tr -d ' ')
+cachetest rec7 a
+expect "run 7: a second run records nothing new" "$(wc -c < "$f" | tr -d ' ')" "$full"
+python3 -c "import os, sys; os.truncate(sys.argv[1], os.path.getsize(sys.argv[1]) - 10)" "$f"
+cachetest rec-torn a
+expect "a torn tail is cut and its pipeline recorded again" "$(wc -c < "$f" | tr -d ' ')" "$full"
+expect "recording changes nothing drawn" "$(drawn rec-torn)" "$(drawn cache-ref-a)"
+printf 'not a recording' > "$f"
+cachetest rec-foreign a
+expect "a foreign file is started over" "$(head -c 8 "$f"):$(wc -c < "$f" | tr -d ' ')" "DXMTPRC1:$full"
+export DXMT_PIPELINE_RECORD="/nonexistent/macneutron rec"
+cachetest rec-unwritable a
+expect "an unwritable recording folder changes nothing drawn" "$(drawn rec-unwritable)" "$(drawn cache-ref-a)"
+expect "and says once that recording is off" "$(grep -c 'd3d12 pipeline recording off' "$WORK/rec-unwritable.txt" || true)" 1
+unset DXMT_PIPELINE_RECORD CACHE
 # AMD's FSR 3 swapchain proxy, which SMITE 2 (and other Unreal games with the FSR 3 plugin) create their swapchain
 # through: read from the game's install when it's there, never copied.
 FFX="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Hemingway/Binaries/Win64/amd_fidelityfx_dx12.dll"
