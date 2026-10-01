@@ -3,8 +3,9 @@
 #   python3 dxmt/tools/gpu-trace.py <pid> [seconds]         records <seconds> (default 5) of the process, then reports
 #   python3 dxmt/tools/gpu-trace.py <file.trace>            reports an existing trace
 #   python3 dxmt/tools/gpu-trace.py <PEX_Timeline_*.csv>    Unreal's frame times: median and 90th percentile
-# A trace report: frame period and GPU busy and idle time per frame (medians), and each GPU channel's share of the
-# window with their sum against their union. A sum above the union is work running side by side.
+# A trace report: frame period and GPU busy and idle time per frame (medians), and each GPU channel's busy share of
+# the window with its intervals added up (more: passes of that channel side by side), then the channels' sum against
+# their union (more: different channels side by side).
 import collections, csv, os, statistics as st, subprocess, sys, tempfile, xml.etree.ElementTree as ET
 
 
@@ -60,10 +61,13 @@ def trace(path):
     idle = [p - u for p, u in zip(period, busy)]
     print(f"frames {len(frames)}, frame period median {st.median(period):.2f} ms ({1000 / st.median(period):.0f} fps)")
     print(f"GPU busy per frame median {st.median(busy):.2f} ms, idle {st.median(idle):.2f} ms")
-    shares = {ch: 100 * union([(a, b) for a, b, c, _ in mine if c == ch]) / window
-              for ch in sorted({c for _, _, c, _ in mine})}
-    print('channels ' + ', '.join(f"{ch} {s:.1f}%" for ch, s in shares.items()) +
-          f"; sum {sum(shares.values()):.1f}%, union {100 * union([(a, b) for a, b, *_ in mine]) / window:.1f}%")
+    # Busy share of the window per channel, and its intervals added up: more than the busy share is passes of that
+    # channel running side by side (render passes overlapping each other show as Fragment and Vertex intervals).
+    channels = sorted({c for _, _, c, _ in mine})
+    busy_share = {ch: 100 * union([(a, b) for a, b, c, _ in mine if c == ch]) / window for ch in channels}
+    summed = {ch: 100 * sum(b - a for a, b, c, _ in mine if c == ch) / window for ch in channels}
+    print('channels ' + ', '.join(f"{ch} {busy_share[ch]:.1f}% (intervals {summed[ch]:.1f}%)" for ch in channels) +
+          f"; sum {sum(busy_share.values()):.1f}%, union {100 * union([(a, b) for a, b, *_ in mine]) / window:.1f}%")
 
 
 arg = sys.argv[1]
