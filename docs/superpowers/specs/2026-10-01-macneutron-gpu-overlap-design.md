@@ -130,9 +130,13 @@ A clear-only render pass followed, in the same command list and with no barrier 
 
 With M1–M4 in place, a Metal trace of the SMITE scene lists the GPU idle intervals with the encoder labels on either side. Each cause found is fixed in this slice if it is in our encoding, or recorded with its evidence if it is not (for example presentation pacing).
 
+### 3.8 Counters
+
+`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero. A adds every fence wait encoded (`encoder fence waits`); B, the Metal command buffers committed; M3, the render passes merged and the timestamp blits folded.
+
 ### 3.9 Cheap waits (A)
 
-- **A join's early fence.** A join render pass also updates a second fence, from the ring, after its first stage (vertex, or pre-raster for geometry-shader pipelines): by then every fence it waited on before that stage has been reached. The encoders of its group wait on that fence instead of on the join's whole wait list. A join's waits are always before its first stage (a join clear pass waits before the vertex stage; it has no vertex work). A compute or blit join has no earlier stage: its group waits on its own fence.
+- **A join's early fence.** A join render pass that draws also updates a second fence, from the ring, after its first stage (vertex, or pre-raster for geometry-shader pipelines), where it waits: by then every fence it waited on has been reached. The encoders of its group wait on that fence instead of on the join's whole wait list. Any other join (a clear, a resolve, a compute or blit encoder) has no earlier stage that proves its waits are over: its group waits on its own fence.
 - **Newest writer only.** An encoder's dependency list names, per resource, only the newest earlier encoder of its group that writes it (or wrote it before the transition that orders it): that writer itself waited on the older ones. An encoder that may write anything stays a dependency of everything after it in its group.
 
 ### 3.10 Fewer command buffers (B)
@@ -140,10 +144,6 @@ With M1–M4 in place, a Metal trace of the SMITE scene lists the GPU idle inter
 - The queue keeps one open Metal command buffer. `ExecuteCommandLists` encodes into it (opening one if none is open) and doesn't commit; a queue `Wait` encodes its event wait into it and doesn't commit either.
 - `Signal` encodes its event signal (or its deferred CPU signal, behind timestamps) into the open command buffer and commits it; `Present` does the same with its present.
 - Nothing can wait on uncommitted work: D3D12 lets the CPU and other queues wait only on fences, and every fence signal commits. A queue's destruction commits what is open.
-
-### 3.8 Counters
-
-`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero. A adds every fence wait encoded (`encoder fence waits`); B, the Metal command buffers committed; M3, the render passes merged and the timestamp blits folded.
 
 ## 4. Error handling
 
