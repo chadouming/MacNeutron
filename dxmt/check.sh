@@ -519,6 +519,14 @@ expect "independent passes are free to overlap" \
   "$(grep -cE '^  encoder boundaries free to overlap [1-9]' "$WORK/ov-stats/stats.txt" 2> /dev/null || true)" 1
 expect "and never in strict order" \
   "$(grep -c '^  encoder boundaries free to overlap' "$WORK/ov-serial/stats.txt" 2> /dev/null || true):$(grep -c '^  encoder full joins' "$WORK/ov-serial/stats.txt" 2> /dev/null || true)" "0:1"
+# M2 (GPU overlap spec §3.1): a barrier ending one render target's writes makes later work wait on that target's
+# writer alone. d3d12_hazards precise: the sampling pass waits on T0's pass (not T1's), the read on T0's and T2's.
+rm -rf "$WORK/precise-stats"; export DXMT_DXIL_DUMP="$WORK/precise-stats" DXMT_STATS=1
+run ours precise-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" precise
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "a transition waits on the transitioned resource's writers alone" \
+  "$(grep -oE '(encoders with a dependency list|encoder dependency waits) [0-9]+' "$WORK/precise-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
+  "encoder dependency waits 3;encoders with a dependency list 2;"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
