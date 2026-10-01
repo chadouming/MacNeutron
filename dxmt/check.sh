@@ -332,6 +332,15 @@ sqlite3 "$db" "CREATE TABLE cache_1 (key BLOB PRIMARY KEY, value BLOB NOT NULL);
 cachetest cache5 a
 expect "D3D12 drops another build's table too" "$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE name = 'cache_1'")" 0
 expect "and still draws as D3DMetal" "$(drawn cache5)" "$(drawn cache-ref-a)"
+# A probed run (DXMT_PROBE rewrites a pixel shader's output for frame debugging) neither reads nor stores translated
+# functions: stored, they would draw a later normal run in the probe's colours.
+CACHE="$WORK/cache/probe"
+export DXMT_PROBE=0000000000000000:-,-,-
+cachetest probe1 a
+unset DXMT_PROBE
+cachetest probe2 a
+expect "a probed run stores no translated function" "$(counters probe2)" \
+  "d3d12 shader cache: functions 0 hit 3 missed, reflections 3 hit 0 missed"
 CACHE="$WORK/cache/gs"
 run ours trigs-cold dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
 run ours trigs-warm dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
