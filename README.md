@@ -58,6 +58,8 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 | `/usr/bin/env MACNEUTRON_NO_MSYNC=1 %command%` | Turn off msync |
 | `/usr/bin/env MACNEUTRON_NO_STEAM_BRIDGE=1 %command%` | Start the game without the Steam bridge (the game then can't reach Steam) |
 | `/usr/bin/env MACNEUTRON_NO_METALFX=1 %command%` | Don't upscale with MetalFX (macOS then stretches smaller images with its nearest-neighbour filter) |
+| `/usr/bin/env DXMT_D3D12_SM6=1 %command%` | On DXMT, report the Direct3D 12 features Shader Model 6 games check for (Unreal Engine 5 games need it) |
+| `/usr/bin/env MACNEUTRON_PRECACHE=0 %command%` | Don't record the game's pipelines or rebuild them after updates (shader pre-caching) |
 
 ## Graphics
 
@@ -66,14 +68,25 @@ Games use DXMT by default, an open-source Direct3D → Metal translator. MacNeut
 in `MacNeutron.app/Contents/Resources/DXMT`, and the fork commit is in the tool folder's `dxmt-version`. The fork's
 changes are AI-assisted and never go to DXMT upstream, per its contribution policy.
 
-DXMT's Direct3D 12 is early. Games with Shader Model 6 (DXIL) shaders, which covers most Unreal Engine 5 and recent
-titles, don't start on it yet. For those, import GPTK and set **Graphics: D3DMetal** for the game in the Games window
-(or use `/usr/bin/env MACNEUTRON_GRAPHICS=d3dmetal %command%`).
+DXMT's Direct3D 12 is early, but it translates Shader Model 6 (DXIL) shaders: SMITE 2 (Unreal Engine 5) plays on it.
+Unreal Engine 5 games check for Shader Model 6 features before they start; launch them with
+`/usr/bin/env DXMT_D3D12_SM6=1 %command%`. For a game that doesn't run on DXMT yet, import GPTK and set
+**Graphics: D3DMetal** for it in the Games window (or use `/usr/bin/env MACNEUTRON_GRAPHICS=d3dmetal %command%`).
+
+**Shader pre-caching**, as Steam does for Vulkan games. DXMT keeps every shader it translates in a cache, so a
+Direct3D 12 game translates each shader once. MacNeutron also records every pipeline the game creates, in
+`dxmt-pipelines` in the game's Steam compat folder (`~/Library/Application Support/Steam/steamapps/compatdata/<appid>`).
+After an update of MacNeutron's DXMT or of macOS, the launcher rebuilds them before the game starts, and a
+notification says so. Troubleshooting:
+
+- `DXMT_SHADER_CACHE=0` turns the translation cache off, and `MACNEUTRON_PRECACHE=0` turns recording and rebuilding
+  off.
+- Deleting `$(getconf DARWIN_USER_CACHE_DIR)dxmt/<game exe>/shaders_*.db` clears the cache.
+- Deleting the `dxmt-pipelines` folder clears the recordings.
 
 For DXMT development, `/usr/bin/env DXMT_DXIL_DUMP=/Users/<you>/dxil %command%` saves each DXIL shader a game creates
 into that folder. Give an absolute path: Steam runs launch options without a shell, so `~` and `$HOME` aren't expanded.
-While it's set, DXMT reports the Direct3D 12 features that Shader Model 6 games check for, so they get as far as
-creating their shaders. They can't render that way; it's for capture runs only.
+While it's set, DXMT also reports the Shader Model 6 features, as `DXMT_D3D12_SM6=1` does.
 
 ## Steam API
 
