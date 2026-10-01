@@ -32,8 +32,10 @@ cp -cR "$WORK/stock" "$WORK/ours"
 # run <stock|ours> <name> <backend> <exe> [args...]  →  output in $WORK/<name>.txt
 run() {
   tool=$1 name=$2 backend=$3; shift 3
+  # A fresh translation cache folder per run unless CACHE names a shared one: a dirty build shares its
+  # `git describe`, so no run may read entries an earlier build left.
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/$tool" SteamAppId=0 MACNEUTRON_GRAPHICS="$backend" \
-      MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 \
+      MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 DXMT_SHADER_CACHE_PATH="${CACHE:-$WORK/cache/$name}" \
       "$WORK/$tool/bin/macneutron" launch waitforexitandrun "$@" > "$WORK/$name.out" 2>&1 &
   pid=$!
   ( sleep 120; kill "$pid" 2> /dev/null ) & dog=$!
@@ -57,6 +59,19 @@ expect "D3D11 frame time within 10% of DXMT 0.80" \
   "$(awk -v a="$(best ours)" -v b="$(best stock)" 'BEGIN { print (a != "" && b != "" && a <= b * 1.10) ? "yes" : "no (" a " vs " b " ms)" }')" "yes"
 expect "the D3D11 game ran our d3d11.dll" \
   "$(cmp -s "$DXMT/x86_64-windows/d3d11.dll" "$WORK/compat/ours/pfx/drive_c/windows/system32/d3d11.dll" && echo yes || echo no)" "yes"
+# 1b. The translation cache's table is named by the build (shader pre-caching spec §3.1): no table of
+#     AIRCONV_VERSION alone (26), and a table another build left is dropped when the cache opens.
+CACHE="$WORK/cache/version"
+run ours version1 dxmt "$LOOP" 320 240 0 0 10 0
+db=$(ls "$CACHE"/shaders_*.db 2> /dev/null | head -1)
+expect "D3D11 opens the translation cache" "$([ -n "$db" ] && echo yes || echo no)" yes
+expect "its table is named by the build, not AIRCONV_VERSION alone" \
+  "$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE name = 'cache_26'" 2> /dev/null)" 0
+sqlite3 "$db" "CREATE TABLE cache_1 (key BLOB PRIMARY KEY, value BLOB NOT NULL);"
+run ours version2 dxmt "$LOOP" 320 240 0 0 10 0
+expect "another build's table is dropped when the cache opens" \
+  "$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE name = 'cache_1'" 2> /dev/null)" 0
+unset CACHE
 
 # 2. A D3D12 program presents through our d3d12.dll (D3DMetal would report shader model 6.x).
 run ours clear dxmt "$TESTS/d3d12_clear.exe" 300

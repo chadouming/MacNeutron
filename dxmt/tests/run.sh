@@ -12,10 +12,11 @@ cp "$SRC"/win64-install/system32/*.dll "$SRC"/win64-install/x86_64-windows/*.dll
 cp "$SRC"/win64-install/x86_64-unix/* "$ROOT/build/dxmt/x86_64-unix/"
 "$ROOT/.build/release/macneutron" install-dxmt --tool-dir "$WORK/ours" "$ROOT/build/dxmt" > /dev/null
 make -C "$ROOT" -s dxmt-tests > /dev/null
+CACHE_DIR="$WORK/run-cache"; rm -rf "$CACHE_DIR"  # a fresh translation cache per invocation (RUN_ENV may override)
 test=$1; shift
 for backend in dxmt d3dmetal; do  # 120 s at most: a hung test is killed (its Wine process too) and shows no lines
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/ours" SteamAppId=0 MACNEUTRON_GRAPHICS=$backend \
-      MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 ${RUN_ENV:-} \
+      MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 DXMT_SHADER_CACHE_PATH="$CACHE_DIR" ${RUN_ENV:-} \
       "$WORK/ours/bin/macneutron" launch waitforexitandrun "$ROOT/build/dxmt-tests/$test.exe" "$@" \
       > "$WORK/run-$backend.out" 2>&1 &
   pid=$!
