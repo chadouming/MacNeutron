@@ -462,18 +462,20 @@ static void OneWait() {
     printf("hazard onewait %g %g %g\n", Texel(0), Texel(1), Texel(2));
 }
 
-// Three passes into T0 with no barrier: with newest-writer dependencies (spec §3.9) the third waits on the second
-// alone. DXMT_STATS, this mode alone: 2 dependency waits.
+// Five passes, into T0 and T1 in turn, no barrier (M3 doesn't merge passes with another target between them): with
+// newest-writer dependencies (spec §3.9) each waits on the previous pass into its target alone. DXMT_STATS, this
+// mode alone, with overlap: 3 dependency waits (every earlier writer: 4).
 static void Newest() {
     Clear(T[0]);
+    Clear(T[1]);
     g->Submit();
-    Pass(T[0], add, 1, 1);
-    Pass(T[0], add, 1, 1);
-    Pass(T[0], add, 1, 1);
+    for (int i = 0; i < 5; i++)
+        Pass(T[i % 2], add, 1, 1);
     g->Submit();
     Read(T[0], RT, 512, 512, 0);
+    Read(T[1], RT, 512, 512, 1);
     g->Submit();
-    printf("hazard newest %g\n", Texel(0));
+    printf("hazard newest %g %g\n", Texel(0), Texel(1));
 }
 
 // T0 rendered (heavy); a barrier to PIXEL_SHADER_RESOURCE and a UAV barrier (a join); a pass into T2 whose only draw
@@ -548,6 +550,57 @@ static void Queues() {
 }
 
 
+// Two command lists in one ExecuteCommandLists call: the first renders T0 (heavy); the second starts with a
+// timestamp, then renders into T0 again, loading it. M3 (spec §3.5) encodes both as one Metal render pass with the
+// timestamp at its end (DXMT_STATS: 1 render pass merged, 1 timestamp blit folded). `barrier`: a barrier on T1 ends
+// the first list and starts the second, so no merge. `same_buffer`: the first pass already takes a timestamp from the
+// counter buffer the second list's timestamp uses (Metal samples a buffer once per pass), so no merge.
+static void Unsplit(const char *name, bool barrier, bool same_buffer) {
+    static ID3D12CommandAllocator *a2;
+    static ID3D12GraphicsCommandList *l2;
+    static ID3D12QueryHeap *heap;
+    if (!l2) {
+        CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&a2));
+        CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a2, nullptr, __uuidof(ID3D12GraphicsCommandList), (void **)&l2));
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 2};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    Clear(T[0]);
+    g->Submit();
+    auto *l1 = g->list;
+    Pass(T[0], add, 1, 256);
+    if (same_buffer)
+        l1->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 1); // at the open pass's end
+    if (barrier)
+        g->Barrier(T[1].texture, RT, PSR);
+    g->list = l2;
+    if (barrier)
+        g->Barrier(T[1].texture, PSR, RT);
+    l2->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0); // a timestamp-only blit
+    Pass(T[0], add, 1, 1);
+    g->list = l1;
+    CHECK(l1->Close());
+    CHECK(l2->Close());
+    ID3D12CommandList *lists[] = {l1, l2};
+    g->queue->ExecuteCommandLists(2, lists);
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    CHECK(g->fence->SetEventOnCompletion(g->value, ev));
+    if (WaitForSingleObject(ev, 10000) != WAIT_OBJECT_0) { printf("hazard %s timeout\n", name); exit(1); }
+    CloseHandle(ev);
+    CHECK(g->allocator->Reset());
+    CHECK(l1->Reset(g->allocator, nullptr));
+    CHECK(a2->Reset());
+    CHECK(l2->Reset(a2, nullptr));
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard %s %g\n", name, Texel(0));
+}
+static void UnsplitPlain() { Unsplit("unsplit", false, false); }
+static void UnsplitBarrier() { Unsplit("unsplit-barrier", true, false); }
+static void UnsplitSameBuffer() { Unsplit("unsplit-samebuffer", false, true); }
+
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -592,7 +645,8 @@ int main(int argc, char **argv) {
         {"indirect", Indirect},      {"aliasing", Aliasing},      {"occlusion", Occlusion},
         {"independent", Independent}, {"precise", Precise},       {"mid-pass", MidPass}, {"twice", Twice},
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
-        {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}};
+        {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}, {"unsplit", UnsplitPlain}, {"unsplit-barrier", UnsplitBarrier},
+        {"unsplit-samebuffer", UnsplitSameBuffer}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

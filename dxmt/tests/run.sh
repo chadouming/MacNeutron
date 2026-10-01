@@ -11,6 +11,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; SRC="$ROOT/build/dxmt-src"; WORK="$
 cp "$SRC"/win64-install/system32/*.dll "$SRC"/win64-install/x86_64-windows/*.dll "$SRC"/win64-install/system32/dxmt-replay.exe \
   "$ROOT/build/dxmt/x86_64-windows/"
 cp "$SRC"/win64-install/x86_64-unix/* "$ROOT/build/dxmt/x86_64-unix/"
+# build/dxmt now holds the working tree's build, not the pin's: say so, or `make dxmt` (dxmt-check) would trust its
+# stamp and test (or install) this build as the pin.
+echo "dev loop (dxmt/tests/run.sh), not a pinned build" > "$ROOT/build/dxmt/version"
 "$ROOT/.build/release/macneutron" install-dxmt --tool-dir "$WORK/ours" "$ROOT/build/dxmt" > /dev/null
 make -C "$ROOT" -s dxmt-tests > /dev/null
 CACHE_DIR="$WORK/run-cache"; rm -rf "$CACHE_DIR"  # a fresh translation cache per invocation (RUN_ENV may override)

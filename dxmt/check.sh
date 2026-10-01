@@ -496,7 +496,8 @@ expect "vertex and geometry shaders keep their math unfused" \
 hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
-  "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3" "nodraw 257" "queues 257 257")
+  "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
+  "unsplit-samebuffer 257")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -540,7 +541,7 @@ done
 expect "encoders after a join wait on one fence" \
   "$(grep -oE 'encoder fence waits [0-9]+' "$WORK/onewait-stats/stats.txt" 2> /dev/null)" "encoder fence waits 10"
 expect "and on the newest writer alone" \
-  "$(grep -oE 'encoder dependency waits [0-9]+' "$WORK/newest-stats/stats.txt" 2> /dev/null)" "encoder dependency waits 2"
+  "$(grep -oE 'encoder dependency waits [0-9]+' "$WORK/newest-stats/stats.txt" 2> /dev/null)" "encoder dependency waits 3"
 # B (GPU overlap spec §3.10): Wait, ExecuteCommandLists and Signal go into one Metal command buffer. d3d12_hazards
 # queues alone: three such sequences over two queues.
 rm -rf "$WORK/queues-stats"; export DXMT_DXIL_DUMP="$WORK/queues-stats" DXMT_STATS=1
@@ -548,6 +549,14 @@ run ours queues-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" queues
 unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a Wait, its ExecuteCommandLists and its Signal make one command buffer" \
   "$(grep -oE 'command buffers committed [0-9]+' "$WORK/queues-stats/stats.txt" 2> /dev/null)" "command buffers committed 3"
+# M3 (GPU overlap spec §3.5): two lists' passes into one target with only a timestamp between them are one Metal render
+# pass; not across a barrier, nor when the timestamp's counter buffer is already sampled at that pass's end.
+rm -rf "$WORK/m3-stats"; export DXMT_DXIL_DUMP="$WORK/m3-stats" DXMT_STATS=1
+run ours m3-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" unsplit unsplit-barrier unsplit-samebuffer
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "render passes into one target across lists are one Metal render pass" \
+  "$(grep -oE '(render passes merged|timestamp blits folded) [0-9]+' "$WORK/m3-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
+  "render passes merged 1;timestamp blits folded 1;"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
