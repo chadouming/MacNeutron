@@ -508,6 +508,17 @@ run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect pr
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
 expect "and while dumping passes and pixel history" "$(hazards hazards-dump)" \
   "$(printf 'hazard %s\n' "rt-read 257" "indirect 9" "precise 257")"
+# Overlap happens (GPU overlap spec §3.8): passes into different targets with no barrier between them leave their
+# boundaries free to overlap; in strict order, none is, and every encoder joins.
+rm -rf "$WORK/ov-stats" "$WORK/ov-serial"; export DXMT_DXIL_DUMP="$WORK/ov-stats" DXMT_STATS=1
+run ours ov-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" independent
+export DXMT_DXIL_DUMP="$WORK/ov-serial" DXMT_D3D12_SERIAL=1
+run ours ov-serial dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" independent
+unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_SERIAL
+expect "independent passes are free to overlap" \
+  "$(grep -cE '^  encoder boundaries free to overlap [1-9]' "$WORK/ov-stats/stats.txt" 2> /dev/null || true)" 1
+expect "and never in strict order" \
+  "$(grep -c '^  encoder boundaries free to overlap' "$WORK/ov-serial/stats.txt" 2> /dev/null || true):$(grep -c '^  encoder full joins' "$WORK/ov-serial/stats.txt" 2> /dev/null || true)" "0:1"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
