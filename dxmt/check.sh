@@ -243,6 +243,12 @@ unset DXMT_DXIL_DUMP DXMT_STATS
 expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16384 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 expect "and every encoder boundary, barrier or not" \
   "$(grep -cE '^  encoder boundaries [1-9][0-9]*, [0-9]+ with no barrier$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
+# Indirect command buffers are reused once their allocator is reset (8 frames, 2048 per frame), and a render pass's
+# indirect commands are written by one compute pass before it, not by a draw and a barrier each inside it.
+expect "indirect command buffers are reused after Reset" \
+  "$(grep -c '^  indirect command buffers created 2048$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
+expect "each render pass resolves its indirect commands in one compute pass before it" \
+  "$(grep -c '^  indirect resolve passes 8$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 # GPU timestamps by D3D12's rules (D3DMetal has none), and a timestamp between draws never splits their pass.
 rm -rf "$WORK/ts"; export DXMT_DXIL_DUMP="$WORK/ts" DXMT_DUMP_FRAME=0
 run ours ts-ours dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
@@ -252,6 +258,11 @@ expect "timestamps: frequency, increasing, advancing, calibrated, across lists a
 expect "a timestamp between draws keeps them one render pass" "$(grep -c ' render ' "$WORK/ts/passes.txt" 2> /dev/null || true)" 1
 expect "a timestamp resolve into a default heap never shows a previous submission's value" \
   "$(grep '^timestamp default-heap' "$WORK/ts-ours.txt" || true)" "timestamp default-heap 1"
+# A timestamp resolved on the CPU (into a readback heap) needs no blit encoder: the test's 5 resolves made 10 before.
+rm -rf "$WORK/ts-stats"; export DXMT_DXIL_DUMP="$WORK/ts-stats" DXMT_STATS=1
+run ours ts-stats dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "timestamps resolved on the CPU open no blit encoder" "$(grep -c '^  blit passes 8$' "$WORK/ts-stats/stats.txt" 2> /dev/null || true)" 1
 run ours ts-leak dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" leak
 expect "1500 timestamp resolves grow memory by under 16 MB" "$(grep -o 'ok [01]$' "$WORK/ts-leak.txt" || true)" "ok 1"
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \

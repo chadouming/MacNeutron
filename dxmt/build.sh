@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="${BUILD_DIR:-$ROOT/build}"
 SRC="$B/dxmt-src"
 OUT="$B/dxmt"
-LLVM="$SRC/llvm"
+LLVM="$SRC/llvm-release"  # without assertions; its own folder, so switching rebuilds LLVM
 . "$ROOT/dxmt/lib.sh"
 
 # The DXIL probe (spec §6), against the same LLVM. -fno-rtti matches LLVM's own build.
@@ -75,17 +75,18 @@ git -C "$SRC/dxmt" -c advice.detachedHead=false checkout -q --detach "$DXMT_COMM
   || die "commit $DXMT_COMMIT isn't in $DXMT_REPO"
 git -C "$SRC/dxmt" submodule update -q --init --depth 1 || die "can't fetch DXMT's submodules"
 
-# 3. LLVM 15: x86_64, static, with DXMT's CI flags. Built once.
+# 3. LLVM 15: x86_64, static, with DXMT's CI flags but no assertions (they slowed every pipeline's translation, which
+# Unreal does thousands of times a launch). Built once.
 if [ ! -f "$LLVM/.complete" ]; then
   [ -d "$SRC/llvm-project/llvm" ] || git clone -q --depth 1 --branch "$LLVM_TAG" \
     https://github.com/llvm/llvm-project.git "$SRC/llvm-project" || die "can't clone llvm-project $LLVM_TAG"
-  echo "dxmt: building LLVM $LLVM_TAG (30-60 minutes, once); log: $SRC/llvm.log"
-  { cmake -B "$SRC/llvm-build" -S "$SRC/llvm-project/llvm" -G Ninja \
+  echo "dxmt: building LLVM $LLVM_TAG (30-60 minutes, once); log: $SRC/llvm-release.log"
+  { cmake -B "$SRC/llvm-release-build" -S "$SRC/llvm-project/llvm" -G Ninja \
       -DCMAKE_INSTALL_PREFIX="$LLVM" -DCMAKE_OSX_ARCHITECTURES=x86_64 -DLLVM_HOST_TRIPLE=x86_64-apple-darwin \
-      -DLLVM_ENABLE_ASSERTIONS=On -DLLVM_ENABLE_ZSTD=Off -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD="" \
+      -DLLVM_ENABLE_ASSERTIONS=Off -DLLVM_ENABLE_ZSTD=Off -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD="" \
       -DLLVM_BUILD_TOOLS=Off -DLLVM_VERSION_PRINTER_SHOW_HOST_TARGET_INFO=Off -DCMAKE_POLICY_VERSION_MINIMUM=3.5 &&
-    cmake --build "$SRC/llvm-build" && cmake --install "$SRC/llvm-build"; } > "$SRC/llvm.log" 2>&1 \
-    || die "LLVM build failed; see $SRC/llvm.log"
+    cmake --build "$SRC/llvm-release-build" && cmake --install "$SRC/llvm-release-build"; } > "$SRC/llvm-release.log" 2>&1 \
+    || die "LLVM build failed; see $SRC/llvm-release.log"
   touch "$LLVM/.complete"  # written last: an interrupted install is redone
 fi
 
