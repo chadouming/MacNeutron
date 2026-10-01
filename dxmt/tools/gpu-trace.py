@@ -6,6 +6,7 @@
 # A trace report: frame period and GPU busy and idle time per frame (medians), and each GPU channel's busy share of
 # the window with its intervals added up (more: passes of that channel side by side), then the channels' sum against
 # their union (more: different channels side by side).
+# Then the GPU's idle time per frame by where it falls: between encoders, between command buffers, waiting for the CPU.
 import collections, csv, os, statistics as st, subprocess, sys, tempfile, xml.etree.ElementTree as ET
 
 
@@ -47,13 +48,14 @@ def trace(path):
         if len(r) <= 10 or r[3] is None or (r[5] is not None and r[5].text not in ('0', None)):
             continue
         start = int(r[0].text)
-        by_process[r[10].attrib.get('fmt', '') if r[10] is not None else ''].append((start, start + int(r[1].text), r[2].text, r[3].text))
+        by_process[r[10].attrib.get('fmt', '') if r[10] is not None else ''].append(
+            (start, start + int(r[1].text), r[2].text, r[3].text, r[15].text if len(r) > 15 and r[15] is not None else None))
     if not by_process:
         sys.exit('no GPU intervals in the trace')
     mine = max(by_process.values(), key=lambda v: sum(b - a for a, b, *_ in v))  # the game: the most GPU time
     window = max(b for _, b, *_ in mine) - min(a for a, *_ in mine)
     by_frame = collections.defaultdict(list)
-    for a, b, _, f in mine:
+    for a, b, _, f, _ in mine:
         by_frame[f].append((a, b))
     frames = sorted((min(a for a, _ in v), union(v)) for v in by_frame.values())[1:-1]  # whole frames only
     period = [(b[0] - a[0]) / 1e6 for a, b in zip(frames, frames[1:])]
@@ -63,11 +65,37 @@ def trace(path):
     print(f"GPU busy per frame median {st.median(busy):.2f} ms, idle {st.median(idle):.2f} ms")
     # Busy share of the window per channel, and its intervals added up: more than the busy share is passes of that
     # channel running side by side (render passes overlapping each other show as Fragment and Vertex intervals).
-    channels = sorted({c for _, _, c, _ in mine})
-    busy_share = {ch: 100 * union([(a, b) for a, b, c, _ in mine if c == ch]) / window for ch in channels}
-    summed = {ch: 100 * sum(b - a for a, b, c, _ in mine if c == ch) / window for ch in channels}
+    channels = sorted({c for _, _, c, *_ in mine})
+    busy_share = {ch: 100 * union([(a, b) for a, b, c, *_ in mine if c == ch]) / window for ch in channels}
+    summed = {ch: 100 * sum(b - a for a, b, c, *_ in mine if c == ch) / window for ch in channels}
     print('channels ' + ', '.join(f"{ch} {busy_share[ch]:.1f}% (intervals {summed[ch]:.1f}%)" for ch in channels) +
           f"; sum {sum(busy_share.values()):.1f}%, union {100 * union([(a, b) for a, b, *_ in mine]) / window:.1f}%")
+    # Where the GPU idles: waiting for the CPU to commit the next command buffer (committed over 20 us after the GPU
+    # went idle), between command buffers committed in time, or between encoders inside one command buffer.
+    submissions = os.path.join(os.path.dirname(xml), 'submissions.xml')
+    with open(submissions, 'w') as out:
+        subprocess.run(['xcrun', 'xctrace', 'export', '--input', path, '--xpath',
+                        '/trace-toc/run[@number="1"]/data/table[@schema="metal-application-command-buffer-submissions"]'],
+                       check=True, stdout=out, stderr=subprocess.DEVNULL)
+    committed = {}
+    for r in rows(submissions):
+        if len(r) > 14 and r[14] is not None and r[0] is not None:
+            committed[r[14].text] = int(r[0].text) + (int(r[1].text) if r[1] is not None and r[1].text else 0)
+    idle = collections.Counter()
+    ordered = sorted(mine)
+    end, before = ordered[0][1], ordered[0]
+    for iv in ordered[1:]:
+        if iv[0] > end:
+            if committed.get(iv[4], 0) > end + 20000:
+                idle['waiting for the CPU'] += iv[0] - end
+            elif iv[4] != before[4]:
+                idle['between command buffers'] += iv[0] - end
+            else:
+                idle['between encoders'] += iv[0] - end
+        if iv[1] > end:
+            end, before = iv[1], iv
+    print('GPU idle per frame: ' + ', '.join(f"{k} {idle[k] / 1e6 / len(by_frame):.2f} ms"
+                                             for k in ('between encoders', 'between command buffers', 'waiting for the CPU')))
 
 
 arg = sys.argv[1]
