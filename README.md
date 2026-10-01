@@ -59,7 +59,7 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 | `/usr/bin/env MACNEUTRON_NO_STEAM_BRIDGE=1 %command%` | Start the game without the Steam bridge (the game then can't reach Steam) |
 | `/usr/bin/env MACNEUTRON_NO_METALFX=1 %command%` | Don't upscale with MetalFX (macOS then stretches smaller images with its nearest-neighbour filter) |
 | `/usr/bin/env DXMT_D3D12_SM6=1 %command%` | On DXMT, report the Direct3D 12 features Shader Model 6 games check for (Unreal Engine 5 games need it) |
-| `/usr/bin/env DXMT_D3D12_SERIAL=1 %command%` | On DXMT, run a Direct3D 12 game's GPU passes in strict order (troubleshooting flicker or corrupted surfaces) |
+| `/usr/bin/env DXMT_D3D12_OVERLAP=1 %command%` | On DXMT, let a Direct3D 12 game's GPU passes overlap between barriers (experimental: not faster on Apple GPUs so far) |
 | `/usr/bin/env MACNEUTRON_PRECACHE=0 %command%` | Don't record the game's pipelines or rebuild them after updates (shader pre-caching) |
 
 ## Graphics
@@ -85,10 +85,11 @@ notification says so. Troubleshooting:
 - Deleting `$(getconf DARWIN_USER_CACHE_DIR)dxmt/<game exe>/shaders_*.db` clears the cache.
 - Deleting the `dxmt-pipelines` folder clears the recordings.
 
-**GPU work overlap.** DXMT lets a Direct3D 12 game's GPU passes run side by side wherever the game's barriers allow
-it. If a game flickers or shows corrupted surfaces, launch it with `/usr/bin/env DXMT_D3D12_SERIAL=1 %command%`,
-which runs every pass in strict order, as earlier versions did. If that fixes it, the cause is DXMT's ordering:
-please report it.
+**GPU work overlap** (experimental). By default DXMT runs a Direct3D 12 game's GPU passes in strict order. With
+`/usr/bin/env DXMT_D3D12_OVERLAP=1 %command%` a pass waits only on the passes the game's barriers order before it.
+In SMITE 2 on Apple GPUs this added more idle time between passes than it saved
+(`docs/testing/acceptance-dxmt-gpu-overlap.md`). If a game flickers or shows corrupted surfaces with it, drop it: the
+cause is DXMT's ordering, so please report it.
 
 For DXMT development, `/usr/bin/env DXMT_DXIL_DUMP=/Users/<you>/dxil %command%` saves each DXIL shader a game creates
 into that folder. Give an absolute path: Steam runs launch options without a shell, so `~` and `$HOME` aren't expanded.

@@ -31,6 +31,7 @@ SMITE 2 (and other D3D12 games) render more frames per second on our DXMT when t
 | Off switch | `DXMT_D3D12_SERIAL=1` keeps today's single strict chain; F9 dumps and pixel history always use it |
 | Portability | No core, GPU-model or core-count assumptions: everything follows from what the game recorded |
 | Order after M1 and M2 (amendment) | A → B → M3 → M4 → M5, each measured in SMITE 2 before the next; faster CPU encoding deferred |
+| Default after A's measurement (amendment) | Strict order by default; overlap (M1, M2, A) opt-in with `DXMT_D3D12_OVERLAP=1`. Across M1, M2 and A, overlap added 0.9–1.4 ms of idle between encoders per frame and won at one spot of three; at A's spot strict order was 12.2 against 13.7 ms per frame. B, M3 and M4 work in both modes. |
 
 ## 2. Evidence (2026-10-01; fork `b31e856`, M5 Pro, SMITE 2 practice match, `DXMT_D3D12_SM6=1`)
 
@@ -94,7 +95,7 @@ Each Metal encoder updates its own fence and waits only on the fences of the enc
 | Fence ring | `d3d12_command_queue.cpp` | A ring of Metal fences per queue (256); each encoder takes the next one |
 | Wait translation | the encode loop | Turns an encoder's dependency positions into the fences those encoders took; a full join waits on every fence since the last full join |
 | Forced join | same | If the next fence is still uncovered by a full join, the encoder does a full join first (always correct, less overlap) |
-| Serial mode | same | With `DXMT_D3D12_SERIAL=1`, while dumping an F9 frame or pixel history: one fence for everything, as today |
+| Serial mode | same | The default (amendment: overlap only with `DXMT_D3D12_OVERLAP=1`); always while dumping an F9 frame or pixel history, and with `DXMT_D3D12_SERIAL=1`: every encoder a join |
 
 - The chained wait-commands-update encode (one winemetal call per encoder) carries the wait list and the update.
 - The indirect pre-pass (ExecuteIndirect resolvers) waits on exactly its render pass's dependencies; the render pass also waits on the pre-pass's fence.

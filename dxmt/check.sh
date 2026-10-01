@@ -490,50 +490,52 @@ expect "vertex and geometry shaders keep their math unfused" \
   "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 9
 
 # 8. Encoder ordering (GPU overlap spec §5): each mode's first pass is heavy, so work after it that doesn't wait for it
-#    reads or overwrites its results early. Our DXMT with overlap, in strict order, and in strict order while dumping
-#    passes and pixel history (the queue's own encoders), and D3DMetal print the same lines.
+#    reads or overwrites its results early. Our DXMT in strict order (the default), with overlap (DXMT_D3D12_OVERLAP=1),
+#    and in strict order while dumping passes and pixel history (the queue's own encoders), and D3DMetal print the
+#    same lines.
 hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3" "nodraw 257")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
-export DXMT_D3D12_SERIAL=1
-run ours hazards-serial dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
-unset DXMT_D3D12_SERIAL
+export DXMT_D3D12_OVERLAP=1
+run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
+unset DXMT_D3D12_OVERLAP
 run ours hazards-ref d3dmetal "$TESTS/d3d12_hazards.exe" "Z:$S"
-expect "work after a heavy pass waits for it" "$(hazards hazards)" "$want"
-expect "and in strict order (DXMT_D3D12_SERIAL=1)" "$(hazards hazards-serial)" "$want"
+expect "work after a heavy pass waits for it (strict order, the default)" "$(hazards hazards)" "$want"
+expect "and with overlap (DXMT_D3D12_OVERLAP=1)" "$(hazards hazards-overlap)" "$want"
 expect "and on D3DMetal" "$(hazards hazards-ref)" "$want"
 rm -rf "$WORK/hz-dump"; export DXMT_DXIL_DUMP="$WORK/hz-dump" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=512,512,0,40
 run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect precise
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
 expect "and while dumping passes and pixel history" "$(hazards hazards-dump)" \
   "$(printf 'hazard %s\n' "rt-read 257" "indirect 9" "precise 257")"
-# Overlap happens (GPU overlap spec §3.8): passes into different targets with no barrier between them leave their
-# boundaries free to overlap; in strict order, none is, and every encoder joins.
-rm -rf "$WORK/ov-stats" "$WORK/ov-serial"; export DXMT_DXIL_DUMP="$WORK/ov-stats" DXMT_STATS=1
+# Overlap happens when asked for (GPU overlap spec §3.8): with DXMT_D3D12_OVERLAP=1, passes into different targets
+# with no barrier between them leave their boundaries free to overlap; by default (strict order) none is, and every
+# encoder joins.
+rm -rf "$WORK/ov-stats" "$WORK/ov-default"; export DXMT_DXIL_DUMP="$WORK/ov-stats" DXMT_STATS=1 DXMT_D3D12_OVERLAP=1
 run ours ov-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" independent
-export DXMT_DXIL_DUMP="$WORK/ov-serial" DXMT_D3D12_SERIAL=1
-run ours ov-serial dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" independent
-unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_SERIAL
-expect "independent passes are free to overlap" \
+unset DXMT_D3D12_OVERLAP; export DXMT_DXIL_DUMP="$WORK/ov-default"
+run ours ov-default dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" independent
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "independent passes are free to overlap with DXMT_D3D12_OVERLAP=1" \
   "$(grep -cE '^  encoder boundaries free to overlap [1-9]' "$WORK/ov-stats/stats.txt" 2> /dev/null || true)" 1
-expect "and never in strict order" \
-  "$(grep -c '^  encoder boundaries free to overlap' "$WORK/ov-serial/stats.txt" 2> /dev/null || true):$(grep -c '^  encoder full joins' "$WORK/ov-serial/stats.txt" 2> /dev/null || true)" "0:1"
+expect "and never by default (strict order)" \
+  "$(grep -c '^  encoder boundaries free to overlap' "$WORK/ov-default/stats.txt" 2> /dev/null || true):$(grep -c '^  encoder full joins' "$WORK/ov-default/stats.txt" 2> /dev/null || true)" "0:1"
 # M2 (GPU overlap spec §3.1): a barrier ending one render target's writes makes later work wait on that target's
 # writer alone. d3d12_hazards precise: the sampling pass waits on T0's pass (not T1's), the read on T0's and T2's.
-rm -rf "$WORK/precise-stats"; export DXMT_DXIL_DUMP="$WORK/precise-stats" DXMT_STATS=1
+rm -rf "$WORK/precise-stats"; export DXMT_DXIL_DUMP="$WORK/precise-stats" DXMT_STATS=1 DXMT_D3D12_OVERLAP=1
 run ours precise-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" precise
-unset DXMT_DXIL_DUMP DXMT_STATS
+unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_OVERLAP
 expect "a transition waits on the transitioned resource's writers alone" \
   "$(grep -oE '(encoders with a dependency list|encoder dependency waits) [0-9]+' "$WORK/precise-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
   "encoder dependency waits 3;encoders with a dependency list 2;"
 # A (GPU overlap spec §3.9): encoders after a join wait on its early fence alone, and on the newest writer of what
 # they write. d3d12_hazards onewait and newest, each alone.
 for m in onewait newest; do
-  rm -rf "$WORK/$m-stats"; export DXMT_DXIL_DUMP="$WORK/$m-stats" DXMT_STATS=1
+  rm -rf "$WORK/$m-stats"; export DXMT_DXIL_DUMP="$WORK/$m-stats" DXMT_STATS=1 DXMT_D3D12_OVERLAP=1
   run ours "$m-stats" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" $m
-  unset DXMT_DXIL_DUMP DXMT_STATS
+  unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_OVERLAP
 done
 expect "encoders after a join wait on one fence" \
   "$(grep -oE 'encoder fence waits [0-9]+' "$WORK/onewait-stats/stats.txt" 2> /dev/null)" "encoder fence waits 10"
