@@ -63,6 +63,7 @@ dxmt-tests:
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_vsread.exe dxmt/tests/d3d12_vsread.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_indirect.exe dxmt/tests/d3d12_indirect.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_timestamp.exe dxmt/tests/d3d12_timestamp.cpp -ld3d12 -ldxgi -lpsapi
+	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_cache.exe dxmt/tests/d3d12_cache.cpp -ld3d12 -ldxgi
 	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_ffx_swapchain.exe dxmt/tests/d3d12_ffx_swapchain.cpp -ld3d12 -ldxgi -luser32
 
 # Translate a folder of captured DXIL shaders offline (DIR=~/dxil-smite2); never commit a game's shaders.

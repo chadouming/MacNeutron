@@ -23,6 +23,6 @@ for backend in dxmt d3dmetal; do  # 120 s at most: a hung test is killed (its Wi
   ( sleep 120; pkill -f "dxmt-tests/$test.exe"; kill "$pid" ) 2> /dev/null & dog=$!
   wait "$pid" || true
   { kill "$dog" && wait "$dog"; } 2> /dev/null || true
-  tr -d '\r' < "$WORK/run-$backend.out" | grep -E '^[a-z][a-z0-9-]* ' | grep -vE '^(msync|err|warn|fixme):' \
+  tr -d '\r' < "$WORK/run-$backend.out" | grep -E '^([a-z][a-z0-9-]* |info:  d3d12 shader cache)' | grep -vE '^(msync|err|warn|fixme):' \
     | sed "s/^/$backend: /" || true
 done

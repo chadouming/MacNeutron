@@ -291,6 +291,54 @@ expect "1500 timestamp resolves grow memory by under 16 MB" "$(grep -o 'ok [01]$
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \
   "$(grep '^caps ' "$WORK/api-ours.txt" || true)" "caps rt=0 mesh=0 vrs=0 sfb=0"
 
+# 7. The D3D12 translation cache (shader pre-caching spec §5.1). Runs 1-5 share one folder; the counter line is ours
+#    only. Each mode changes one thing a reused translated function would get wrong, so that function must miss.
+cachetest() { run ours "$1" dxmt "$TESTS/d3d12_cache.exe" "Z:$S/cache.vs.dxil" "Z:$S/cache.ps.dxil" "Z:$S/cache.cs.dxil" "$2"; }
+counters() { grep -o 'd3d12 shader cache: .*' "$WORK/$1.txt" | tail -1; }
+drawn() { grep '^cache ' "$WORK/$1.txt" || echo "no cache line in $1"; }
+for m in a rt layout root; do
+  run ours "cache-ref-$m" d3dmetal "$TESTS/d3d12_cache.exe" "Z:$S/cache.vs.dxil" "Z:$S/cache.ps.dxil" "Z:$S/cache.cs.dxil" $m
+done
+CACHE="$WORK/cache/shared"
+cachetest cache1 a
+expect "cache run 1 (cold) draws as D3DMetal" "$(drawn cache1)" "$(drawn cache-ref-a)"
+expect "cache run 1 misses every lookup" "$(counters cache1)" \
+  "d3d12 shader cache: functions 0 hit 3 missed, reflections 0 hit 3 missed"
+cachetest cache2 a
+expect "cache run 2 (warm) draws as D3DMetal" "$(drawn cache2)" "$(drawn cache-ref-a)"
+expect "cache run 2 only hits" "$(counters cache2)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
+echo "info pipeline creation: $(grep '^timing' "$WORK/cache1.txt") ms cold, $(grep '^timing' "$WORK/cache2.txt") ms warm"
+cachetest cache3rt rt
+expect "another render target format draws as D3DMetal" "$(drawn cache3rt)" "$(drawn cache-ref-rt)"
+expect "and misses the pixel shader only" "$(counters cache3rt)" \
+  "d3d12 shader cache: functions 2 hit 1 missed, reflections 3 hit 0 missed"
+cachetest cache3layout layout
+expect "another input layout draws as D3DMetal" "$(drawn cache3layout)" "$(drawn cache-ref-layout)"
+expect "and misses the vertex shader only" "$(counters cache3layout)" \
+  "d3d12 shader cache: functions 2 hit 1 missed, reflections 3 hit 0 missed"
+cachetest cache3root root
+expect "another root signature draws as D3DMetal" "$(drawn cache3root)" "$(drawn cache-ref-root)"
+expect "and misses both graphics shaders" "$(counters cache3root)" \
+  "d3d12 shader cache: functions 1 hit 2 missed, reflections 3 hit 0 missed"
+db="$CACHE/shaders_310.db"
+sqlite3 "$db" "UPDATE \"$(sqlite3 "$db" "SELECT name FROM sqlite_master WHERE name GLOB 'cache_*'")\" SET value = x'00';"
+cachetest cache4 a
+expect "corrupt entries: still draws as D3DMetal" "$(drawn cache4)" "$(drawn cache-ref-a)"
+expect "corrupt entries are misses" "$(counters cache4)" \
+  "d3d12 shader cache: functions 0 hit 3 missed, reflections 0 hit 3 missed"
+expect "a rejected cached function is logged once" \
+  "$(grep -c 'd3d12 shader cache: rejected a cached function, recompiling' "$WORK/cache4.txt" || true)" 1
+sqlite3 "$db" "CREATE TABLE cache_1 (key BLOB PRIMARY KEY, value BLOB NOT NULL);"
+cachetest cache5 a
+expect "D3D12 drops another build's table too" "$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE name = 'cache_1'")" 0
+expect "and still draws as D3DMetal" "$(drawn cache5)" "$(drawn cache-ref-a)"
+CACHE="$WORK/cache/gs"
+run ours trigs-cold dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
+run ours trigs-warm dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
+expect "a warm geometry-shader pipeline only hits" \
+  "$(counters trigs-warm | grep -cE 'functions [1-9][0-9]* hit 0 missed, reflections [1-9][0-9]* hit 0 missed$' || true)" 1
+expect "and draws as D3DMetal" "$(same_pixels "$WORK/trigs-warm.txt" "$WORK/trigs-ref.txt")" yes
+unset CACHE
 # AMD's FSR 3 swapchain proxy, which SMITE 2 (and other Unreal games with the FSR 3 plugin) create their swapchain
 # through: read from the game's install when it's there, never copied.
 FFX="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Hemingway/Binaries/Win64/amd_fidelityfx_dx12.dll"
@@ -330,15 +378,15 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "19/19"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "22/22"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
 # the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
 "$DXMT/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
-  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "19:19"
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "22:22"
 expect "vertex and geometry shaders keep their math unfused" \
-  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 7
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 8
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
