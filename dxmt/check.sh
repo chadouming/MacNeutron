@@ -114,6 +114,14 @@ expect "capture mode reports shader model 6.6 and binding tier 3" \
   "$(grep -cE '^(shader model 0x66 |resource binding tier 3$)' "$WORK/clear-capture.txt" || true)" 2
 expect "capture mode reports feature level 12_1, wave ops and 64-bit atomics" \
   "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-capture.txt" || true)" 1
+# DXMT_D3D12_SM6=1 reports the same without capture mode (shader pre-caching spec §3.1): Unreal 5 games play with it.
+export DXMT_D3D12_SM6=1
+run ours clear-sm6 dxmt "$TESTS/d3d12_clear.exe" 10
+unset DXMT_D3D12_SM6
+expect "DXMT_D3D12_SM6 reports shader model 6.6 and binding tier 3" \
+  "$(grep -cE '^(shader model 0x66 |resource binding tier 3$)' "$WORK/clear-sm6.txt" || true)" 2
+expect "DXMT_D3D12_SM6 reports feature level 12_1, wave ops and 64-bit atomics" \
+  "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-sm6.txt" || true)" 1
 export DXMT_DXIL_DUMP="$WORK/dxil é"
 dxil dxil-unicode
 expect "a capture folder named outside ASCII works" "$(ls "$WORK/dxil é" 2> /dev/null | grep -c '\.dxil$')" 4
