@@ -54,6 +54,8 @@ public struct ToolLayout: Equatable, Sendable {
     /// Our DXMT's Direct3D 12 front end; the runtime's DXMT 0.80 has none.
     public var dxmtD3D12: URL { dxmt.appending(path: "x64/d3d12.dll") }
     public var dxmtHasD3D12: Bool { FileManager.default.fileExists(atPath: dxmtD3D12.path(percentEncoded: false)) }
+    /// Our DXMT's pipeline replayer (shader pre-caching), run by the launcher under Wine.
+    public var dxmtReplay: URL { dxmt.appending(path: "x64/dxmt-replay.exe") }
 
     public var runtimeVersion: String? {
         (try? String(contentsOf: runtimeVersionFile, encoding: .utf8))?

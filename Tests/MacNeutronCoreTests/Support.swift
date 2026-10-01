@@ -111,7 +111,7 @@ func installFakePresenter(in layout: ToolLayout) throws {
 @discardableResult
 func makeDXMTBuild(in folder: URL, unixFolder: URL? = nil, version: String = "abc123") throws -> DXMTBuild {
     try write(version + "\n", to: folder.appending(path: "version"))
-    for (arch, dlls) in [("x86_64-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll", "d3d12.dll"]),
+    for (arch, dlls) in [("x86_64-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll", "d3d12.dll", "dxmt-replay.exe"]),
                          ("i386-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll"])] {
         for dll in dlls {
             try write("ours \(arch) \(dll)", to: folder.appending(path: "\(arch)/\(dll)"))

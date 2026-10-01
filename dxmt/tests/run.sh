@@ -8,7 +8,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; SRC="$ROOT/build/dxmt-src"; WORK="$
 ( PATH="$SRC/llvm-mingw/bin:$PATH"; ninja -C "$SRC/win64" > "$WORK/run-ninja.log" 2>&1 \
     && meson install -C "$SRC/win64" > "$WORK/run-install.log" 2>&1 ) \
   || { grep -E "error|Error" "$WORK/run-ninja.log" "$WORK/run-install.log" | head -20; exit 1; }
-cp "$SRC"/win64-install/system32/*.dll "$SRC"/win64-install/x86_64-windows/*.dll "$ROOT/build/dxmt/x86_64-windows/"
+cp "$SRC"/win64-install/system32/*.dll "$SRC"/win64-install/x86_64-windows/*.dll "$SRC"/win64-install/system32/dxmt-replay.exe \
+  "$ROOT/build/dxmt/x86_64-windows/"
 cp "$SRC"/win64-install/x86_64-unix/* "$ROOT/build/dxmt/x86_64-unix/"
 "$ROOT/.build/release/macneutron" install-dxmt --tool-dir "$WORK/ours" "$ROOT/build/dxmt" > /dev/null
 make -C "$ROOT" -s dxmt-tests > /dev/null
@@ -23,6 +24,6 @@ for backend in dxmt d3dmetal; do  # 120 s at most: a hung test is killed (its Wi
   ( sleep 120; pkill -f "dxmt-tests/$test.exe"; kill "$pid" ) 2> /dev/null & dog=$!
   wait "$pid" || true
   { kill "$dog" && wait "$dog"; } 2> /dev/null || true
-  tr -d '\r' < "$WORK/run-$backend.out" | grep -E '^([a-z][a-z0-9-]* |info:  d3d12 shader cache)' | grep -vE '^(msync|err|warn|fixme):' \
+  tr -d '\r' < "$WORK/run-$backend.out" | grep -E '^([a-z][a-z0-9-]* |info:  d3d12 shader cache|replay: )' | grep -vE '^(msync|err|warn|fixme):' \
     | sed "s/^/$backend: /" || true
 done

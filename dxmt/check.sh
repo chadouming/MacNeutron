@@ -361,6 +361,60 @@ cachetest rec-unwritable a
 expect "an unwritable recording folder changes nothing drawn" "$(drawn rec-unwritable)" "$(drawn cache-ref-a)"
 expect "and says once that recording is off" "$(grep -c 'd3d12 pipeline recording off' "$WORK/rec-unwritable.txt" || true)" 1
 unset DXMT_PIPELINE_RECORD CACHE
+# 9. Replay (spec §3.6, §5.2 runs 8-12): dxmt-replay.exe rebuilds a recording into that game's caches.
+RP="$WORK/ours/Libraries/DXMT/x64/dxmt-replay.exe"
+replay() { run ours "$1" dxmt "$RP" "Z:$2"; grep '^replay: ' "$WORK/$1.txt" | tail -1 | sed 's/, [0-9]* ms$//'; }
+UC="$(getconf DARWIN_USER_CACHE_DIR)dxmt"; rm -rf "$UC/d3d12_cache.exe" "$UC/dxmt-replay.exe"
+CACHE="$WORK/cache/replay"
+expect "run 8: the replay rebuilds every recorded pipeline" "$(replay rep8 "$f")" \
+  "replay: 2 pipelines (1 graphics, 1 compute), 2 created, 0 failed, 0 bad records"
+expect "into the game's Metal cache, not the replayer's" \
+  "$([ -d "$UC/d3d12_cache.exe/com.apple.metal" ] && echo game):$([ -d "$UC/dxmt-replay.exe" ] && echo replayer)" "game:"
+cachetest rep9 a
+expect "run 9: after a replay the game only hits" "$(counters rep9)" \
+  "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
+expect "and draws as D3DMetal" "$(drawn rep9)" "$(drawn cache-ref-a)"
+cp "$f" "$WORK/torn.pipelines"
+python3 -c "import os, sys; os.truncate(sys.argv[1], os.path.getsize(sys.argv[1]) - 10)" "$WORK/torn.pipelines"
+CACHE="$WORK/cache/replay-torn"
+expect "run 10: a torn record is skipped and counted" "$(replay rep10 "$WORK/torn.pipelines")" \
+  "replay: 1 pipelines (1 graphics, 0 compute), 1 created, 0 failed, 1 bad records"
+export DXMT_PIPELINE_RECORD="$WORK/rec-gs"
+CACHE="$WORK/cache/gs-rec"
+run ours gs-rec dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
+export DXMT_PIPELINE_RECORD="$WORK/rec-threads"
+run ours threads-rec dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
+unset DXMT_PIPELINE_RECORD
+CACHE="$WORK/cache/gs-replay"
+expect "run 12: a geometry-shader pipeline replays" \
+  "$(replay gs-replay "$WORK/rec-gs/d3d12_triangle.exe.pipelines" | grep -cE '^replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records$' || true)" 1
+run ours gs-after dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil" "Z:$S/triangle2.gs.dxil"
+expect "and then only hits" \
+  "$(counters gs-after | grep -cE 'functions [1-9][0-9]* hit 0 missed, reflections [1-9][0-9]* hit 0 missed$' || true)" 1
+expect "and draws as D3DMetal" "$(same_pixels "$WORK/gs-after.txt" "$WORK/trigs-ref.txt")" yes
+CACHE="$WORK/cache/threads"
+expect "pipelines created on 8 threads at once replay whole" \
+  "$(replay threads-replay "$WORK/rec-threads/d3d12_dxil_exec.exe.pipelines" | grep -cE '^replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records$' || true)" 1
+# A recorded pipeline this DXMT can't build (a junk shader), and a file that isn't a recording.
+python3 - "$WORK/junk.pipelines" <<'PY'
+import hashlib, struct, sys
+def fnv(b):
+    h = 0xcbf29ce484222325
+    for x in b: h = ((h ^ x) * 0x100000001b3) & 0xffffffffffffffff
+    return h
+def record(kind, payload, id):
+    return struct.pack("<IIQ", kind, len(payload), fnv(payload)) + id + payload
+junk = b"DXBC" + bytes(60)
+compute = bytes(20) + hashlib.sha1(junk).digest() + struct.pack("<II", 0, 0)  # no root signature, the junk CS
+open(sys.argv[1], "wb").write(b"DXMTPRC1" + record(1, junk, hashlib.sha1(junk).digest())
+                              + record(3, compute, hashlib.sha1(compute).digest()))
+PY
+CACHE="$WORK/cache/junk"
+expect "a recorded pipeline that no longer builds is counted, not fatal" "$(replay junk "$WORK/junk.pipelines")" \
+  "replay: 1 pipelines (0 graphics, 1 compute), 0 created, 1 failed, 0 bad records"
+printf 'nope' > "$WORK/foreign.pipelines"
+expect "a file that isn't a recording is refused" "$(replay foreign "$WORK/foreign.pipelines")" "replay: not a recording"
+unset CACHE
 # AMD's FSR 3 swapchain proxy, which SMITE 2 (and other Unreal games with the FSR 3 plugin) create their swapchain
 # through: read from the game's install when it's there, never copied.
 FFX="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Hemingway/Binaries/Win64/amd_fidelityfx_dx12.dll"

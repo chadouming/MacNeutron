@@ -112,7 +112,7 @@ meson_build build-win32.txt win32
 # 5. Stage. build/dxmt is replaced only once everything is in place and checked.
 I64="$SRC/win64-install" I32="$SRC/win32-install" T="$OUT.tmp"
 rm -rf "$T"; mkdir -p "$T/x86_64-windows" "$T/i386-windows" "$T/x86_64-unix"
-cp "$I64"/x86_64-windows/*.dll "$I64"/system32/*.dll "$T/x86_64-windows/"
+cp "$I64"/x86_64-windows/*.dll "$I64"/system32/*.dll "$I64"/system32/dxmt-replay.exe "$T/x86_64-windows/"
 cp "$I32"/i386-windows/*.dll "$I32"/syswow64/*.dll "$T/i386-windows/"
 cp "$I64"/x86_64-unix/* "$T/x86_64-unix/"
 cp "$SRC/dxmt/COPYING.LIB" "$SRC/dxmt/LICENSE" "$SRC/dxmt/LICENSE.OLD" "$T/"
@@ -121,6 +121,7 @@ for f in x86_64-windows/winemetal.dll i386-windows/winemetal.dll; do
   builtin "$T/$f" || die "$f lacks Wine's builtin marker"
 done
 for f in x86_64-windows/d3d11.dll x86_64-windows/d3d10core.dll x86_64-windows/dxgi.dll x86_64-windows/d3d12.dll \
+         x86_64-windows/dxmt-replay.exe \
          i386-windows/d3d11.dll i386-windows/d3d10core.dll i386-windows/dxgi.dll; do
   [ -f "$T/$f" ] || die "the build has no $f"
   ! builtin "$T/$f" || die "$f carries Wine's builtin marker"

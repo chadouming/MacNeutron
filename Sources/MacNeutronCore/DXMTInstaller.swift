@@ -51,9 +51,10 @@ public struct DXMTBuild: Equatable, Sendable {
 
 /// Installs MacNeutron's DXMT over the runtime's DXMT 0.80.
 public enum DXMTInstaller {
-    /// Front ends that go into `Libraries/DXMT/<dir>`, where prefixes get them. Direct3D 12 is 64-bit only.
+    /// Front ends that go into `Libraries/DXMT/<dir>`, where prefixes get them, and the 64-bit pipeline replayer, which
+    /// stays there. Direct3D 12 is 64-bit only.
     static let frontEnds: [(arch: String, dir: String, dlls: [String])] = [
-        ("x86_64-windows", "x64", ["d3d11.dll", "d3d10core.dll", "dxgi.dll", "d3d12.dll"]),
+        ("x86_64-windows", "x64", ["d3d11.dll", "d3d10core.dll", "dxgi.dll", "d3d12.dll", "dxmt-replay.exe"]),
         ("i386-windows", "x32", ["d3d11.dll", "d3d10core.dll", "dxgi.dll"]),
     ]
 

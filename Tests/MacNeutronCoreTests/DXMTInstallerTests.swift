@@ -97,3 +97,18 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     #expect(try DXMTInstaller.installBundled(layout: layout, launcherBinary: launcher))
     #expect(layout.dxmtVersion == "v2")
 }
+
+@Test func installsTheReplayerBesideD3D12() throws {
+    let layout = try makeToolLayout()
+    let build = try makeDXMTBuild(in: try makeTempDir())
+    try DXMTInstaller.install(layout: layout, from: build)
+    #expect(try String(contentsOf: layout.dxmtReplay, encoding: .utf8) == "ours x86_64-windows dxmt-replay.exe")
+    #expect(layout.dxmtReplay.path(percentEncoded: false).hasSuffix("/Libraries/DXMT/x64/dxmt-replay.exe"))
+}
+
+@Test func aBuildWithoutTheReplayerIsRefused() throws {
+    let folder = try makeTempDir()
+    try makeDXMTBuild(in: folder)
+    try FileManager.default.removeItem(at: folder.appending(path: "x86_64-windows/dxmt-replay.exe"))
+    #expect(DXMTBuild(folder: folder) == nil)
+}
