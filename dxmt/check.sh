@@ -494,7 +494,8 @@ expect "vertex and geometry shaders keep their math unfused" \
 #    passes and pixel history (the queue's own encoders), and D3DMetal print the same lines.
 hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
-  "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256")
+  "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
+  "signal 0" "wrap 4194304")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_SERIAL=1
 run ours hazards-serial dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"

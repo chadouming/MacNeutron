@@ -328,7 +328,7 @@ static void Precise() {
     printf("hazard precise %g\n", Texel(0));
 }
 
-// A large copy into X (word 0 = 77, the rest 0); a dispatch elsewhere opens a compute encoder; inside it, a barrier X
+// Large copies into X (word 0 = 77, the rest 0); a dispatch elsewhere opens a compute encoder; inside it, a barrier X
 // COPY_DEST -> UNORDERED_ACCESS and a dispatch copying X's word 0 to word 1: 77 (0 if it ran before the copy).
 static void MidPass() {
     const UINT64 size = 128 << 20;
@@ -340,7 +340,8 @@ static void MidPass() {
     upload->Unmap(0, nullptr);
     ID3D12Resource *x = g->Buffer(D3D12_HEAP_TYPE_DEFAULT, size, COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     ID3D12Resource *elsewhere = Zeroed(256, UA);
-    g->list->CopyBufferRegion(x, 0, upload, 0, size);
+    for (int i = 0; i < 8; i++) // heavy: 1 GB copied, in order (one blit encoder)
+        g->list->CopyBufferRegion(x, 0, upload, 0, size);
     Dispatch(fill, elsewhere, 1);
     g->Barrier(x, COPY_DEST, UA);
     Dispatch(count, x, 1);
@@ -391,6 +392,57 @@ static void ClearRects() {
     printf("hazard clear-rects %g %g\n", Texel(0), Texel(1));
 }
 
+// T0 rendered (heavy); a barrier RENDER_TARGET -> COPY_SOURCE; 16 copies of all of T0 into a readback buffer; then a
+// light clear of T1 that waits on none of them and may finish first. The D3D12 fence (Submit) must still wait for
+// every copy: prints how many copied texel channels aren't 256 (0).
+static void Signal() {
+    const UINT pitch = kSize * 8, copies = 16;
+    const UINT64 size = (UINT64)pitch * kSize;
+    ID3D12Resource *big = g->Buffer(D3D12_HEAP_TYPE_READBACK, size * copies, COPY_DEST);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    g->Barrier(T[0].texture, RT, COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {T[0].texture, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    src.SubresourceIndex = 0;
+    for (UINT i = 0; i < copies; i++) {
+        D3D12_TEXTURE_COPY_LOCATION dst = {big, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        dst.PlacedFootprint = {size * i, {kFormat, kSize, kSize, 1, pitch}};
+        g->list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    Clear(T[1]);
+    g->Barrier(T[0].texture, COPY_SOURCE, RT);
+    g->Submit();
+    uint16_t *p;
+    D3D12_RANGE whole = {0, (SIZE_T)(size * copies)}, none = {0, 0};
+    CHECK(big->Map(0, &whole, (void **)&p));
+    unsigned long long wrong = 0;
+    for (UINT64 i = 0; i < size * copies / 2; i++)
+        wrong += p[i] != 0x5C00; // 256.0
+    big->Unmap(0, &none);
+    big->Release();
+    printf("hazard signal %llu\n", wrong);
+}
+
+// A dispatch adds 1 per thread to word 0 (heavy), then 300 timestamps in empty encoders of their own, then a UAV
+// barrier and a dispatch copying word 0 to word 1. The queue's 256 fences wrap while the heavy dispatch may still run:
+// its fence must not be handed on while the barrier's join still has to wait on it.
+static void Wrap() {
+    ID3D12Resource *b = Zeroed(256, UA);
+    ID3D12QueryHeap *heap;
+    D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 300};
+    CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    Dispatch(fill, b, 65536);
+    for (UINT i = 0; i < 300; i++)
+        g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, i);
+    D3D12_RESOURCE_BARRIER barrier = {D3D12_RESOURCE_BARRIER_TYPE_UAV};
+    barrier.UAV.pResource = b;
+    g->list->ResourceBarrier(1, &barrier);
+    Dispatch(count, b, 1);
+    ReadBuffer(b, UA, 4, 4, 0);
+    g->Submit();
+    printf("hazard wrap %llu\n", Word(0, 4));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -434,7 +486,8 @@ int main(int argc, char **argv) {
         {"rt-read", RtRead},         {"same-target", SameTarget}, {"uav", Uav},       {"copy-read", CopyRead},
         {"indirect", Indirect},      {"aliasing", Aliasing},      {"occlusion", Occlusion},
         {"independent", Independent}, {"precise", Precise},       {"mid-pass", MidPass}, {"twice", Twice},
-        {"many", Many},              {"clear-rects", ClearRects}};
+        {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
+        {"wrap", Wrap}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
