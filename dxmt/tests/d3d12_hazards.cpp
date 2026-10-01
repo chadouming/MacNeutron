@@ -443,6 +443,58 @@ static void Wrap() {
     printf("hazard wrap %llu\n", Word(0, 4));
 }
 
+// T0 rendered (heavy), then T1 and T2 rendered in the same group (no barrier): with one wait (spec §3.9) the two later
+// passes each wait on the first pass's early fence alone. DXMT_STATS, this mode alone: 10 fence waits (the clears 0,
+// 1, 1; the passes 3, 1, 1; the read 3).
+static void OneWait() {
+    Clear(T[0]);
+    Clear(T[1]);
+    Clear(T[2]);
+    g->Submit();
+    Pass(T[0], add, 1, 256);
+    Pass(T[1], set, 5, 1);
+    Pass(T[2], set, 6, 1);
+    g->Submit();
+    Read(T[0], RT, 512, 512, 0);
+    Read(T[1], RT, 512, 512, 1);
+    Read(T[2], RT, 512, 512, 2);
+    g->Submit();
+    printf("hazard onewait %g %g %g\n", Texel(0), Texel(1), Texel(2));
+}
+
+// Three passes into T0 with no barrier: with newest-writer dependencies (spec §3.9) the third waits on the second
+// alone. DXMT_STATS, this mode alone: 2 dependency waits.
+static void Newest() {
+    Clear(T[0]);
+    g->Submit();
+    Pass(T[0], add, 1, 1);
+    Pass(T[0], add, 1, 1);
+    Pass(T[0], add, 1, 1);
+    g->Submit();
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard newest %g\n", Texel(0));
+}
+
+// T0 rendered (heavy); a barrier to PIXEL_SHADER_RESOURCE and a UAV barrier (a join); a pass into T2 whose only draw
+// has no instances; then T1 = T0 sampled + 1, in that pass's group. The sampling pass must still see T0 done: a
+// join's early fence (spec §3.9) is reached only after its waits, draws or not.
+static void NoDraw() {
+    Clear(T[0]);
+    g->Submit();
+    Pass(T[0], add, 1, 256);
+    g->Barrier(T[0].texture, RT, PSR);
+    D3D12_RESOURCE_BARRIER all = {D3D12_RESOURCE_BARRIER_TYPE_UAV};
+    g->list->ResourceBarrier(1, &all);
+    Pass(T[2], set, 1, 0);
+    Pass(T[1], sample, 1, 1, &T[0]);
+    g->Barrier(T[0].texture, PSR, RT);
+    Read(T[1], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard nodraw %g\n", Texel(0));
+}
+
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -487,7 +539,7 @@ int main(int argc, char **argv) {
         {"indirect", Indirect},      {"aliasing", Aliasing},      {"occlusion", Occlusion},
         {"independent", Independent}, {"precise", Precise},       {"mid-pass", MidPass}, {"twice", Twice},
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
-        {"wrap", Wrap}};
+        {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

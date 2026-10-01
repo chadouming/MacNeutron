@@ -495,7 +495,7 @@ expect "vertex and geometry shaders keep their math unfused" \
 hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
-  "signal 0" "wrap 4194304")
+  "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3" "nodraw 257")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_SERIAL=1
 run ours hazards-serial dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -528,6 +528,17 @@ unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a transition waits on the transitioned resource's writers alone" \
   "$(grep -oE '(encoders with a dependency list|encoder dependency waits) [0-9]+' "$WORK/precise-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
   "encoder dependency waits 3;encoders with a dependency list 2;"
+# A (GPU overlap spec §3.9): encoders after a join wait on its early fence alone, and on the newest writer of what
+# they write. d3d12_hazards onewait and newest, each alone.
+for m in onewait newest; do
+  rm -rf "$WORK/$m-stats"; export DXMT_DXIL_DUMP="$WORK/$m-stats" DXMT_STATS=1
+  run ours "$m-stats" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" $m
+  unset DXMT_DXIL_DUMP DXMT_STATS
+done
+expect "encoders after a join wait on one fence" \
+  "$(grep -oE 'encoder fence waits [0-9]+' "$WORK/onewait-stats/stats.txt" 2> /dev/null)" "encoder fence waits 10"
+expect "and on the newest writer alone" \
+  "$(grep -oE 'encoder dependency waits [0-9]+' "$WORK/newest-stats/stats.txt" 2> /dev/null)" "encoder dependency waits 2"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
