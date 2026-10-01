@@ -48,11 +48,12 @@ struct Gpu {
         CHECK(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&fence));
     }
 
-    // Closes the list, runs it, waits (10 s at most) and reopens it.
-    void Submit() {
+    // Closes the list, runs it `times` times back to back, waits (10 s at most) and reopens it.
+    void Submit(int times = 1) {
         CHECK(list->Close());
         ID3D12CommandList *lists[] = {list};
-        queue->ExecuteCommandLists(1, lists);
+        for (int i = 0; i < times; i++)
+            queue->ExecuteCommandLists(1, lists);
         CHECK(queue->Signal(fence, ++value));
         HANDLE done = CreateEventA(nullptr, FALSE, FALSE, nullptr);
         CHECK(fence->SetEventOnCompletion(value, done));

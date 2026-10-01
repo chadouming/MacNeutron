@@ -479,15 +479,35 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "22/22"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "28/28"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
 # the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
 "$DXMT/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
-  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "22:22"
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "28:28"
 expect "vertex and geometry shaders keep their math unfused" \
-  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 8
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 9
+
+# 8. Encoder ordering (GPU overlap spec §5): each mode's first pass is heavy, so work after it that doesn't wait for it
+#    reads or overwrites its results early. Our DXMT with overlap, in strict order, and in strict order while dumping
+#    passes and pixel history (the queue's own encoders), and D3DMetal print the same lines.
+hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
+want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
+  "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256")
+run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
+export DXMT_D3D12_SERIAL=1
+run ours hazards-serial dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
+unset DXMT_D3D12_SERIAL
+run ours hazards-ref d3dmetal "$TESTS/d3d12_hazards.exe" "Z:$S"
+expect "work after a heavy pass waits for it" "$(hazards hazards)" "$want"
+expect "and in strict order (DXMT_D3D12_SERIAL=1)" "$(hazards hazards-serial)" "$want"
+expect "and on D3DMetal" "$(hazards hazards-ref)" "$want"
+rm -rf "$WORK/hz-dump"; export DXMT_DXIL_DUMP="$WORK/hz-dump" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=512,512,0,40
+run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect precise
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
+expect "and while dumping passes and pixel history" "$(hazards hazards-dump)" \
+  "$(printf 'hazard %s\n' "rt-read 257" "indirect 9" "precise 257")"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
