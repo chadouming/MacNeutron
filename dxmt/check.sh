@@ -181,37 +181,38 @@ unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME
 expect "the pass dump saves the depth test's 6 render passes (11 attachments)" \
   "$(grep -c ' render ' "$WORK/passes/passes.txt" 2> /dev/null || true) $(ls "$WORK/passes" 2> /dev/null | grep -c '\.raw$')" "6 11"
 # Pixel history (DXMT_DUMP_PIXEL=x,y): each draw of the dumped frame redrawn alone from its pass's starting state, and
-# the draws that change the pixel listed with their pipeline in pixels.txt. At (32,32): pass-5 (the depth test's
-# first) draws the near red quad and the far green quad, each alone passing its depth test; pass-6's yellow quad
-# (depth EQUAL 0.25) is rejected by the 0.75 the near quad left, so pass-6 lists nothing.
+# the draws that change the pixel listed with their pipeline in pixels.txt. At (32,32): pass-3 (the depth test's
+# first, its target's and its depth's clears folded into it, M4) draws the near red quad and the far green quad, each
+# alone passing its depth test; pass-4's yellow quad (depth EQUAL 0.25) is rejected by the 0.75 the near quad left,
+# so pass-4 lists nothing.
 rm -rf "$WORK/pixel"; export DXMT_DXIL_DUMP="$WORK/pixel" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=32,32
 run ours depth-pixel dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
 expect "pixel history: each quad's draw alone, named by its shaders and blending" \
-  "$(grep -cE '^pass-5 draw-(0|1) gfx vs=[0-9a-f]{16} ps=[0-9a-f]{16} .* blend0=off mask0=15 c0 000000ff->(ff0000ff|00ff00ff) at 32,32$' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 2
-expect "a draw the pass's starting depth rejects isn't listed" "$(grep -c '^pass-6 ' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 0
+  "$(grep -cE '^pass-3 draw-(0|1) gfx vs=[0-9a-f]{16} ps=[0-9a-f]{16} .* blend0=off mask0=15 c0 000000ff->(ff0000ff|00ff00ff) at 32,32$' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 2
+expect "a draw the pass's starting depth rejects isn't listed" "$(grep -c '^pass-4 ' "$WORK/pixel/pixels.txt" 2> /dev/null || true)" 0
 expect "pixel history leaves the frame's own passes as they were" \
-  "$(cmp -s "$WORK/pixel/pass-5-c0-64x64-70.raw" "$WORK/passes/pass-5-c0-64x64-70.raw" && echo same || echo differ)" same
+  "$(cmp -s "$WORK/pixel/pass-3-c0-64x64-70.raw" "$WORK/passes/pass-3-c0-64x64-70.raw" && echo same || echo differ)" same
 # In sequence (",seq"), each draw goes on top of the pass's earlier draws: the far quad, behind the near one, no longer
-# changes (32,32), but it does change (48,8), which only it covers. Pixels join with '+'; passes 5-6 only are redrawn.
+# changes (32,32), but it does change (48,8), which only it covers. Pixels join with '+'; passes 3-4 only are redrawn.
 # draws.txt lists every draw redrawn; pixels.txt also says what each pass redrew.
-rm -rf "$WORK/pixelseq"; export DXMT_DXIL_DUMP="$WORK/pixelseq" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=32,32+48,8,5,6,seq
+rm -rf "$WORK/pixelseq"; export DXMT_DXIL_DUMP="$WORK/pixelseq" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=32,32+48,8,3,4,seq
 run ours depth-pixelseq dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
-expect "in sequence, only the near quad changes (32,32) in pass-5" \
-  "$(grep -c '^pass-5 draw-.* at 32,32$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true):$(grep -c '^pass-5 draw-0 .* c0 000000ff->ff0000ff at 32,32$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" "1:1"
+expect "in sequence, only the near quad changes (32,32) in pass-3" \
+  "$(grep -c '^pass-3 draw-.* at 32,32$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true):$(grep -c '^pass-3 draw-0 .* c0 000000ff->ff0000ff at 32,32$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" "1:1"
 expect "and the far quad changes (48,8), a second watched pixel" \
-  "$(grep -c '^pass-5 draw-1 .* c0 000000ff->00ff00ff at 48,8$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
-expect "only passes 5-6 are redrawn" "$(grep -c '^# pass-' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 2
+  "$(grep -c '^pass-3 draw-1 .* c0 000000ff->00ff00ff at 48,8$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
+expect "only passes 3-4 are redrawn" "$(grep -c '^# pass-' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 2
 # A pixel list longer than 260 characters (Windows' MAX_PATH) still arrives whole.
 long="32,32"; for y in 900 1000 1100 1200 1300; do for x in 100 300 500 700 900 1100 1300 1500 1700 1900; do long="$long+$x,$y"; done; done
-rm -rf "$WORK/pixellong"; export DXMT_DXIL_DUMP="$WORK/pixellong" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL="$long,5,5"
+rm -rf "$WORK/pixellong"; export DXMT_DXIL_DUMP="$WORK/pixellong" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL="$long,3,3"
 run ours depth-pixellong dxmt "$TESTS/d3d12_depth.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil" "Z:$S/depth.psdepth.dxil"
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
 expect "a pixel list over 260 characters works" \
-  "${#long}:$(grep -c '^pass-5 draw-0 .* at 32,32$' "$WORK/pixellong/pixels.txt" 2> /dev/null || true)" "${#long}:1"
-expect "draws.txt lists both of pass-5's draws" "$(grep -c '^pass-5 draw-[01] gfx ' "$WORK/pixelseq/draws.txt" 2> /dev/null || true)" 2
-expect "pixels.txt says what pass-5 redrew" "$(grep -c '^# pass-5: 2 draws redrawn in sequence$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
+  "${#long}:$(grep -c '^pass-3 draw-0 .* at 32,32$' "$WORK/pixellong/pixels.txt" 2> /dev/null || true)" "${#long}:1"
+expect "draws.txt lists both of pass-3's draws" "$(grep -c '^pass-3 draw-[01] gfx ' "$WORK/pixelseq/draws.txt" 2> /dev/null || true)" 2
+expect "pixels.txt says what pass-3 redrew" "$(grep -c '^# pass-3: 2 draws redrawn in sequence$' "$WORK/pixelseq/pixels.txt" 2> /dev/null || true)" 1
 run ours query-ours dxmt "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 run ours query-ref d3dmetal "$TESTS/d3d12_query.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 expect "occlusion queries match D3DMetal" "$(grep '^query' "$WORK/query-ours.txt" || true)" "$(grep '^query' "$WORK/query-ref.txt" || echo 'D3DMetal ran no query')"
@@ -503,7 +504,7 @@ hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
-  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0")
+  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -584,6 +585,21 @@ run ours m3-off-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" unsplit
 unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_MERGE
 expect "and none with DXMT_D3D12_MERGE=0" \
   "$(grep -c 'render passes merged' "$WORK/m3-off-stats/stats.txt" 2> /dev/null || true):$(grep '^hazard ' "$WORK/m3-off-stats.txt")" "0:hazard unsplit 257"
+
+# M4 (GPU overlap spec §3.6): a clear then a pass into the cleared target, no barrier between: one Metal render pass
+# with the clear as its load action. Not across a barrier, nor with DXMT_D3D12_MERGE=0.
+rm -rf "$WORK/m4-stats"; export DXMT_DXIL_DUMP="$WORK/m4-stats" DXMT_STATS=1
+run ours m4-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" fold
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "a clear before a pass into its target is the pass's load action" \
+  "$(grep -oE '(clears folded|clear passes) [0-9]+' "$WORK/m4-stats/stats.txt" 2> /dev/null | sort | tr '\n' ';')" \
+  "clear passes 1;clears folded 1;"
+rm -rf "$WORK/m4-off-stats"; export DXMT_DXIL_DUMP="$WORK/m4-off-stats" DXMT_STATS=1 DXMT_D3D12_MERGE=0
+run ours m4-off-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" fold
+unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_MERGE
+expect "and none with DXMT_D3D12_MERGE=0" \
+  "$(grep -oE '(clears folded|clear passes) [0-9]+' "$WORK/m4-off-stats/stats.txt" 2> /dev/null | sort | tr '\n' ';'):$(grep '^hazard ' "$WORK/m4-off-stats.txt")" \
+  "clear passes 2;:hazard fold 6 2 9 5"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

@@ -127,13 +127,18 @@ Each Metal encoder updates its own fence and waits only on the fences of the enc
 
 A clear-only render pass followed, in the same command list and with no barrier between, by a render pass whose attachments include the cleared one becomes that pass's clear load action. Other clear-only passes stay as they are.
 
+- **Decided at recording time**, as the render pass opens: the clears that end the list since its last barrier call are taken out, the matching ones folded, and the others appended again in order (their ordering decided anew). The queue is unchanged, and F9 dumps show the folded passes.
+- **Matching:** the cleared view is one of the pass's attachments (the same view, and depth plane), and its size and array length are the pass's render area: a Metal load action clears the render area only.
+- **Order:** a clear doesn't fold when a later clear that stays writes its texture through another view (a slice of an array the pass clears whole); folded, it would run after that one.
+- `DXMT_D3D12_MERGE=0` turns folding off with M3's merging; `DXMT_STATS` counts the clears folded.
+
 ### 3.7 Idle gaps (M5)
 
 With M1–M4 in place, a Metal trace of the SMITE scene lists the GPU idle intervals with the encoder labels on either side. Each cause found is fixed in this slice if it is in our encoding, or recorded with its evidence if it is not (for example presentation pacing).
 
 ### 3.8 Counters
 
-`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero. A adds every fence wait encoded (`encoder fence waits`); B, the Metal command buffers committed; M3, the render passes merged and the timestamp blits folded.
+`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero. A adds every fence wait encoded (`encoder fence waits`); B, the Metal command buffers committed; M3, the render passes merged and the timestamp blits folded; M4, the clears folded.
 
 ### 3.9 Cheap waits (A)
 

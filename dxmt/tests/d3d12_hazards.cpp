@@ -728,6 +728,63 @@ static void Zeroed() {
     printf("hazard zeroed %llu %llu\n", buffer_bytes, texture_bytes);
 }
 
+// M4 (GPU overlap spec §3.6): T0 cleared to 2, then 4 additive draws into its left half (scissor): one Metal render
+// pass, its clear the load action. T1 cleared to 5, a barrier (on T2), then the same draws: the clear stays a pass.
+// Prints T0 left, T0 right, T1 left, T1 right: 6 2 9 5.
+static void Fold() {
+    const float two[4] = {2, 2, 2, 2}, five[4] = {5, 5, 5, 5};
+    D3D12_RECT left = {0, 0, (LONG)kSize / 2, (LONG)kSize};
+    g->list->ClearRenderTargetView(T[0].rtv, two, 0, nullptr);
+    Bind(T[0], add, 1);
+    g->list->RSSetScissorRects(1, &left);
+    g->list->DrawInstanced(3, 4, 0, 0);
+    g->list->ClearRenderTargetView(T[1].rtv, five, 0, nullptr);
+    g->Barrier(T[2].texture, RT, PSR);
+    Bind(T[1], add, 1);
+    g->list->RSSetScissorRects(1, &left);
+    g->list->DrawInstanced(3, 4, 0, 0);
+    g->Barrier(T[2].texture, PSR, RT);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    Read(T[1], RT, 100, 512, 2);
+    Read(T[1], RT, 900, 512, 3);
+    g->Submit();
+    printf("hazard fold %g %g %g %g\n", Texel(0), Texel(1), Texel(2), Texel(3));
+}
+
+// M4: a two-slice texture cleared to 2 through a view of both slices, then slice 1 to 7 through its own view, then
+// drawn into through the first view (slice 0, adding 1 four times). The later clear must stay after the earlier one,
+// which folds into the pass. Prints slice 0, slice 1: 6 7.
+static void FoldOrder() {
+    ID3D12Resource *tex = g->Texture(Tex2D(kSize, kSize, kFormat, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, 2), RT);
+    UINT rs = g->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    Target both = {tex, rtv_heap->GetCPUDescriptorHandleForHeapStart(), {}};
+    both.rtv.ptr += targets_made++ * rs;
+    D3D12_CPU_DESCRIPTOR_HANDLE one = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    one.ptr += targets_made++ * rs;
+    D3D12_RENDER_TARGET_VIEW_DESC vd = {kFormat, D3D12_RTV_DIMENSION_TEXTURE2DARRAY};
+    vd.Texture2DArray.ArraySize = 2;
+    g->device->CreateRenderTargetView(tex, &vd, both.rtv);
+    vd.Texture2DArray.FirstArraySlice = 1;
+    vd.Texture2DArray.ArraySize = 1;
+    g->device->CreateRenderTargetView(tex, &vd, one);
+    const float two[4] = {2, 2, 2, 2}, seven[4] = {7, 7, 7, 7};
+    g->list->ClearRenderTargetView(both.rtv, two, 0, nullptr);
+    g->list->ClearRenderTargetView(one, seven, 0, nullptr);
+    Pass(both, add, 1, 4);
+    g->Barrier(tex, RT, COPY_SOURCE);
+    for (UINT slice = 0; slice < 2; slice++) {
+        D3D12_TEXTURE_COPY_LOCATION src = {tex, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+        src.SubresourceIndex = slice;
+        D3D12_TEXTURE_COPY_LOCATION dst = {readback, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        dst.PlacedFootprint = {(UINT64)slice * 512, {kFormat, 1, 1, 1, 256}};
+        D3D12_BOX box = {512, 512, 0, 513, 513, 1};
+        g->list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+    }
+    g->Submit();
+    printf("hazard fold-order %g %g\n", Texel(0), Texel(1));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -774,7 +831,7 @@ int main(int argc, char **argv) {
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
         {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}, {"unsplit", UnsplitPlain}, {"unsplit-barrier", UnsplitBarrier},
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
-        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}};
+        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
