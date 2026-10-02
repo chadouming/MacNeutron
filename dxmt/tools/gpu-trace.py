@@ -43,9 +43,11 @@ def trace(path):
         subprocess.run(['xcrun', 'xctrace', 'export', '--input', path, '--xpath',
                         '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]'],
                        check=True, stdout=out, stderr=subprocess.DEVNULL)
-    by_process = collections.defaultdict(list)  # top-level intervals: (start, end, channel, frame)
+    # Every interval, nested ones too: Instruments puts some of our encoders' intervals one level down (about 0.6 ms
+    # of GPU work per frame in SMITE 2), and they are GPU work all the same. (start, end, channel, frame, cmdbuffer)
+    by_process = collections.defaultdict(list)
     for r in rows(xml):
-        if len(r) <= 10 or r[3] is None or (r[5] is not None and r[5].text not in ('0', None)):
+        if len(r) <= 10 or r[3] is None:
             continue
         start = int(r[0].text)
         by_process[r[10].attrib.get('fmt', '') if r[10] is not None else ''].append(
