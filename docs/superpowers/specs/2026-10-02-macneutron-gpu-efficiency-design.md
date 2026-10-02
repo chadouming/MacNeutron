@@ -60,7 +60,7 @@ SMITE 2 (and other D3D12 games) render the same frames with less GPU time on our
 
 ### E6. Targeted NaN handling
 
-- Measure first: our fast-math flags cost about nothing in fragment shaders. If a vertex or compute measurement shows a gain, allow fast math with D3DMetal-style targeted fixes (D3DMetal's `D3DM_FLUSH_POS_INF_TO_NAN`, `D3DM_SAMPLE_NAN_TO_ZERO`); otherwise record "no gain" and stop.
+- **Measured: no gain; not built (2026-10-02).** Fast-math flags cost about nothing in SMITE's fragment shaders (ours against Metal Shader Converter's on real shaders), E3 found no math cost in vertex shaders, and the comparison with D3DMetal's Metal 3 path puts lighting, full-screen and post passes at parity; the compute gap (1.4-3x per dispatch) is too large for float flags. Ceiling about 0.05 ms.
 
 ### E7. Remaining clears
 
@@ -68,7 +68,7 @@ SMITE 2 (and other D3D12 games) render the same frames with less GPU time on our
 
 ### E8. Discard load/store
 
-- `DiscardResource` (and render-pass discard flags) map to `DontCare` store on the last pass before and load on the first pass after.
+- **Measured: not indicated; not built (2026-10-02).** The costly stores are between the base pass's split pieces, where the data is still needed, and full-screen passes are at parity with D3DMetal's; DiscardResource and depth-store mapping are worth 0.05 ms or less. Revisit once the base pass is one Metal pass.
 
 ### E9. Metal 4
 
