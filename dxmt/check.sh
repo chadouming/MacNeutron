@@ -230,6 +230,14 @@ run ours copy-ref d3dmetal "$TESTS/d3d12_copy.exe"
 expect "reinterpreting copies match D3DMetal byte for byte" \
   "$(grep '^copy ' "$WORK/copy-ours.txt" | tr '\n' ' ')" "$(grep '^copy ' "$WORK/copy-ref.txt" | tr '\n' ' ')"
 expect "d3d12_copy ran its eleven cases" "$(grep -c '^copy .* ok ' "$WORK/copy-ours.txt" || true)" 11
+# Metal API validation (MTL_DEBUG_LAYER=1, logging instead of aborting) rejects nothing we encode: each error it logs
+# has "Validation" in its first line, as does the line saying it's on, which doesn't count.
+invalid() { grep 'Validation' "$WORK/$1.txt" | grep -vc 'Metal API Validation Enabled' || true; }
+export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
+run ours copy-validation dxmt "$TESTS/d3d12_copy.exe"
+unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
+expect "d3d12_copy's cases, a BC footprint into a smaller mip among them, pass Metal validation" \
+  "$(grep -c '^copy .* ok ' "$WORK/copy-validation.txt" || true) cases, $(invalid copy-validation) errors" "11 cases, 0 errors"
 # Batch 2: null descriptors of every type.
 run ours null-ours dxmt "$TESTS/d3d12_null.exe" "Z:$S/null.cs.dxil"
 run ours null-ref d3dmetal "$TESTS/d3d12_null.exe" "Z:$S/null.cs.dxil"
@@ -522,6 +530,11 @@ run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect pr
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
 expect "and while dumping passes and pixel history" "$(hazards hazards-dump)" \
   "$(printf 'hazard %s\n' "rt-read 257" "indirect 9" "precise 257")"
+export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
+run ours hazards-validation dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
+unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
+expect "and under Metal validation" "$(hazards hazards-validation)" "$want"
+expect "which rejects nothing (nodraw's only draw has no instances)" "$(invalid hazards-validation)" 0
 # Overlap happens when asked for (GPU overlap spec §3.8): with DXMT_D3D12_OVERLAP=1, passes into different targets
 # with no barrier between them leave their boundaries free to overlap; by default (strict order) none is, and every
 # encoder joins.
