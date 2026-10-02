@@ -89,7 +89,8 @@ notification says so. Troubleshooting:
 `/usr/bin/env DXMT_D3D12_OVERLAP=1 %command%` a pass waits only on the passes the game's barriers order before it.
 In SMITE 2 on Apple GPUs this added more idle time between passes than it saved
 (`docs/testing/acceptance-dxmt-gpu-overlap.md`). If a game flickers or shows corrupted surfaces with it, drop it: the
-cause is DXMT's ordering, so please report it.
+cause is DXMT's ordering, so please report it. `DXMT_D3D12_MERGE=0` likewise turns off DXMT's merging of render passes that Direct3D 12 command lists
+split.
 
 For DXMT development, `/usr/bin/env DXMT_DXIL_DUMP=/Users/<you>/dxil %command%` saves each DXIL shader a game creates
 into that folder. Give an absolute path: Steam runs launch options without a shell, so `~` and `$HOME` aren't expanded.

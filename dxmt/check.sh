@@ -557,6 +557,11 @@ unset DXMT_DXIL_DUMP DXMT_STATS
 expect "render passes into one target across lists are one Metal render pass" \
   "$(grep -oE '(render passes merged|timestamp blits folded) [0-9]+' "$WORK/m3-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
   "render passes merged 1;timestamp blits folded 1;"
+rm -rf "$WORK/m3-off-stats"; export DXMT_DXIL_DUMP="$WORK/m3-off-stats" DXMT_STATS=1 DXMT_D3D12_MERGE=0
+run ours m3-off-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" unsplit
+unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_MERGE
+expect "and none with DXMT_D3D12_MERGE=0" \
+  "$(grep -c 'render passes merged' "$WORK/m3-off-stats/stats.txt" 2> /dev/null || true):$(grep '^hazard ' "$WORK/m3-off-stats.txt")" "0:hazard unsplit 257"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
