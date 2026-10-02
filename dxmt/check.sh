@@ -504,7 +504,8 @@ hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
-  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7")
+  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
+  "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -564,6 +565,11 @@ run ours queues-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" queues
 unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a Wait rides in its ExecuteCommandLists' command buffer, which commits at once" \
   "$(grep -oE 'command buffers committed [0-9]+' "$WORK/queues-stats/stats.txt" 2> /dev/null)" "command buffers committed 6"
+# M5 (GPU overlap spec §3.11): a queue waiting on another queue's fence waits on its MTLEvent (released in under 1 us,
+# against 130-150 us for the shared event): both of d3d12_hazards queues' waits, neither met when encoded.
+expect "a queue waits on another queue's fence through its GPU event" \
+  "$(grep -oE '(queue waits on the GPU event|queue waits already met) [0-9]+' "$WORK/queues-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
+  "queue waits on the GPU event 2;"
 # A signal waits for timestamps resolved on the CPU only while some are pending (d3d12_hazards deferred alone).
 rm -rf "$WORK/deferred-stats"; export DXMT_DXIL_DUMP="$WORK/deferred-stats" DXMT_STATS=1
 run ours deferred-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" deferred

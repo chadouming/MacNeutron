@@ -136,20 +136,22 @@ A clear-only render pass followed, in the same command list and with no barrier 
 
 With M1–M4 in place, a Metal trace of the SMITE scene lists the GPU idle intervals with the encoder labels on either side. Each cause found is fixed in this slice if it is in our encoding, or recorded with its evidence if it is not (for example presentation pacing).
 
-### 3.8 Counters
+**Findings (2026-10-02, two traces at one spot, fork 658d1fd).** `gpu-trace.py` dropped the intervals Instruments nests one level down (our encoders' work too): counted, the GPU idles a median 1.9 ms per 15.9 ms frame, not 2.5. By cause:
+- **Cross-queue handoffs, about 0.5 ms.** SMITE presents through FSR 3's own present queue: every frame hands off main queue → present queue → main queue. Each hop waits on the fence's `MTLSharedEvent`, which a waiting queue sees 130–150 µs after its signal however it is signaled (GPU, empty command buffer, or CPU); an `MTLEvent` signaled on the GPU releases the other queue in under 1 µs (a native benchmark, M5 Pro). Ours: the fence's Metal event.
+- **A stall at frame start, 0.5–0.8 ms, cause unknown:** compute after blits starts late in the first command buffers after the present, and not later in the frame. Possibly the GPU slowing during the boundary's idle; re-measured after the fix.
+- **Timestamp-only blits, about 0.15 ms**, mostly as busy time.
+- **Not causes:** the 32-buffer in-flight limit (buffers are committed 13–16 ms before they run), and the per-encoder fence wait (about 0.3 µs each, 0.05 ms per frame).
 
-`DXMT_STATS` adds: encoder full joins, encoders with a dependency list, dependency-list waits, and encoder boundaries left free to overlap (no wait on the previous encoder). With `DXMT_D3D12_SERIAL=1` the last is zero. A adds every fence wait encoded (`encoder fence waits`); B, the Metal command buffers committed; M3, the render passes merged and the timestamp blits folded; M4, the clears folded.
+### 3.11 GPU-side fence waits (M5)
 
-### 3.9 Cheap waits (A)
+Reviewed before implementation (adversarial review with Metal experiments, 2026-10-02); the rules below replace a first draft that deadlocked when the CPU signals a fence a queue waits on, and let the CPU see a fence reached through a second queue before its own.
 
-- **A join's early fence.** A join render pass that draws also updates a second fence, from the ring, after its first stage (vertex, or pre-raster for geometry-shader pipelines), where it waits: by then every fence it waited on has been reached. The encoders of its group wait on that fence instead of on the join's whole wait list. Any other join (a clear, a resolve, a compute or blit encoder) has no earlier stage that proves its waits are over: its group waits on its own fence.
-- **Newest writer only.** An encoder's dependency list names, per resource, only the newest earlier encoder of its group that writes it (or wrote it before the transition that orders it): that writer itself waited on the older ones. An encoder that may write anything stays a dependency of everything after it in its group.
-
-### 3.10 Fewer command buffers (B)
-
-- The queue keeps one open Metal command buffer. `ExecuteCommandLists` encodes into it (opening one if none is open) and doesn't commit; a queue `Wait` encodes its event wait into it and doesn't commit either.
-- `Signal` encodes its event signal (or its deferred CPU signal, behind timestamps) into the open command buffer and commits it; `Present` does the same with its present.
-- Nothing can wait on uncommitted work: D3D12 lets the CPU and other queues wait only on fences, and every fence signal commits. A queue's destruction commits what is open.
+- **One generation per fence, under a lock:** its `MTLSharedEvent` (CPU-visible), an `MTLEvent` for queues, and the last value asked for. Both Metal events keep the highest value signaled and ignore lower ones, so a lower value (a queue `Signal` as it is encoded, or a CPU `Signal`) starts a new generation. Readers take the generation once and use it outside the lock. This also fixes a deadlock in the code before M5: a deferred signal retired after another queue had signaled a higher value replaced the event that queue's waits were on.
+- **Queue `Signal`:** encodes the `MTLEvent` signal at once, then the shared one, which still waits for CPU timestamp resolves when the queue owes any (§3.10). A deferred shared signal goes to the generation it was asked of, as is. A queue that has resolved timestamps into a custom heap (which the GPU can read) holds the `MTLEvent` signal back with the shared one, and its retire thread forwards it after the resolves.
+- **CPU `Signal`, and forwarded signals:** set the shared event, then commit one `encodeSignalEvent` of the `MTLEvent` on a helper queue of the device. Both events get every value, so a wait the CPU releases in D3D12 is released here too.
+- **Queue `Wait(F, v)`:** none when the shared event already reads `v` or more (this covers the initial value). Otherwise the queue waits on the `MTLEvent`, and owes a CPU wait for the shared event to reach `v`: its retire thread waits for it before the command buffer's resolves and deferred signals, and the queue counts as owing CPU work (§3.10), so the CPU never sees this queue's later signals before `F`'s. That wait can't hang: the GPU passed the `MTLEvent` wait, so the shared signal of `v` is already encoded, being retired, or set.
+- `DXMT_STATS` counts queue waits already met, queue waits on the `MTLEvent`, and signals forwarded.
+- **Left as before:** fence values lowered while queues wait across them stay approximate; a failed command buffer may leave an `MTLEvent` waiter waiting.
 
 ## 4. Error handling
 

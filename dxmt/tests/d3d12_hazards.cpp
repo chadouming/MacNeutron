@@ -785,6 +785,248 @@ static void FoldOrder() {
     printf("hazard fold-order %g %g\n", Texel(0), Texel(1));
 }
 
+// M5 (GPU overlap spec §3.11): fences between queues. A second queue with its own list (open), and helpers.
+struct Queue2 {
+    ID3D12CommandQueue *q;
+    ID3D12CommandAllocator *a;
+    ID3D12GraphicsCommandList *l;
+};
+static Queue2 MakeQueue() {
+    Queue2 b;
+    D3D12_COMMAND_QUEUE_DESC qd = {D3D12_COMMAND_LIST_TYPE_DIRECT};
+    CHECK(g->device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void **)&b.q));
+    CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&b.a));
+    CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, b.a, nullptr, __uuidof(ID3D12GraphicsCommandList),
+                                       (void **)&b.l));
+    return b;
+}
+static ID3D12Fence *MakeFence() {
+    ID3D12Fence *f;
+    CHECK(g->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&f));
+    return f;
+}
+static void Run(ID3D12CommandQueue *q, ID3D12GraphicsCommandList *l) {
+    CHECK(l->Close());
+    ID3D12CommandList *one[] = {l};
+    q->ExecuteCommandLists(1, one);
+}
+// Waits on the CPU for `f` to reach `v`, `ms` at most.
+static bool CpuWait(ID3D12Fence *f, UINT64 v, DWORD ms = 10000) {
+    HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    CHECK(f->SetEventOnCompletion(v, ev));
+    bool ok = WaitForSingleObject(ev, ms) == WAIT_OBJECT_0;
+    CloseHandle(ev);
+    return ok;
+}
+// After the main queue's earlier work: its list and allocator reopened.
+static void Drain() {
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    if (!CpuWait(g->fence, g->value)) { printf("hazard drain timeout\n"); exit(1); }
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+}
+static ID3D12QueryHeap *TimestampHeap() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    return heap;
+}
+
+// The main queue owes a timestamp (resolved on the CPU), so its Signal(F, 5) reaches F's CPU-visible value only once
+// its heavy pass completes; meanwhile queue B waits for F = 5, then signals F = 6. D3D12: B runs after the main
+// queue's signal, and F reaches 6. (Before M5 the late signal of 5 replaced F's event under B's wait: a deadlock.)
+// Prints whether F reached 6 within 10 s: 1.
+static void FenceReset() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence();
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    g->list->EndQuery(TimestampHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list->ResolveQueryData(TimestampHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 1, readback, 63 * 512);
+    Run(g->queue, g->list);
+    CHECK(g->queue->Signal(f, 5));
+    CHECK(b.q->Wait(f, 5));
+    CHECK(b.q->Signal(f, 6));
+    bool ok = CpuWait(f, 6);
+    printf("hazard fence-reset %d\n", ok ? 1 : 0);
+    fflush(stdout);
+    if (!ok)
+        exit(1);
+    Drain();
+}
+
+// The main queue waits for G (which the CPU signals last) before signaling F; queue B waits for F, adds 1 to T1 and
+// signals H. The CPU signals F itself, waits for H, then signals G. D3D12 lets B through on the CPU's signal of F.
+// Prints T1 (-1 on a timeout): 1.
+static void FenceCpuLate() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence(), *gate = MakeFence(), *h = MakeFence();
+    CHECK(g->queue->Wait(gate, 1));
+    CHECK(g->queue->Signal(f, 1));
+    auto *main_list = g->list;
+    g->list = b.l;
+    Clear(T[1]);
+    Pass(T[1], add, 1, 1);
+    Read(T[1], RT, 512, 512, 0);
+    g->list = main_list;
+    CHECK(b.q->Wait(f, 1));
+    Run(b.q, b.l);
+    CHECK(b.q->Signal(h, 1));
+    CHECK(f->Signal(1));
+    bool ok = CpuWait(h, 1);
+    CHECK(gate->Signal(1));
+    printf("hazard fence-cpu-late %g\n", ok ? Texel(0) : -1.0f);
+    fflush(stdout);
+    if (!ok)
+        exit(1);
+    CHECK(g->queue->Signal(g->fence, ++g->value)); // the main queue's list stays open: no Drain
+    if (!CpuWait(g->fence, g->value)) { printf("hazard drain timeout\n"); exit(1); }
+}
+
+// The main queue resolves a timestamp (on the CPU) and signals F; queue B waits for F and signals G. Once the CPU sees
+// G, it sees F, and the timestamp as it ends up (D3D12: G's signal comes after F's). 50 rounds; prints the rounds where
+// F wasn't reached, then those where the timestamp changed after: 0 0.
+static void FenceTransitive() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence(), *gg = MakeFence();
+    unsigned early_fence = 0, early_stamp = 0;
+    D3D12_RANGE whole = {0, 64 * 512}, none = {0, 0};
+    auto stamp = [&]() {
+        uint8_t *p;
+        UINT64 v;
+        CHECK(readback->Map(0, &whole, (void **)&p));
+        memcpy(&v, p + 62 * 512, 8);
+        readback->Unmap(0, &none);
+        return v;
+    };
+    for (UINT64 r = 1; r <= 50; r++) {
+        uint8_t *p;
+        CHECK(readback->Map(0, &whole, (void **)&p));
+        memset(p + 62 * 512, 0xFF, 8);
+        readback->Unmap(0, &whole);
+        g->list->EndQuery(TimestampHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        g->list->ResolveQueryData(TimestampHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 1, readback, 62 * 512);
+        Run(g->queue, g->list);
+        CHECK(g->queue->Signal(f, r));
+        CHECK(b.q->Wait(f, r));
+        CHECK(b.q->Signal(gg, r));
+        if (!CpuWait(gg, r)) { printf("hazard fence-transitive timeout\n"); exit(1); }
+        UINT64 seen = f->GetCompletedValue(), at_g = stamp();
+        Drain();
+        early_fence += seen < r;
+        early_stamp += at_g != stamp();
+    }
+    printf("hazard fence-transitive %u %u\n", early_fence, early_stamp);
+}
+
+// The main queue resolves a timestamp into a custom (CPU write-back, GPU-readable) heap and signals F; queue B waits
+// for F and copies that buffer into the readback buffer. B copies the timestamp as written. Prints whether B's copy
+// equals the custom buffer's final contents (-1 on a timeout): 1.
+static void FenceCustom() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence(), *d = MakeFence();
+    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_CUSTOM, D3D12_CPU_PAGE_PROPERTY_WRITE_BACK, D3D12_MEMORY_POOL_L0};
+    D3D12_RESOURCE_DESC bd = {D3D12_RESOURCE_DIMENSION_BUFFER, 0, 256, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                              D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE};
+    ID3D12Resource *custom;
+    CHECK(g->device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+                                             (void **)&custom));
+    uint8_t *p;
+    D3D12_RANGE whole = {0, 256}, none = {0, 0};
+    CHECK(custom->Map(0, &none, (void **)&p));
+    memset(p, 0, 256);
+    custom->Unmap(0, &whole);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    g->list->EndQuery(TimestampHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list->ResolveQueryData(TimestampHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 1, custom, 0);
+    Run(g->queue, g->list);
+    CHECK(g->queue->Signal(f, 1));
+    D3D12_RESOURCE_BARRIER rb = {D3D12_RESOURCE_BARRIER_TYPE_TRANSITION};
+    rb.Transition = {custom, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, COPY_DEST, COPY_SOURCE};
+    b.l->ResourceBarrier(1, &rb);
+    b.l->CopyBufferRegion(readback, 61 * 512, custom, 0, 8);
+    CHECK(b.q->Wait(f, 1));
+    Run(b.q, b.l);
+    CHECK(b.q->Signal(d, 1));
+    bool ok = CpuWait(d, 1);
+    UINT64 copied = 0, written = 0;
+    D3D12_RANGE rr = {0, 64 * 512};
+    CHECK(readback->Map(0, &rr, (void **)&p));
+    memcpy(&copied, p + 61 * 512, 8);
+    readback->Unmap(0, &none);
+    Drain();
+    CHECK(custom->Map(0, &whole, (void **)&p));
+    memcpy(&written, p, 8);
+    custom->Unmap(0, &none);
+    printf("hazard fence-custom %d\n", ok ? (int)(copied == written) : -1);
+}
+
+// The CPU signals F = 10, then lowers it to 1; queue B waits for F = 2, then signals D. 50 ms later D is still 0;
+// after the CPU signals F = 2, D reaches 1. Prints D before and after: 0 1.
+static void FenceLower() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence(), *d = MakeFence();
+    CHECK(f->Signal(10));
+    CHECK(f->Signal(1));
+    CHECK(b.q->Wait(f, 2));
+    CHECK(b.q->Signal(d, 1));
+    Sleep(50);
+    UINT64 before = d->GetCompletedValue();
+    CHECK(f->Signal(2));
+    bool ok = CpuWait(d, 1);
+    printf("hazard fence-lower %llu %d\n", (unsigned long long)before, ok ? 1 : 0);
+}
+
+// Queue B's wait for F and its pass sampling T0 into T1 are submitted before the main queue renders T0 (heavy) and
+// signals F: B samples the finished T0. Prints T1 (-1 on a timeout): 256.
+static void FenceWaitFirst() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence(), *d = MakeFence();
+    auto *main_list = g->list;
+    g->list = b.l;
+    g->Barrier(T[0].texture, RT, PSR);
+    Pass(T[1], sample, 1, 1, &T[0]);
+    g->Barrier(T[0].texture, PSR, RT);
+    Read(T[1], RT, 512, 512, 0);
+    g->list = main_list;
+    CHECK(b.q->Wait(f, 1));
+    Run(b.q, b.l);
+    CHECK(b.q->Signal(d, 1));
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    Run(g->queue, g->list);
+    CHECK(g->queue->Signal(f, 1));
+    bool ok = CpuWait(d, 1);
+    printf("hazard fence-wait-first %g\n", ok ? Texel(0) : -1.0f);
+    fflush(stdout);
+    if (!ok)
+        exit(1);
+    Drain();
+}
+
+// Values asked out of the order they run in, rising all the same: queue B waits for F = 1 and then signals F = 2, and
+// the CPU signals F = 1 after; then, on fence E, queue B waits for 5 and signals 6, and the main queue signals 5 after.
+// D3D12 runs each to its higher value. Prints whether F reached 2, then E 6, within 10 s each: 1 1.
+static void FenceOrder() {
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence(), *e = MakeFence();
+    CHECK(b.q->Wait(f, 1));
+    CHECK(b.q->Signal(f, 2));
+    CHECK(f->Signal(1));
+    bool cpu = CpuWait(f, 2);
+    CHECK(b.q->Wait(e, 5));
+    CHECK(b.q->Signal(e, 6));
+    CHECK(g->queue->Signal(e, 5));
+    bool queue = cpu && CpuWait(e, 6);
+    printf("hazard fence-order %d %d\n", cpu ? 1 : 0, queue ? 1 : 0);
+    fflush(stdout);
+    if (!queue)
+        exit(1);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -831,7 +1073,9 @@ int main(int argc, char **argv) {
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
         {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}, {"unsplit", UnsplitPlain}, {"unsplit-barrier", UnsplitBarrier},
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
-        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}};
+        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}, {"fence-reset", FenceReset}, {"fence-cpu-late", FenceCpuLate},
+        {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
+        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
