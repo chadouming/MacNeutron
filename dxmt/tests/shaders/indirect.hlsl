@@ -9,3 +9,14 @@ float4 psmain() : SV_Target0 { return 1; }
 // Indirect dispatches, as Niagara simulates GPU particles: every thread counts itself.
 RWByteAddressBuffer Counter : register(u0);
 [numthreads(4, 1, 1)] void csmain() { Counter.InterlockedAdd(0, 1); }
+// Indirect draws read straight from the argument buffer (GPU efficiency E10): vertex v (VERT, from a per-vertex stream
+// of 0, 1, 2..., so fetched at StartVertexLocation + i, or index + BaseVertexLocation) of instance `inst` is a corner of
+// a one-pixel triangle at cell (v / 3, inst) of a 32x8 target, painted with the instance's TAG (from a per-instance
+// stream, so StartInstanceLocation picks it).
+struct Tagged { float4 pos : SV_Position; nointerpolation uint tag : TAG; };
+Tagged vsid(uint v : VERT, uint inst : SV_InstanceID, uint tag : TAG) {
+    float2 pixel = float2(v / 3, inst) + float2(v % 3 == 1, v % 3 == 2) * 1.5;
+    Tagged o = {float4(pixel.x / 16 - 1, 1 - pixel.y / 4, 0, 1), tag};
+    return o;
+}
+uint psid(Tagged i) : SV_Target0 { return i.tag; }

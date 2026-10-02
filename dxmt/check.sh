@@ -259,26 +259,49 @@ run ours vsread-ref d3dmetal "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vs.dxil" "Z:
 expect "a vertex shader reads typed, structured, 3D and cube resources as on D3DMetal" \
   "$(grep '^vsread ' "$WORK/vsread-ours.txt" || echo none)" "$(grep '^vsread ' "$WORK/vsread-ref.txt" || echo 'D3DMetal printed nothing')"
 # Unreal draws grass and GPU particles with ExecuteIndirect: 1024 of them in one render pass, 8 frames, none lost.
-run ours indirect-ours dxmt "$TESTS/d3d12_indirect.exe" "Z:$S/indirect.vs.dxil" "Z:$S/indirect.ps.dxil" "Z:$S/indirect.cs.dxil"
-run ours indirect-ref d3dmetal "$TESTS/d3d12_indirect.exe" "Z:$S/indirect.vs.dxil" "Z:$S/indirect.ps.dxil" "Z:$S/indirect.cs.dxil"
+indirect() { run ours "$1" "$2" "$TESTS/d3d12_indirect.exe" "Z:$S/indirect.vs.dxil" "Z:$S/indirect.ps.dxil" \
+  "Z:$S/indirect.cs.dxil" "Z:$S/indirect.vsid.dxil" "Z:$S/indirect.psid.dxil"; }
+indirect indirect-ours dxmt
+indirect indirect-ref d3dmetal
 expect "1024 indirect draws in one pass paint every cell" "$(grep '^indirect ok' "$WORK/indirect-ours.txt" || echo none)" "indirect ok 8 0"
 expect "and on D3DMetal" "$(grep '^indirect ok' "$WORK/indirect-ref.txt" || echo 'D3DMetal printed nothing')" "indirect ok 8 0"
 expect "1024 indirect dispatches in one pass run every thread" "$(grep '^indirect dispatch' "$WORK/indirect-ours.txt" || echo none)" "indirect dispatch 81920 81920"
 expect "and on D3DMetal" "$(grep '^indirect dispatch' "$WORK/indirect-ref.txt" || echo 'D3DMetal printed nothing')" "indirect dispatch 81920 81920"
+# E10: draw signatures that set nothing but the draw: vertices fetched from StartVertexLocation (or index plus
+# BaseVertexLocation), instances from StartInstanceLocation, ByteStride and the argument and index buffer offsets kept,
+# an instance count of 0 drawing nothing, a count buffer capping the call, and an index buffer placed where a released
+# buffer was.
+native=$(printf 'indirect %s\n' "native-draw 2,0:107 3,0:100 4,0:100 2,1:108" "counted 2,0:107 2,1:108" \
+  "native-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108" \
+  "aliased-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108")
+expect "indirect draws read from the argument buffer draw what D3D12 says" \
+  "$(grep -E '^indirect (native|counted|aliased)' "$WORK/indirect-ours.txt" || echo none)" "$native"
+expect "and on D3DMetal" "$(grep -E '^indirect (native|counted|aliased)' "$WORK/indirect-ref.txt" || echo 'D3DMetal printed nothing')" "$native"
+export DXMT_D3D12_INDIRECT=icb
+indirect indirect-icb dxmt
+unset DXMT_D3D12_INDIRECT
+expect "and with DXMT_D3D12_INDIRECT=icb" "$(grep -E '^indirect (ok|native|counted|aliased)' "$WORK/indirect-icb.txt" || echo none)" \
+  "$(printf 'indirect ok 8 0\n%s' "$native")"
 # DXMT_STATS: every D3D12 call counted and timed per thread, encoder boundaries with and without a barrier, written to
 # <capture folder>/stats.txt (at exit when nothing presents).
 rm -rf "$WORK/stats"; export DXMT_DXIL_DUMP="$WORK/stats" DXMT_STATS=1
-run ours indirect-stats dxmt "$TESTS/d3d12_indirect.exe" "Z:$S/indirect.vs.dxil" "Z:$S/indirect.ps.dxil" "Z:$S/indirect.cs.dxil"
+indirect indirect-stats dxmt
 unset DXMT_DXIL_DUMP DXMT_STATS
-expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16384 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
+expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16388 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 expect "and every encoder boundary, barrier or not" \
   "$(grep -cE '^  encoder boundaries [1-9][0-9]*, [0-9]+ with no barrier$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
-# Indirect command buffers are reused once their allocator is reset (8 frames, 2048 per frame), and a render pass's
-# indirect commands are written by one compute pass before it, not by a draw and a barrier each inside it.
-expect "indirect command buffers are reused after Reset" \
-  "$(grep -c '^  indirect command buffers created 2048$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
-expect "each render pass resolves its indirect commands in one compute pass before it" \
-  "$(grep -c '^  indirect resolve passes 8$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
+# E10: the 8192 single draws and the three uncounted calls draw from the argument buffer, with no indirect command buffer
+# nor resolver pass; the dispatches' (1024 a frame) and the counted call's are reused once their allocator is reset.
+# With DXMT_D3D12_INDIRECT=icb, every draw call's render pass resolves its commands in one compute pass before it.
+expect "uncounted indirect draws read the argument buffer, with no indirect command buffer" \
+  "$(grep -oE '(ExecuteIndirect native|indirect command buffers created|indirect resolve passes) [0-9]+' "$WORK/stats/stats.txt" 2> /dev/null | sort | tr '\n' ';')" \
+  "ExecuteIndirect native 8195;indirect command buffers created 1025;indirect resolve passes 1;"
+rm -rf "$WORK/stats-icb"; export DXMT_DXIL_DUMP="$WORK/stats-icb" DXMT_STATS=1 DXMT_D3D12_INDIRECT=icb
+indirect indirect-stats-icb dxmt
+unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_INDIRECT
+expect "and with DXMT_D3D12_INDIRECT=icb, one resolver pass per render pass" \
+  "$(grep -oE '(ExecuteIndirect native|indirect resolve passes) [0-9]+' "$WORK/stats-icb/stats.txt" 2> /dev/null | tr '\n' ';')" \
+  "indirect resolve passes 12;"
 # GPU timestamps by D3D12's rules (D3DMetal has none), and a timestamp between draws never splits their pass.
 rm -rf "$WORK/ts"; export DXMT_DXIL_DUMP="$WORK/ts" DXMT_DUMP_FRAME=0
 run ours ts-ours dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
@@ -488,15 +511,15 @@ expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/pa
 "$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
 "$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "29/29"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "31/31"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
 # the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
 "$DXMT/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
-  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "29:29"
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "31:31"
 expect "vertex and geometry shaders keep their math unfused" \
-  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 9
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 10
 
 # 8. Encoder ordering (GPU overlap spec §5): each mode's first pass is heavy, so work after it that doesn't wait for it
 #    reads or overwrites its results early. Our DXMT in strict order (the default), with overlap (DXMT_D3D12_OVERLAP=1),
@@ -508,7 +531,8 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
-  "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2")
+  "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
+  "merge-indirect 10")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -661,6 +685,17 @@ e7() { grep -oE '(clears folded at execute|clear folds refused \([a-z ]+\)) [0-9
 expect "a clear folds into its pass across lists" "$(e7 fold-lists)" "clears folded at execute 1;"
 expect "but not across a barrier naming its texture" "$(e7 fold-lists-barrier)" "clear folds refused (barrier) 1;"
 expect "nor across a copy of it" "$(e7 fold-copy)" "clear folds refused (barrier) 1;"
+
+# E10: two lists' passes into one target, each an indirect draw read from the argument buffer, are one Metal render
+# pass (no resolver pass before the second); with DXMT_D3D12_INDIRECT=icb, two.
+for m in native icb; do
+  rm -rf "$WORK/e10-$m"; export DXMT_DXIL_DUMP="$WORK/e10-$m" DXMT_STATS=1 DXMT_D3D12_INDIRECT=$m
+  run ours "e10-$m" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" merge-indirect
+  unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_INDIRECT
+done
+e10() { echo "$(grep -oE 'render passes merged [0-9]+' "$WORK/e10-$1/stats.txt" 2> /dev/null):$(grep '^hazard ' "$WORK/e10-$1.txt")"; }
+expect "indirect draws from the argument buffer merge across lists" "$(e10 native)" "render passes merged 1:hazard merge-indirect 10"
+expect "and with DXMT_D3D12_INDIRECT=icb, don't" "$(e10 icb)" ":hazard merge-indirect 10"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

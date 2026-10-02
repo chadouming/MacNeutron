@@ -1264,6 +1264,52 @@ static void FoldCopy() {
     printf("hazard fold-copy %g %g %g\n", Texel(2), Texel(0), Texel(1));
 }
 
+// GPU efficiency E10: indirect draws read their arguments in the render pass. Its arguments {3, 1, 0, 0} (csargs).
+// T0 gets 256 (heavy); a dispatch elsewhere ends that pass; a second pass into T0 (which waits on the first, as both
+// write T0) adds 9 by the indirect draw; a barrier INDIRECT_ARGUMENT -> UNORDERED_ACCESS; cscount then makes the
+// instance count 3. Only that barrier orders cscount after the second pass: 265 (283 if cscount ran first).
+static void IndirectWar() {
+    ID3D12Resource *a = Zeroed(16, UA), *elsewhere = Zeroed(256, UA);
+    Dispatch(args, a, 1);
+    g->Barrier(a, UA, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    Dispatch(fill, elsewhere, 1);
+    Bind(T[0], add, 9);
+    g->list->ExecuteIndirect(draw_signature, 1, a, 0, nullptr, 0);
+    g->Barrier(a, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, UA);
+    Dispatch(count, a, 1);
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard indirect-war %g\n", Texel(0));
+}
+// List 1: clear T0 to 2, an indirect draw of 4 instances adding 1. List 2: the same draw. With no resolver pass before
+// them, the two passes are one Metal render pass (DXMT_STATS: 1 render pass merged). Prints 10.
+static void MergeIndirect() {
+    static const D3D12_DRAW_ARGUMENTS four = {3, 4, 0, 0};
+    ID3D12Resource *a = g->Buffer(D3D12_HEAP_TYPE_UPLOAD, sizeof(four), D3D12_RESOURCE_STATE_GENERIC_READ);
+    void *p;
+    CHECK(a->Map(0, nullptr, &p));
+    memcpy(p, &four, sizeof(four));
+    a->Unmap(0, nullptr);
+    auto *main_list = g->list;
+    List b = MakeList();
+    ClearTo(T[0], 2);
+    Bind(T[0], add, 1);
+    g->list->ExecuteIndirect(draw_signature, 1, a, 0, nullptr, 0);
+    g->list = b.l;
+    Bind(T[0], add, 1);
+    g->list->ExecuteIndirect(draw_signature, 1, a, 0, nullptr, 0);
+    Read(T[0], RT, 512, 512, 0);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard merge-indirect %g\n", Texel(0));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -1313,7 +1359,8 @@ int main(int argc, char **argv) {
         {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}, {"fence-reset", FenceReset}, {"fence-cpu-late", FenceCpuLate},
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
         {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
-        {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy}};
+        {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
+        {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

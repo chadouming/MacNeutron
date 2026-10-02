@@ -1,13 +1,160 @@
 // Many indirect draws in one render pass, as Unreal draws grass and GPU particles:
-//   d3d12_indirect.exe <vs.dxil> <ps.dxil> <cs.dxil>   (shaders/indirect.hlsl)
+//   d3d12_indirect.exe <vs.dxil> <ps.dxil> <cs.dxil> [<vsid.dxil> <psid.dxil>]   (shaders/indirect.hlsl)
 // Each frame clears a 64x64 target and paints its 1024 cells with one ExecuteIndirect each (one draw command, its
 // StartInstanceLocation picks the cell from a per-instance vertex stream, as Unreal's instance ids), then runs 1024
 // indirect dispatches of 1 to 4 groups whose threads count themselves (as Niagara's GPU simulation). Prints "indirect ok <frames> <cells left unpainted over all frames>" and
 // "indirect dispatch <threads counted> <threads dispatched>".
+// With vsid and psid, also the cells (x,y:tag) that ExecuteIndirect calls paint on a 32x8 target (Draws below):
+// "indirect native-draw", "indirect counted", "indirect native-indexed" and "indirect aliased-indexed".
 #include "d3d12_common.hpp"
+#include <string>
+
+// GPU efficiency E10: draw signatures that set nothing but the draw. Each call clears the 32x8 target, runs one
+// ExecuteIndirect and prints the painted cells: vertex v (its index in a per-vertex stream of 0, 1, 2...) of instance i
+// paints cell (v / 3, i) with the instance's tag, 100 + its index in the per-instance stream.
+static void Draws(Gpu &gpu, ID3D12RootSignature *root, const std::vector<char> &vs, const std::vector<char> &ps) {
+    D3D12_INPUT_ELEMENT_DESC streams[2] = {
+        {"VERT", 0, DXGI_FORMAT_R32_UINT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TAG", 0, DXGI_FORMAT_R32_UINT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1}};
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC gd = {};
+    gd.pRootSignature = root;
+    gd.VS = {vs.data(), vs.size()};
+    gd.PS = {ps.data(), ps.size()};
+    gd.InputLayout = {streams, 2};
+    gd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    gd.SampleMask = UINT_MAX;
+    gd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    gd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    gd.RasterizerState.DepthClipEnable = TRUE;
+    gd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    gd.NumRenderTargets = 1;
+    gd.RTVFormats[0] = DXGI_FORMAT_R32_UINT;
+    gd.SampleDesc.Count = 1;
+    ID3D12PipelineState *pso;
+    CHECK(gpu.device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&pso));
+    auto signature = [&](D3D12_INDIRECT_ARGUMENT_TYPE type, UINT stride) {
+        D3D12_INDIRECT_ARGUMENT_DESC arg = {type};
+        D3D12_COMMAND_SIGNATURE_DESC sd = {stride, 1, &arg, 0};
+        ID3D12CommandSignature *sig;
+        CHECK(gpu.device->CreateCommandSignature(&sd, nullptr, __uuidof(ID3D12CommandSignature), (void **)&sig));
+        return sig;
+    };
+    auto upload = [&](const void *data, UINT size) {
+        ID3D12Resource *b = gpu.Buffer(D3D12_HEAP_TYPE_UPLOAD, size, D3D12_RESOURCE_STATE_GENERIC_READ);
+        void *p;
+        CHECK(b->Map(0, nullptr, &p));
+        memcpy(p, data, size);
+        b->Unmap(0, nullptr);
+        return b;
+    };
+    UINT verts[64], tags[16];
+    for (UINT i = 0; i < 64; i++) verts[i] = i;
+    for (UINT i = 0; i < 16; i++) tags[i] = 100 + i;
+    ID3D12Resource *vert_buffer = upload(verts, sizeof(verts)), *tag_buffer = upload(tags, sizeof(tags));
+    D3D12_VERTEX_BUFFER_VIEW vbv[2] = {{vert_buffer->GetGPUVirtualAddress(), sizeof(verts), 4},
+                                       {tag_buffer->GetGPUVirtualAddress(), sizeof(tags), 4}};
+    ID3D12Resource *target = gpu.Texture(Tex2D(32, 8, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+    ID3D12DescriptorHeap *rtv_heap;
+    D3D12_DESCRIPTOR_HEAP_DESC rhd = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1};
+    CHECK(gpu.device->CreateDescriptorHeap(&rhd, __uuidof(ID3D12DescriptorHeap), (void **)&rtv_heap));
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    gpu.device->CreateRenderTargetView(target, nullptr, rtv);
+    ID3D12Resource *readback = gpu.Buffer(D3D12_HEAP_TYPE_READBACK, 256 * 8, D3D12_RESOURCE_STATE_COPY_DEST);
+    // Draws with `draw`, then prints the painted cells.
+    auto run = [&](const char *name, auto draw) {
+        ID3D12GraphicsCommandList *list = gpu.list;
+        const float zero[4] = {0, 0, 0, 0};
+        D3D12_VIEWPORT viewport = {0, 0, 32, 8, 0, 1};
+        D3D12_RECT scissor = {0, 0, 32, 8};
+        list->ClearRenderTargetView(rtv, zero, 0, nullptr);
+        list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        list->RSSetViewports(1, &viewport);
+        list->RSSetScissorRects(1, &scissor);
+        list->SetGraphicsRootSignature(root);
+        list->SetPipelineState(pso);
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->IASetVertexBuffers(0, 2, vbv);
+        draw(list);
+        gpu.Barrier(target, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION src = {target, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; src.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION dst = {readback, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        dst.PlacedFootprint = {0, {DXGI_FORMAT_R32_UINT, 32, 8, 1, 256}};
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        gpu.Barrier(target, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        gpu.Submit();
+        uint8_t *r; D3D12_RANGE whole = {0, 256 * 8}, none = {0, 0};
+        CHECK(readback->Map(0, &whole, (void **)&r));
+        std::string cells;
+        for (UINT y = 0; y < 8; y++)
+            for (UINT x = 0; x < 32; x++) {
+                UINT v;
+                memcpy(&v, r + y * 256 + x * 4, 4);
+                if (v) cells += " " + std::to_string(x) + "," + std::to_string(y) + ":" + std::to_string(v);
+            }
+        readback->Unmap(0, &none);
+        printf("indirect %s%s\n", name, cells.c_str());
+    };
+
+    // Two records at offset 64: 3 vertices from 6, 2 instances from 7 (cell 2, tags 107 108); 6 vertices from 9, 1
+    // instance from 0 (cells 3 and 4, tag 100).
+    ID3D12CommandSignature *draw = signature(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, sizeof(D3D12_DRAW_ARGUMENTS));
+    D3D12_DRAW_ARGUMENTS records[18] = {};
+    records[16] = {3, 2, 6, 7};
+    records[17] = {6, 1, 9, 0};
+    ID3D12Resource *args = upload(records, sizeof(records));
+    run("native-draw", [&](ID3D12GraphicsCommandList *l) { l->ExecuteIndirect(draw, 2, args, 64 * sizeof(UINT), nullptr, 0); });
+    // A count buffer of 1 caps the same call at its first record.
+    UINT one = 1;
+    ID3D12Resource *count = upload(&one, 4);
+    run("counted", [&](ID3D12GraphicsCommandList *l) { l->ExecuteIndirect(draw, 2, args, 64 * sizeof(UINT), count, 0); });
+
+    // Indexed, 32 bytes a record (the rest filled with junk), at offset 32, an index buffer view 16 bytes into its
+    // buffer: 3 indices from 0 (cell 0, tag 100); 6 from 3, base vertex -1, 2 instances from 7 (cells 4 and 5, tags 107
+    // 108); no instance (drawn, it would paint cell 1, tag 105); 3 from 9, base vertex 2, instance 2 (cell 7, tag 102).
+    ID3D12CommandSignature *indexed = signature(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, 32);
+    UINT indices[16] = {0xdead, 0xdead, 0xdead, 0xdead, 0, 1, 2, 13, 14, 15, 16, 17, 18, 19, 20, 21};
+    ID3D12Resource *ib = upload(indices, sizeof(indices));
+    D3D12_INDEX_BUFFER_VIEW ibv = {ib->GetGPUVirtualAddress() + 16, 48, DXGI_FORMAT_R32_UINT};
+    UINT words[40];
+    for (UINT &w : words) w = 0xdeadbeef;
+    D3D12_DRAW_INDEXED_ARGUMENTS indexed_records[4] = {{3, 1, 0, 0, 0}, {6, 2, 3, -1, 7}, {3, 0, 0, 3, 5}, {3, 1, 9, 2, 2}};
+    for (UINT i = 0; i < 4; i++) memcpy(words + 8 + i * 8, &indexed_records[i], sizeof(indexed_records[i]));
+    ID3D12Resource *indexed_args = upload(words, sizeof(words));
+    run("native-indexed", [&](ID3D12GraphicsCommandList *l) {
+        l->IASetIndexBuffer(&ibv);
+        l->ExecuteIndirect(indexed, 4, indexed_args, 32, nullptr, 0);
+    });
+
+    // The same indices in a buffer placed over another one (at the same heap offset, as transient heaps alias), which
+    // is released once the index buffer is bound, before the list runs: the same cells.
+    ID3D12Heap *heap;
+    D3D12_HEAP_DESC hd = {65536, {D3D12_HEAP_TYPE_UPLOAD}, 0, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS};
+    CHECK(gpu.device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
+    D3D12_RESOURCE_DESC bd = {D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(indices), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                              D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+    ID3D12Resource *first, *placed;
+    CHECK(gpu.device->CreatePlacedResource(heap, 0, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                           __uuidof(ID3D12Resource), (void **)&first));
+    CHECK(gpu.device->CreatePlacedResource(heap, 0, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                           __uuidof(ID3D12Resource), (void **)&placed));
+    void *p;
+    CHECK(placed->Map(0, nullptr, &p));
+    memcpy(p, indices, sizeof(indices));
+    placed->Unmap(0, nullptr);
+    D3D12_INDEX_BUFFER_VIEW placed_ibv = {placed->GetGPUVirtualAddress() + 16, 48, DXGI_FORMAT_R32_UINT};
+    run("aliased-indexed", [&](ID3D12GraphicsCommandList *l) {
+        l->IASetIndexBuffer(&placed_ibv);
+        first->Release();
+        l->ExecuteIndirect(indexed, 4, indexed_args, 32, nullptr, 0);
+    });
+}
 
 int main(int argc, char **argv) {
-    if (argc != 4) { printf("usage: d3d12_indirect.exe <vs.dxil> <ps.dxil> <cs.dxil>\n"); return 2; }
+    if (argc != 4 && argc != 6) {
+        printf("usage: d3d12_indirect.exe <vs.dxil> <ps.dxil> <cs.dxil> [<vsid.dxil> <psid.dxil>]\n");
+        return 2;
+    }
     std::vector<char> vs = Load(argv[1]), ps = Load(argv[2]), cs = Load(argv[3]);
     if (vs.empty() || ps.empty() || cs.empty()) { printf("can't read the shaders\n"); return 1; }
     const UINT cells = 1024, frames = 8, size = 64, pitch = size * 4;
@@ -130,5 +277,10 @@ int main(int argc, char **argv) {
     readback->Unmap(0, &none);
     printf("indirect ok %u %u\n", frames, missing);
     printf("indirect dispatch %u %u\n", counted, threads * frames);
+    if (argc == 6) {
+        std::vector<char> vsid = Load(argv[4]), psid = Load(argv[5]);
+        if (vsid.empty() || psid.empty()) { printf("can't read the shaders\n"); return 1; }
+        Draws(gpu, root, vsid, psid);
+    }
     return 0;
 }
