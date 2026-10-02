@@ -142,6 +142,8 @@ With M1–M4 in place, a Metal trace of the SMITE scene lists the GPU idle inter
 - **Timestamp-only blits, about 0.15 ms**, mostly as busy time.
 - **Not causes:** the 32-buffer in-flight limit (buffers are committed 13–16 ms before they run), and the per-encoder fence wait (about 0.3 µs each, 0.05 ms per frame).
 
+**Result (§3.11, fork 72193e9):** GPU idle 0.3 ms per frame and the frame 1.4–1.7 ms shorter at the same spot; the frame-start stall went with the handoffs (0.7 per frame left of 3). Timestamp-only blits (about 0.15 ms) are left as they are.
+
 ### 3.11 GPU-side fence waits (M5)
 
 Reviewed before implementation (adversarial review with Metal experiments, 2026-10-02); the rules below replace a first draft that deadlocked when the CPU signals a fence a queue waits on, and let the CPU see a fence reached through a second queue before its own.
