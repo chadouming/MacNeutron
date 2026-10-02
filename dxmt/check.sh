@@ -76,6 +76,12 @@ unset CACHE
 # 2. A D3D12 program presents through our d3d12.dll (D3DMetal would report shader model 6.x).
 run ours clear dxmt "$TESTS/d3d12_clear.exe" 300
 expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' "$WORK/clear.txt" || true)" 1
+# DXMT_DUMP_FRAMES=<n>: a pass dump takes n consecutive frames (a one-frame glitch is hard to catch with one F9).
+rm -rf "$WORK/clear-dump"; export DXMT_DXIL_DUMP="$WORK/clear-dump" DXMT_DUMP_FRAME=5 DXMT_DUMP_FRAMES=3
+run ours clear-dump dxmt "$TESTS/d3d12_clear.exe" 20
+unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_FRAMES
+expect "DXMT_DUMP_FRAMES=3 dumps three frames in a row" \
+  "$(grep '^# frame ' "$WORK/clear-dump/passes.txt" 2> /dev/null | tr '\n' ';')" "# frame 0 presented;# frame 1 presented;# frame 2 presented;"
 expect "the D3D12 device is our DXMT (shader model 5.1)" "$(grep -c '^shader model 0x51 ' "$WORK/clear.txt" || true)" 1
 expect "it reports its real limits" "$(grep -c '^feature level 0xb100, wave ops 0, atomic64 0$' "$WORK/clear.txt" || true)" 1
 
@@ -497,7 +503,7 @@ hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
-  "unsplit-samebuffer 257")
+  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -505,7 +511,10 @@ unset DXMT_D3D12_OVERLAP
 run ours hazards-ref d3dmetal "$TESTS/d3d12_hazards.exe" "Z:$S"
 expect "work after a heavy pass waits for it (strict order, the default)" "$(hazards hazards)" "$want"
 expect "and with overlap (DXMT_D3D12_OVERLAP=1)" "$(hazards hazards-overlap)" "$want"
-expect "and on D3DMetal" "$(hazards hazards-ref)" "$want"
+# D3DMetal counts the second list's draw before its own query into the first list's ended query 0 (269484032);
+# D3D12 ends query 0 at its EndQuery, as our DXMT does (268435456).
+expect "and on D3DMetal (but for its occlusion count after a merged pass)" "$(hazards hazards-ref)" \
+  "$(echo "$want" | sed 's/^hazard unsplit-query 258 268435456 1048576$/hazard unsplit-query 258 269484032 1048576/')"
 rm -rf "$WORK/hz-dump"; export DXMT_DXIL_DUMP="$WORK/hz-dump" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=512,512,0,40
 run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect precise
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
@@ -540,6 +549,11 @@ for m in onewait newest; do
 done
 expect "encoders after a join wait on one fence" \
   "$(grep -oE 'encoder fence waits [0-9]+' "$WORK/onewait-stats/stats.txt" 2> /dev/null)" "encoder fence waits 10"
+rm -rf "$WORK/onewait-default"; export DXMT_DXIL_DUMP="$WORK/onewait-default" DXMT_STATS=1
+run ours onewait-default dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" onewait
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "early fences only with overlap" \
+  "$(grep -c 'encoder early fences' "$WORK/onewait-default/stats.txt" 2> /dev/null || true):$(grep -c 'encoder early fences' "$WORK/onewait-stats/stats.txt" 2> /dev/null || true)" "0:1"
 expect "and on the newest writer alone" \
   "$(grep -oE 'encoder dependency waits [0-9]+' "$WORK/newest-stats/stats.txt" 2> /dev/null)" "encoder dependency waits 3"
 # B (GPU overlap spec §3.10): Wait, ExecuteCommandLists and Signal go into one Metal command buffer. d3d12_hazards
@@ -547,12 +561,20 @@ expect "and on the newest writer alone" \
 rm -rf "$WORK/queues-stats"; export DXMT_DXIL_DUMP="$WORK/queues-stats" DXMT_STATS=1
 run ours queues-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" queues
 unset DXMT_DXIL_DUMP DXMT_STATS
-expect "a Wait, its ExecuteCommandLists and its Signal make one command buffer" \
-  "$(grep -oE 'command buffers committed [0-9]+' "$WORK/queues-stats/stats.txt" 2> /dev/null)" "command buffers committed 3"
+expect "a Wait rides in its ExecuteCommandLists' command buffer, which commits at once" \
+  "$(grep -oE 'command buffers committed [0-9]+' "$WORK/queues-stats/stats.txt" 2> /dev/null)" "command buffers committed 6"
+# A signal waits for timestamps resolved on the CPU only while some are pending (d3d12_hazards deferred alone).
+rm -rf "$WORK/deferred-stats"; export DXMT_DXIL_DUMP="$WORK/deferred-stats" DXMT_STATS=1
+run ours deferred-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" deferred
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "a signal behind no pending timestamps stays on the GPU" \
+  "$(grep -oE 'fence signals deferred to the CPU [0-9]+' "$WORK/deferred-stats/stats.txt" 2> /dev/null)" "fence signals deferred to the CPU 1"
 # M3 (GPU overlap spec §3.5): two lists' passes into one target with only a timestamp between them are one Metal render
-# pass; not across a barrier, nor when the timestamp's counter buffer is already sampled at that pass's end.
+# pass; not across a barrier (between or inside the passes), nor when the timestamp's counter buffer is already
+# sampled at that pass's end, nor out of a pass counting into an occlusion query, nor a list into itself.
 rm -rf "$WORK/m3-stats"; export DXMT_DXIL_DUMP="$WORK/m3-stats" DXMT_STATS=1
-run ours m3-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" unsplit unsplit-barrier unsplit-samebuffer
+run ours m3-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" unsplit unsplit-barrier unsplit-samebuffer unsplit-midbarrier \
+  unsplit-query unsplit-twice
 unset DXMT_DXIL_DUMP DXMT_STATS
 expect "render passes into one target across lists are one Metal render pass" \
   "$(grep -oE '(render passes merged|timestamp blits folded) [0-9]+' "$WORK/m3-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \

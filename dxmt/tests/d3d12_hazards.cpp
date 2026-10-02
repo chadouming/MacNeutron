@@ -552,32 +552,55 @@ static void Queues() {
 
 // Two command lists in one ExecuteCommandLists call: the first renders T0 (heavy); the second starts with a
 // timestamp, then renders into T0 again, loading it. M3 (spec §3.5) encodes both as one Metal render pass with the
-// timestamp at its end (DXMT_STATS: 1 render pass merged, 1 timestamp blit folded). `barrier`: a barrier on T1 ends
-// the first list and starts the second, so no merge. `same_buffer`: the first pass already takes a timestamp from the
-// counter buffer the second list's timestamp uses (Metal samples a buffer once per pass), so no merge.
-static void Unsplit(const char *name, bool barrier, bool same_buffer) {
+// timestamp at its end (DXMT_STATS: 1 render pass merged, 1 timestamp blit folded). No merge in the variants:
+// `barrier`: a barrier on T1 ends the first list and starts the second; `same_buffer`: the first pass already takes a
+// timestamp from the counter buffer the second list's timestamp uses (Metal samples a buffer once per pass);
+// `mid_barrier`: a UAV barrier between the second pass's two draws (T0 258); `query`: the first pass counts into
+// occlusion query 0, the second draws once before its own query 1 on the same heap and once inside it: query 0 counts
+// the first pass's 256 instances alone (prints T0 then the two counts).
+enum UnsplitKind { kPlain, kBarrier, kSameBuffer, kMidBarrier, kQuery };
+static void Unsplit(const char *name, UnsplitKind kind) {
     static ID3D12CommandAllocator *a2;
     static ID3D12GraphicsCommandList *l2;
-    static ID3D12QueryHeap *heap;
+    static ID3D12QueryHeap *heap, *occlusion;
     if (!l2) {
         CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&a2));
         CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a2, nullptr, __uuidof(ID3D12GraphicsCommandList), (void **)&l2));
         D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 2};
         CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+        D3D12_QUERY_HEAP_DESC od = {D3D12_QUERY_HEAP_TYPE_OCCLUSION, 2};
+        CHECK(g->device->CreateQueryHeap(&od, __uuidof(ID3D12QueryHeap), (void **)&occlusion));
     }
     Clear(T[0]);
     g->Submit();
     auto *l1 = g->list;
-    Pass(T[0], add, 1, 256);
-    if (same_buffer)
+    if (kind == kQuery) {
+        Bind(T[0], add, 1);
+        l1->BeginQuery(occlusion, D3D12_QUERY_TYPE_OCCLUSION, 0);
+        l1->DrawInstanced(3, 256, 0, 0);
+        l1->EndQuery(occlusion, D3D12_QUERY_TYPE_OCCLUSION, 0);
+    } else {
+        Pass(T[0], add, 1, 256);
+    }
+    if (kind == kSameBuffer)
         l1->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 1); // at the open pass's end
-    if (barrier)
+    if (kind == kBarrier)
         g->Barrier(T[1].texture, RT, PSR);
     g->list = l2;
-    if (barrier)
+    if (kind == kBarrier)
         g->Barrier(T[1].texture, PSR, RT);
     l2->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0); // a timestamp-only blit
     Pass(T[0], add, 1, 1);
+    if (kind == kQuery) {
+        l2->BeginQuery(occlusion, D3D12_QUERY_TYPE_OCCLUSION, 1);
+        l2->DrawInstanced(3, 1, 0, 0);
+        l2->EndQuery(occlusion, D3D12_QUERY_TYPE_OCCLUSION, 1);
+    }
+    if (kind == kMidBarrier) {
+        D3D12_RESOURCE_BARRIER all = {D3D12_RESOURCE_BARRIER_TYPE_UAV};
+        l2->ResourceBarrier(1, &all);
+        l2->DrawInstanced(3, 1, 0, 0);
+    }
     g->list = l1;
     CHECK(l1->Close());
     CHECK(l2->Close());
@@ -593,13 +616,62 @@ static void Unsplit(const char *name, bool barrier, bool same_buffer) {
     CHECK(a2->Reset());
     CHECK(l2->Reset(a2, nullptr));
     Read(T[0], RT, 512, 512, 0);
+    if (kind == kQuery) {
+        static ID3D12Resource *counts;
+        if (!counts)
+            counts = g->Buffer(D3D12_HEAP_TYPE_DEFAULT, 16, COPY_DEST);
+        g->list->ResolveQueryData(occlusion, D3D12_QUERY_TYPE_OCCLUSION, 0, 2, counts, 0);
+        ReadBuffer(counts, COPY_DEST, 0, 8, 1);
+        ReadBuffer(counts, COPY_DEST, 8, 8, 2);
+    }
     g->Submit();
-    printf("hazard %s %g\n", name, Texel(0));
+    if (kind == kQuery)
+        printf("hazard %s %g %llu %llu\n", name, Texel(0), Word(1, 8), Word(2, 8));
+    else
+        printf("hazard %s %g\n", name, Texel(0));
 }
-static void UnsplitPlain() { Unsplit("unsplit", false, false); }
-static void UnsplitBarrier() { Unsplit("unsplit-barrier", true, false); }
-static void UnsplitSameBuffer() { Unsplit("unsplit-samebuffer", false, true); }
+static void UnsplitPlain() { Unsplit("unsplit", kPlain); }
+static void UnsplitBarrier() { Unsplit("unsplit-barrier", kBarrier); }
+static void UnsplitSameBuffer() { Unsplit("unsplit-samebuffer", kSameBuffer); }
+static void UnsplitMidBarrier() { Unsplit("unsplit-midbarrier", kMidBarrier); }
+static void UnsplitQuery() { Unsplit("unsplit-query", kQuery); }
 
+// One list, one pass adding 1 to T0, executed twice in one ExecuteCommandLists call: both runs draw (T0 2); M3 must
+// not merge a list into itself.
+static void UnsplitTwice() {
+    Clear(T[0]);
+    g->Submit();
+    Pass(T[0], add, 1, 1);
+    CHECK(g->list->Close());
+    ID3D12CommandList *lists[] = {g->list, g->list};
+    g->queue->ExecuteCommandLists(2, lists);
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    CHECK(g->fence->SetEventOnCompletion(g->value, ev));
+    if (WaitForSingleObject(ev, 10000) != WAIT_OBJECT_0) { printf("hazard unsplit-twice timeout\n"); exit(1); }
+    CloseHandle(ev);
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard unsplit-twice %g\n", Texel(0));
+}
+
+// A timestamp resolved on the CPU, then a Signal: that signal waits for the timestamps (on the CPU). A later Signal
+// with no timestamps pending is the GPU's again (DXMT_STATS, this mode alone: 1 signal deferred to the CPU).
+static void Deferred() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list->ResolveQueryData(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 1, readback, 63 * 512);
+    g->Submit();
+    Clear(T[0]);
+    g->Submit();
+    printf("hazard deferred 1\n");
+}
 
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
@@ -646,7 +718,8 @@ int main(int argc, char **argv) {
         {"independent", Independent}, {"precise", Precise},       {"mid-pass", MidPass}, {"twice", Twice},
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
         {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}, {"unsplit", UnsplitPlain}, {"unsplit-barrier", UnsplitBarrier},
-        {"unsplit-samebuffer", UnsplitSameBuffer}};
+        {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
+        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
