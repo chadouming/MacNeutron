@@ -503,7 +503,7 @@ hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
-  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1")
+  "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"

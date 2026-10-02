@@ -673,6 +673,61 @@ static void Deferred() {
     printf("hazard deferred 1\n");
 }
 
+// A committed resource starts zeroed (D3D12 promises it for buffers; render targets read zeros on D3DMetal too): buffers
+// and render targets filled with junk and released, then created again at the same sizes, read back all zeros (prints
+// the nonzero bytes found in the new buffers, then textures).
+static void Zeroed() {
+    const UINT64 size = 4 << 20;
+    const UINT n = 8;
+    ID3D12Resource *junk = g->Buffer(D3D12_HEAP_TYPE_UPLOAD, size, D3D12_RESOURCE_STATE_GENERIC_READ);
+    void *p;
+    CHECK(junk->Map(0, nullptr, &p));
+    memset(p, 0xAB, size);
+    junk->Unmap(0, nullptr);
+    for (UINT i = 0; i < n; i++) {
+        ID3D12Resource *b = g->Buffer(D3D12_HEAP_TYPE_DEFAULT, size, COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        g->list->CopyBufferRegion(b, 0, junk, 0, size);
+        Target t = MakeTarget();
+        const float pink[4] = {1, 0, 0.5f, 1};
+        g->list->ClearRenderTargetView(t.rtv, pink, 0, nullptr);
+        g->Submit();
+        b->Release();
+        t.texture->Release();
+        targets_made--;
+    }
+    ID3D12Resource *rb = g->Buffer(D3D12_HEAP_TYPE_READBACK, size, COPY_DEST);
+    unsigned long long buffer_bytes = 0, texture_bytes = 0;
+    for (UINT i = 0; i < n; i++) {
+        ID3D12Resource *b = g->Buffer(D3D12_HEAP_TYPE_DEFAULT, size, COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        g->Barrier(b, COPY_DEST, COPY_SOURCE);
+        g->list->CopyBufferRegion(rb, 0, b, 0, size);
+        g->Submit();
+        uint8_t *r;
+        D3D12_RANGE whole = {0, (SIZE_T)size}, none = {0, 0};
+        CHECK(rb->Map(0, &whole, (void **)&r));
+        for (UINT64 k = 0; k < size; k++)
+            buffer_bytes += r[k] != 0;
+        rb->Unmap(0, &none);
+        b->Release();
+        Target t = MakeTarget();
+        g->Barrier(t.texture, RT, COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION src = {t.texture, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+        src.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION dst = {rb, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        dst.PlacedFootprint = {0, {kFormat, kSize, kSize / 2, 1, kSize * 8}};
+        D3D12_BOX box = {0, 0, 0, kSize, kSize / 2, 1};
+        g->list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+        g->Submit();
+        CHECK(rb->Map(0, &whole, (void **)&r));
+        for (UINT64 k = 0; k < (UINT64)kSize * kSize / 2 * 8; k++)
+            texture_bytes += r[k] != 0;
+        rb->Unmap(0, &none);
+        t.texture->Release();
+        targets_made--;
+    }
+    printf("hazard zeroed %llu %llu\n", buffer_bytes, texture_bytes);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -719,7 +774,7 @@ int main(int argc, char **argv) {
         {"many", Many},              {"clear-rects", ClearRects}, {"signal", Signal},
         {"wrap", Wrap}, {"onewait", OneWait}, {"newest", Newest}, {"nodraw", NoDraw}, {"queues", Queues}, {"unsplit", UnsplitPlain}, {"unsplit-barrier", UnsplitBarrier},
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
-        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}};
+        {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
