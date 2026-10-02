@@ -1058,6 +1058,75 @@ static void TwoHeaps() {
     printf("hazard two-heaps %d %d\n", first[0] && second[0] > first[0], first[1] && second[1] > first[1]);
 }
 
+// GPU efficiency spec E4: a lone timestamp (a list's first; a list of timestamps alone) is taken at the start of the
+// next encoder the queue encodes, not by a blit of its own (DXMT_STATS: 2 here). One call, three lists:
+// [t0, pass on T0, t1], [t2, t3], [t4, pass on T1, t5]. Prints 1 when all six resolve nonzero and in order.
+static void TimestampStart() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 6};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    Queue2 b = MakeQueue(), c = MakeQueue(); // their lists only: all three lists run on the main queue
+    auto *main_list = g->list;
+    auto ts = [&](UINT i) { g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, i); };
+    ts(0);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 4);
+    ts(1);
+    g->list = b.l;
+    ts(2);
+    ts(3);
+    g->list = c.l;
+    ts(4);
+    Clear(T[1]);
+    Pass(T[1], add, 1, 4);
+    ts(5);
+    g->list->ResolveQueryData(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 6, readback, 59 * 512);
+    g->list = main_list;
+    ID3D12GraphicsCommandList *lists[] = {g->list, b.l, c.l};
+    for (auto *l : lists)
+        CHECK(l->Close());
+    g->queue->ExecuteCommandLists(3, (ID3D12CommandList *const *)lists);
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    if (!CpuWait(g->fence, g->value)) { printf("hazard ts-start timeout\n"); exit(1); }
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    UINT64 t[6];
+    uint8_t *p;
+    D3D12_RANGE whole = {0, 64 * 512}, none = {0, 0};
+    CHECK(readback->Map(0, &whole, (void **)&p));
+    memcpy(t, p + 59 * 512, sizeof t);
+    readback->Unmap(0, &none);
+    bool ok = t[0] != 0;
+    for (int i = 1; i < 6; i++)
+        ok = ok && t[i] >= t[i - 1];
+    printf("hazard ts-start %d\n", ok ? 1 : 0);
+}
+
+// Overlap order (DXMT_D3D12_OVERLAP=1): a pass sampled from two timestamp heaps puts one of the queue's own blits inside
+// the list (E2); later work in the list still waits on what it depends on: T0 rendered (heavy), work on T1, then T0
+// set to 7. Prints 7.
+static void AfterOwnBlit() {
+    static ID3D12QueryHeap *heaps[2];
+    if (!heaps[0])
+        for (auto &h : heaps) {
+            D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+            CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&h));
+        }
+    Clear(T[2]);
+    Pass(T[2], add, 1, 1);
+    g->list->EndQuery(heaps[0], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list->EndQuery(heaps[1], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    Pass(T[1], set, 5, 1);
+    Pass(T[0], set, 7, 1);
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard after-own-blit %g\n", Texel(0));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -1106,7 +1175,7 @@ int main(int argc, char **argv) {
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
         {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}, {"fence-reset", FenceReset}, {"fence-cpu-late", FenceCpuLate},
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
-        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}};
+        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

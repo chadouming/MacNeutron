@@ -44,18 +44,19 @@ SMITE 2 (and other D3D12 games) render the same frames with less GPU time on our
 
 ### E3. Position invariance
 
-- Vertex and geometry shaders contract their math (FMA) again; the output position is computed invariantly instead (Metal's `[[invariant]]` with invariance preserved at compile time), which keeps a depth prepass and the base pass bit-identical (the reason for today's unfused rule).
-- **Tests:** check.sh's depth-EQUAL and grass cases with the new rule; the "unfused" check becomes "position invariant".
+- **Measured: no gain (2026-10-02).** An experiment build let SMITE's vertex and geometry shaders fuse and reassociate freely (`DXMT_DXIL_VS_FAST=1`, no invariance: an upper bound), or keep strict math with Metal's late-invariance encoding (`=late`: the function attributes `invariance-late-contract`, `-reassoc` and `-unsafe-fp-math` and `llvm.fmuladd`, as MSL's `-fpreserve-invariance` emits; our position output already carries `air.invariant`). The base pass's vertex time was 2.43 ms by default, 2.45 with `late`, 2.35 even fully fused; no flicker either way. Unfused vertex math isn't why our vertex work exceeds D3DMetal's: E3 is not built and the switch is gone. The remaining base-pass vertex gap (about 0.4 ms) is left for a later investigation (vertex fetch, varyings).
 
 ### E4. Timestamp blits
 
-- A lone timestamp no longer opens its own blit encoder: its sample goes to the previous encoder's end, or the next one's start, in the same command buffer (Metal samples at stage boundaries), the resolve reading that sample.
-- **Tests:** timestamp order and monotonicity as D3DMetal's (d3d12_timestamp), encoder counts in `DXMT_STATS`.
+- SMITE's lone timestamps are mostly a command list's first timestamp, and lists of timestamps alone (`null blit blit null` in the passes list); there is no earlier encoder in the list to carry them.
+- So the queue doesn't encode a timestamp-only blit: its sample waits, in order, and is taken at the start of the next encoder it encodes (render pass: start of vertex, a new index in winemetal's render pass sample attachments; blit and compute: start of encoder), in a later list of the call if need be. Only the latest waiting sample rides, so values stay in order; the earlier ones, or one whose counter buffer the encoder can't take beside its own (one per encoder, E2), get blits of their own first. A list-start join waiting with them carries to that encoder. Leftovers at the end of the call get blits of their own, and so do samples waiting for an encoder whose start isn't ordered after earlier work (a clear or resolve pass waits before its fragment stage only; a pass's indirect resolvers run first) or that Metal drops (no commands). After the queue's own join inside a list (these blits, E2's), the next list encoder anchors dependencies again (overlap order). Off with `DXMT_D3D12_MERGE=0` and while dumping.
+- **Tests:** `d3d12_hazards ts-start` (three lists in one call: in order, `DXMT_STATS` 2 taken at the next encoder's start); the timestamp, `two-heaps` and M3 modes unchanged.
 
 ### E5. Buffer bounds checks
 
-- A raw or structured buffer load is bounds-checked once per load, not per component, and not at all where D3D12 guarantees robustness doesn't apply (no robust buffer access requested for root descriptors).
-- **Tests:** out-of-bounds loads return zeros as D3DMetal's, in a new shader test; translated shader counts unchanged.
+- A raw or structured buffer load is bounds-checked once for all the components the shader reads (Metal Shader Converter's form; a SM 6.0/6.1 BufferLoad names all four, so the ones it extracts count) instead of per component; one straddling its view's end reads zeros (D3DMetal reads past the view there). The bounds math is 64-bit: an offset near 4 GiB doesn't wrap past the check. Stores keep per-component checks. `DXMT_DXIL_BOUNDS=component` restores per-component loads (triage); the shader cache keys it apart.
+- **Measured** with an experiment build: fragment work 6.37 → 6.20 ms per frame, base-pass fragment 1.57 → 1.38 ms.
+- **Tests:** `d3d12_bounds` (shaders/bounds.hlsl): loads in bounds (the view's last dwords too), straddling, out of bounds and at a wrapping offset, through 16-dword and 4-element views over larger buffers; all but the straddling ones equal D3DMetal's. `d3d12_hazards after-own-blit` pins overlap order after the queue's own blit.
 
 ### E6. Targeted NaN handling
 

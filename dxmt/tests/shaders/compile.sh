@@ -43,3 +43,4 @@ cd "$HERE/../dxil"
 for g in buffers math transcendental textures groupshared wave atomics quad heap specials; do dxc -T cs_6_6 -E main -Fo "$g.dxil" "$g.hlsl"; done
 for g in half packed; do dxc -T cs_6_6 -E main -enable-16bit-types -Fo "$g.dxil" "$g.hlsl"; done
 ls -l ./*.dxil
+dxc -T cs_6_0 -E csmain -Fo bounds.cs.dxil bounds.hlsl
