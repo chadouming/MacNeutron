@@ -6,6 +6,8 @@
 #include "d3d12_common.hpp"
 #include <cmath>
 #include <string>
+#include <utility>
+#include <vector>
 
 static const UINT kSize = 1024;
 static const DXGI_FORMAT kFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // blendable on every Mac; exact integers to 2048
@@ -1127,6 +1129,141 @@ static void AfterOwnBlit() {
     printf("hazard after-own-blit %g\n", Texel(0));
 }
 
+// GPU efficiency spec E7: a clear-only pass folds into the first pass that binds its view later in the same
+// ExecuteCommandLists call, across lists, timestamps and barriers that don't name its texture. Lists on the main queue.
+struct List {
+    ID3D12CommandAllocator *a;
+    ID3D12GraphicsCommandList *l;
+};
+static List MakeList() {
+    List x;
+    CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&x.a));
+    CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, x.a, nullptr, __uuidof(ID3D12GraphicsCommandList),
+                                       (void **)&x.l));
+    return x;
+}
+// Runs `lists` (closed) in one call on the main queue and waits.
+static void RunLists(std::initializer_list<ID3D12GraphicsCommandList *> lists) {
+    std::vector<ID3D12CommandList *> v(lists.begin(), lists.end());
+    g->queue->ExecuteCommandLists((UINT)v.size(), v.data());
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    if (!CpuWait(g->fence, g->value)) { printf("hazard fold timeout\n"); exit(1); }
+}
+static ID3D12QueryHeap *FoldHeap() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 4};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    return heap;
+}
+static void ClearTo(Target &t, float v) {
+    const float c[4] = {v, v, v, v};
+    g->list->ClearRenderTargetView(t.rtv, c, 0, nullptr);
+}
+// 4 additive draws of 1 into the left half of `t` (scissor).
+static void LeftHalf(Target &t) {
+    Bind(t, add, 1);
+    D3D12_RECT left = {0, 0, (LONG)kSize / 2, (LONG)kSize};
+    g->list->RSSetScissorRects(1, &left);
+    g->list->DrawInstanced(3, 4, 0, 0);
+}
+// List 1: clear T0 to 2, a timestamp. List 2: a barrier round trip on `barrier_on` (no encoder). List 3: a timestamp,
+// then 4 draws of +1 into T0's left half. Returns T0 left, T0 right.
+static std::pair<float, float> FoldLists(Target &barrier_on) {
+    auto *main_list = g->list;
+    List b = MakeList(), c = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    g->Barrier(barrier_on.texture, RT, PSR);
+    g->Barrier(barrier_on.texture, PSR, RT);
+    g->list = c.l;
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+    LeftHalf(T[0]);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l, c.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l, c.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    return {Texel(0), Texel(1)};
+}
+// The fold across lists: prints 6 2 (DXMT_STATS: 1 clear folded at execute).
+static void FoldListsMode() {
+    auto [l, r] = FoldLists(T[2]);
+    printf("hazard fold-lists %g %g\n", l, r);
+}
+// A barrier naming the cleared texture between: no fold, same pixels (DXMT_STATS: 1 refused, barrier).
+static void FoldListsBarrier() {
+    auto [l, r] = FoldLists(T[0]);
+    printf("hazard fold-lists-barrier %g %g\n", l, r);
+}
+// List 1: clear T0 to 2, a timestamp. List 2: clear T0 to 7 (M4 folds it into the pass), +1 x4 into the left half.
+// The later clear wins: prints 11 7.
+static void FoldM4() {
+    auto *main_list = g->list;
+    List b = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    ClearTo(T[0], 7);
+    LeftHalf(T[0]);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard fold-m4 %g %g\n", Texel(0), Texel(1));
+}
+// List A: clear T0 to 2, a timestamp. List B: +1 x4 over all of T0. One call runs {A, B, B}: 10; a second call runs
+// {B}: 14. The fold is for that execution of A's clear only. Prints 10 14.
+static void FoldTwice() {
+    auto *main_list = g->list;
+    List b = MakeList(), r = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    Pass(T[0], add, 1, 4);
+    g->list = r.l;
+    Read(T[0], RT, 512, 512, 0);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l, r.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l, b.l, r.l});
+    float first = Texel(0);
+    RunLists({b.l, r.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard fold-twice %g %g\n", first, Texel(0));
+}
+// List 2 copies a texel of T0 out (barriers around it name T0) before list 3's draws: the copy reads 2, the clear
+// stays a pass. Prints 2 6 2.
+static void FoldCopy() {
+    auto *main_list = g->list;
+    List b = MakeList(), c = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    Read(T[0], RT, 900, 512, 2);
+    g->list = c.l;
+    LeftHalf(T[0]);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l, c.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l, c.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard fold-copy %g %g %g\n", Texel(2), Texel(0), Texel(1));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -1175,7 +1312,8 @@ int main(int argc, char **argv) {
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
         {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}, {"fence-reset", FenceReset}, {"fence-cpu-late", FenceCpuLate},
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
-        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}};
+        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
+        {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

@@ -507,7 +507,8 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
-  "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7")
+  "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
+  "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -601,9 +602,10 @@ expect "and none with DXMT_D3D12_MERGE=0" \
 rm -rf "$WORK/m4-stats"; export DXMT_DXIL_DUMP="$WORK/m4-stats" DXMT_STATS=1
 run ours m4-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" fold
 unset DXMT_DXIL_DUMP DXMT_STATS
+# T1's clear, behind a barrier on T2, folds at execution since GPU efficiency E7 (counted apart): no clear pass is left.
 expect "a clear before a pass into its target is the pass's load action" \
   "$(grep -oE '(clears folded|clear passes) [0-9]+' "$WORK/m4-stats/stats.txt" 2> /dev/null | sort | tr '\n' ';')" \
-  "clear passes 1;clears folded 1;"
+  "clears folded 1;"
 rm -rf "$WORK/m4-off-stats"; export DXMT_DXIL_DUMP="$WORK/m4-off-stats" DXMT_STATS=1 DXMT_D3D12_MERGE=0
 run ours m4-off-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" fold
 unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_MERGE
@@ -646,6 +648,19 @@ expect "buffer loads read zeros outside their views, in one check per load" \
   "$(grep '^bounds ' "$WORK/bounds.txt")" "bounds 5 6 7 8 0 0 0 0 0 0 0 0 0 0 0 0 13 14 15 16 0 0 0 0 20 19 20 0 0 0 0 0"
 expect "and as on D3DMetal but where a load straddles the view's end" \
   "$(grep '^bounds ' "$WORK/bounds-ref.txt")" "bounds 5 6 7 8 19 20 21 22 0 0 0 0 20 21 0 0 13 14 15 16 0 0 0 0 20 19 20 0 0 0 0 0"
+
+# E7: a clear-only pass folds into the first pass binding its view later in the same call, across lists, timestamps
+# and barriers on other textures (fold-lists); not across a barrier naming its texture (fold-lists-barrier) or a copy
+# of it (fold-copy). d3d12_hazards, each mode alone.
+for m in fold-lists fold-lists-barrier fold-copy; do
+  rm -rf "$WORK/e7-$m"; export DXMT_DXIL_DUMP="$WORK/e7-$m" DXMT_STATS=1
+  run ours "e7-$m" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" $m
+  unset DXMT_DXIL_DUMP DXMT_STATS
+done
+e7() { grep -oE '(clears folded at execute|clear folds refused \([a-z ]+\)) [0-9]+' "$WORK/e7-$1/stats.txt" 2> /dev/null | tr '\n' ';'; }
+expect "a clear folds into its pass across lists" "$(e7 fold-lists)" "clears folded at execute 1;"
+expect "but not across a barrier naming its texture" "$(e7 fold-lists-barrier)" "clear folds refused (barrier) 1;"
+expect "nor across a copy of it" "$(e7 fold-copy)" "clear folds refused (barrier) 1;"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
