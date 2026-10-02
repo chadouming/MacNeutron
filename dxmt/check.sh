@@ -607,5 +607,20 @@ expect "and none with DXMT_D3D12_MERGE=0" \
   "$(grep -oE '(clears folded|clear passes) [0-9]+' "$WORK/m4-off-stats/stats.txt" 2> /dev/null | sort | tr '\n' ';'):$(grep '^hazard ' "$WORK/m4-off-stats.txt")" \
   "clear passes 2;:hazard fold 6 2 9 5"
 
+# 9. GPU efficiency (spec 2026-10-02). E1: D3D12 textures that aren't UAVs get Apple lossless compression (which
+#    PixelFormatView usage alone would turn off): a clear-only pass of a 3840x2160 RGBA16F target is at least 3x
+#    cheaper than with DXMT_D3D12_COMPRESSION=0, and writes through other views of one layout, copies and placed
+#    textures read back as on D3DMetal.
+run ours compress dxmt "$TESTS/d3d12_compress.exe"
+export DXMT_D3D12_COMPRESSION=0
+run ours compress-off dxmt "$TESTS/d3d12_compress.exe"
+unset DXMT_D3D12_COMPRESSION
+run ours compress-ref d3dmetal "$TESTS/d3d12_compress.exe"
+clear_on=$(awk '/^compress clear /{print $3}' "$WORK/compress.txt"); clear_off=$(awk '/^compress clear /{print $3}' "$WORK/compress-off.txt")
+expect "compressed targets clear at least 3x cheaper ($clear_on against $clear_off us)" \
+  "$(awk -v on="$clear_on" -v off="$clear_off" 'BEGIN { print (on > 0 && off >= 3 * on) ? "yes" : "no" }')" yes
+expect "and read back as on D3DMetal through other views, copies and heap placement" \
+  "$(grep -E '^compress (views|placed) ' "$WORK/compress.txt")" "$(grep -E '^compress (views|placed) ' "$WORK/compress-ref.txt")"
+
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
