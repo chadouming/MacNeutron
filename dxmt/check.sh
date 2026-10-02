@@ -38,7 +38,8 @@ run() {
       MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 DXMT_SHADER_CACHE_PATH="${CACHE:-$WORK/cache/$name}" \
       "$WORK/$tool/bin/macneutron" launch waitforexitandrun "$@" > "$WORK/$name.out" 2>&1 &
   pid=$!
-  ( sleep 120; kill "$pid" 2> /dev/null ) & dog=$!
+  # The watchdog's sleep outlives the kill below: kept off stdout, it can't hold a $(...) open for 120 s.
+  ( sleep 120; kill "$pid" 2> /dev/null ) > /dev/null 2>&1 & dog=$!
   wait "$pid" || true
   kill "$dog" 2> /dev/null || true
   tr -d '\r' < "$WORK/$name.out" > "$WORK/$name.txt"
