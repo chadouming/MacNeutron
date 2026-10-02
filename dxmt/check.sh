@@ -505,7 +505,7 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
-  "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1")
+  "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -515,8 +515,10 @@ expect "work after a heavy pass waits for it (strict order, the default)" "$(haz
 expect "and with overlap (DXMT_D3D12_OVERLAP=1)" "$(hazards hazards-overlap)" "$want"
 # D3DMetal counts the second list's draw before its own query into the first list's ended query 0 (269484032);
 # D3D12 ends query 0 at its EndQuery, as our DXMT does (268435456).
-expect "and on D3DMetal (but for its occlusion count after a merged pass)" "$(hazards hazards-ref)" \
-  "$(echo "$want" | sed 's/^hazard unsplit-query 258 268435456 1048576$/hazard unsplit-query 258 269484032 1048576/')"
+# D3DMetal resolves timestamps as zero, so two-heaps reads 0 0 there.
+expect "and on D3DMetal (but for its occlusion count after a merged pass, and its zero timestamps)" "$(hazards hazards-ref)" \
+  "$(echo "$want" | sed -e 's/^hazard unsplit-query 258 268435456 1048576$/hazard unsplit-query 258 269484032 1048576/' \
+    -e 's/^hazard two-heaps 1 1$/hazard two-heaps 0 0/')"
 rm -rf "$WORK/hz-dump"; export DXMT_DXIL_DUMP="$WORK/hz-dump" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=512,512,0,40
 run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect precise
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL

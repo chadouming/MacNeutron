@@ -1027,6 +1027,37 @@ static void FenceOrder() {
         exit(1);
 }
 
+// GPU efficiency spec E2 (prerequisite): a render pass sampled from two timestamp heaps at its end. Metal writes only
+// one counter buffer per encoder on Apple GPUs, so each further heap's sample needs its own encoder. Two frames: each
+// heap's timestamp nonzero, the second frame's later than the first. Prints heap A ok, heap B ok: 1 1.
+static void TwoHeaps() {
+    ID3D12QueryHeap *heaps[2];
+    for (auto &h : heaps) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&h));
+    }
+    UINT64 first[2] = {}, second[2] = {};
+    for (int frame = 0; frame < 2; frame++) {
+        uint8_t *p;
+        D3D12_RANGE whole = {0, 64 * 512}, none = {0, 0};
+        CHECK(readback->Map(0, &whole, (void **)&p));
+        memset(p + 60 * 512, 0, 16);
+        readback->Unmap(0, &whole);
+        Clear(T[0]);
+        Pass(T[0], add, 1, 16);
+        g->list->EndQuery(heaps[0], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        g->list->EndQuery(heaps[1], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        g->list->DrawInstanced(3, 1, 0, 0);
+        for (int h = 0; h < 2; h++)
+            g->list->ResolveQueryData(heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, 0, 1, readback, 60 * 512 + h * 8);
+        g->Submit();
+        CHECK(readback->Map(0, &whole, (void **)&p));
+        memcpy(frame ? second : first, p + 60 * 512, 16);
+        readback->Unmap(0, &none);
+    }
+    printf("hazard two-heaps %d %d\n", first[0] && second[0] > first[0], first[1] && second[1] > first[1]);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -1075,7 +1106,7 @@ int main(int argc, char **argv) {
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
         {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}, {"fence-reset", FenceReset}, {"fence-cpu-late", FenceCpuLate},
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
-        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}};
+        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

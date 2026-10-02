@@ -37,9 +37,10 @@ SMITE 2 (and other D3D12 games) render the same frames with less GPU time on our
 
 ### E2. One base pass
 
-- Unreal's base pass reaches us as several command lists, each starting and ending with a timestamp, executed in separate `ExecuteCommandLists` calls. M3 merges render passes only within one call and refuses when a timestamp's counter buffer is already sampled at the merged pass's end.
-- E2 lets M3 merge across calls coalesced into one Metal command buffer, and folds a later timestamp onto an earlier sample of the same counter buffer at the pass end as an alias (the resolve copies that sample), instead of refusing. A `DXMT_STATS` count per refusal reason shows what still splits passes.
-- **Tests:** the M3 hazard modes, plus two lists in two `ExecuteCommandLists` calls, and two timestamps from one heap folded into one pass end: one Metal render pass, pixels and timestamp order as D3DMetal's.
+- **Measured after E1 (design workflow, 2026-10-02):** SMITE's six base-pass segments come from one `ExecuteCommandLists` call; every boundary fails M3's timestamp check (each segment's two timestamps share a counter buffer) and four fail on ExecuteIndirect's resolvers. The M5 Pro samples counters only at stage boundaries (no sample between draws). With compressed targets a segment boundary costs little (the last segment's whole fragment stage: 37 µs median), so merging S3–S6 is worth at most about 0.14 ms per frame (0.3 ms if the earlier segments' barriers allow it), while folding several timestamps onto one sample risks stale, zero or backwards values (resolves in later calls, overlap order), which Unreal's GPU timing (dynamic resolution, stat gpu) reads.
+- **Decision:** the merge extension is not built (recorded as measured-small). E2 keeps the prerequisite fix it found:
+- **One counter buffer per encoder.** Apple GPUs write only the last counter buffer attached to an encoder (render, blit or compute; Metal validation is silent), so a render pass sampled from two timestamp heaps (or M3's merged pass with folded timestamps) lost all but one sample. The pass keeps its first sample; each other one's sample is taken by a blit of its own right after the pass (about 1 µs each). `DXMT_STATS` counts them.
+- **Tests:** `d3d12_hazards two-heaps`: a pass sampled from two heaps, two frames: both heaps' timestamps nonzero and increasing (`1 1`; before: `0 1`).
 
 ### E3. Position invariance
 
