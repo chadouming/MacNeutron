@@ -72,7 +72,7 @@ SMITE 2 (and other D3D12 games) render the same frames with less GPU time on our
 
 ### E9. Metal 4
 
-- First measure what Metal 4 is worth to D3DMetal on SMITE (`D3DM_MTL4` on and off at the same spot). Only if it is worth more than about 0.5 ms is a Metal 4 back end designed, in its own spec.
+- **Measured (2026-10-02):** D3DMetal at the spot runs 10.55 ms per frame with its Metal 4 back end (`D3DM_MTL4=1`, its default) and 9.26 ms without it (`D3DM_MTL4=0`): Metal 4 is slower for SMITE 2, so no Metal 4 back end is built. The comparison target becomes D3DMetal's Metal 3 path (fragment 5.6, vertex 2.8, compute 0.9 ms per frame).
 
 ## 4. Error handling
 
