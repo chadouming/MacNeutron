@@ -1,7 +1,7 @@
 # MacNeutron — Native arm64 stack: roadmap and sub-project 1 (arm64 Wine + FEX for x64)
 
 - **Date:** 2026-10-02
-- **Status:** Draft for review
+- **Status:** Approved 2026-10-03
 - **Builds on:**
   - `2026-09-27-macproton-runtime-design.md` (tool folder, launcher, prefixes)
   - `2026-09-28-macneutron-dxmt-fork-design.md` (our DXMT fork, `dxmt/` build layout)
@@ -51,7 +51,7 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 | GPL-3 | Allowed in our FEX fork, so Madeira's GPL-3 FEX changes may be imported with attribution. Wine and DXMT stay LGPL |
 | FEX JIT memory | FEX emits into code mapped twice (a writable view and an executable view), never into RWX pages (§3.4, §6.2) |
 | Patches | Patch files committed in this repo are the source of truth, applied to pinned upstream commits. No public Wine or FEX fork until the maintainer decides otherwise |
-| Minimum macOS for the arm64 stack | 26.6 (`os_cross_arch_is_supported` appeared in 26.6; the x18 call in 26.4). Binaries are built with a 26.6 deployment target. Only 27 is tested until a 26.x Mac is available |
+| Minimum macOS for the arm64 stack | 27, the maintainer's choice. The APIs would allow 26.6 (`os_cross_arch_is_supported` appeared in 26.6; the x18 call in 26.4), but 27 is what we test. Binaries are built with a 27.0 deployment target |
 | CrossOver Preview | Not used: it needs a paid CrossOver licence |
 
 ## 2. Roadmap
@@ -62,7 +62,7 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 | 2 | **DXMT for arm64:** ARM64X PE side, aarch64 `winemetal.so`, arm64 LLVM 15 | Wine build tree from 1 | Runs alongside 1. Testable with ARM64EC-built test programs, no FEX needed. Known blockers:<br>• `__rdtsc` in `src/d3d12/d3d12_stats.cpp`, the only compile error;<br>• Wine 11.19's `winemac.so` has no `macdrv_functions` and exports only two symbols, so both of DXMT's lookups (`winemetal_unix.c:1713-1722`) fail and nothing presents. Fix: a `macdrv_functions` shim table with default visibility in a winemac patch |
 | 3 | **Ship-base Wine** | 1 | Strict x18 toggling (§5.3); msync ported from CrossOver `wine1117`; freetype and gnutls bundled in `wine.app`; lsteamclient; `MAP_JIT` (or a dual view) for RWX memory other than FEX's |
 | 4 | **Steam path** | 3 | aarch64 `steam.exe`; ARM64X lsteamclient against Steam's arm64 `steamclient.dylib` |
-| 5 | **Launcher: a second runtime** | 3 | Per-game runtime choice, separate prefixes, preflight split, notarization of the entitled bundle, testing on macOS 26.6, the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`) |
+| 5 | **Launcher: a second runtime** | 3 | Per-game runtime choice, separate prefixes, preflight split, notarization of the entitled bundle, the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`) |
 | 6 | **SMITE 2 parity and measurements** | 2, 4, 5 | Frame time vs the Rosetta stack; the cost of x64↔ARM64EC crossings; per-game CPU cost; a CPU-bound title |
 | 7 | **Direct3D 9** (optional, can start now on Rosetta) | — | Import dacevedo12/dxmt `v0.4-d3d9` (LGPL) into our fork; Wine's wined3d stays the fallback |
 | 8 | **32-bit games** | 3, 7 | Standard WoW64: i386 in `--enable-archs` and FEX's `libwow64fex.dll`. The entitlement makes the low 4 GB usable, so Madeira's guest-window redesign isn't needed |
@@ -271,7 +271,7 @@ The transition table, the design and its stress tests are in `x18-boundaries.md`
    It names anything missing and never installs it.
 2. **Fetch.** Shallow clones into `build/wine-arm64-src/{wine,fex}` at the pins.
 3. **Patch.** A branch `macneutron` at the pin, with `git am` of the series. A patch that fails to apply stops the build and names it.
-4. **Configure** with `MACOSX_DEPLOYMENT_TARGET=26.6`:
+4. **Configure** with `MACOSX_DEPLOYMENT_TARGET=27.0`:
    ```
    autoreconf
    configure --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests \
@@ -350,7 +350,7 @@ That executable path is replaced by one dual-view pool, so there is one code pat
 
 - **Build:**
   - `libarm64ecfex.dll`: CMake + Ninja with `Data/CMake/toolchain_mingw.cmake`, `MINGW_TRIPLE=arm64ec-w64-mingw32` and `TUNE_CPU=none` (the default reads `/proc/cpuinfo`).
-  - The unixlib: Apple clang, with `CMAKE_OSX_DEPLOYMENT_TARGET=26.6`.
+  - The unixlib: Apple clang, with `CMAKE_OSX_DEPLOYMENT_TARGET=27.0`.
 - **Checks after every build:**
   - `llvm-objdump -p` lists only `ntdll.dll` as an import, and there is no TLS directory (upstream links libc++ statically);
   - the builtin marker is present. FEX's build stamps it; Wine ignores non-builtin DLLs in its own directories.
@@ -379,7 +379,7 @@ That executable path is replaced by one dual-view pool, so there is one code pat
 2. Signs the bundle with the entitlements, so they land on `Contents/MacOS/wine`.
 3. Checks `codesign --verify --strict --deep`.
 4. Checks that `codesign -d --entitlements -` on the loader shows the cross-architecture entitlement.
-5. Checks that every Mach-O has `minos 26.6`.
+5. Checks that every Mach-O has `minos 27.0`.
 6. Checks §4's path assertions.
 
 ### 7.3 `wine-arm64/check.sh` (`make wine-arm64-check`)
@@ -394,7 +394,7 @@ Each step prints `PASS`/`FAIL <step>` with its numbers, runs under its own time 
 
 | Step | Cap | Check |
 |---|---|---|
-| 0 macOS | — | macOS ≥ 26.6 |
+| 0 macOS | — | macOS ≥ 27 |
 | 1 Signature | — | §7.2's checks on the staged copy |
 | 2 Boot | 3 min | `WINEDLLOVERRIDES="mscoree,mshtml=" wineboot -i` |
 | 3 Pages | 1 min | Every process started in steps 2 and 4 traced `host page size: 4k` in `WINEDEBUG=+virtual`; none 16K |
@@ -451,7 +451,7 @@ Test programs live in `wine-arm64/tests/`, built with the pinned llvm-mingw:
 | The exec target lacks the entitlement at runtime (e.g. a hand-copied or relinked loader) | Patch 7: `fatal_error` names the path and says to re-sign the runtime. No silent SIGKILL |
 | `posix_spawn` with the 4K attribute fails | Patch 7 logs `err:process` with the errno |
 | A check step hangs | Its cap ends it; cleanup kills by executable path and `wineserver -k`; the step reports FAIL |
-| macOS below 26.6 | `check.sh` stops at step 0. Sub-project 5 turns this into a preflight error |
+| macOS below 27 | `check.sh` stops at step 0. Sub-project 5 turns this into a preflight error |
 
 ## 10. Acceptance on the maintainer's Mac
 
@@ -472,7 +472,6 @@ Recorded in `docs/testing/acceptance-arm64-wine.md`:
   - Notarization of a bundle with it is unverified (sub-project 5).
   - Apple could revoke it; the unentitled design is the fallback, at months of cost.
 - **16K with patch 6** is untested. If 4K pages ever had to go, that is the first thing to try.
-- **Deployment target 26.6** is untested on 26.x until sub-project 5.
 - **Upstream churn:** Wine and FEX move weekly. We rebase on our own schedule; patch files keep each rebase reviewable.
 - **wineserver's 16K rounding** of shared mappings is believed harmless (inferred).
 - **GPL-3 in the runtime:** the FEX fork's Madeira-derived changes are GPL-3, in a process that also loads Valve's `steamclient` (sub-project 4). The maintainer accepted this; it is not legal advice.
