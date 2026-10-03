@@ -19,9 +19,10 @@ UPFX="$WORK/prefix unentitled"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex g1-hello"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex g1-hello"
-NEEDS_FEX="g1-hello"
+G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1"
+NEEDS_FEX="$G1"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -168,6 +169,9 @@ g1_hello_cmd() {
   exe_cmd x64-hello
 }
 
+# The rest of gate G1 (spec §8), each test under FEX. Structured exceptions and a C++ throw are one step.
+g1_seh_cmd() { exe_cmd x64-seh && exe_cmd x64-seh-cpp; }
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -180,6 +184,11 @@ run_step() {
     g3-cpu) step g3-cpu 60 g3_cpu_cmd; grep '^feature ' "$WORK/g3-cpu.log" ;;
     fex) step fex 60 fex_cmd ;;
     g1-hello) step g1-hello 60 g1_hello_cmd ;;
+    g1-seh) step g1-seh 60 g1_seh_cmd ;;
+    g1-threads) step g1-threads 60 exe_cmd x64-threads ;;
+    g1-kuser) step g1-kuser 60 exe_cmd x64-kuser ;;
+    g1-smc) step g1-smc 60 exe_cmd x64-smc ;;
+    g1-tsc) step g1-tsc 60 exe_cmd x64-tsc; grep '^info ' "$WORK/g1-tsc.log" ;;
     *) die "no runner for $1" ;;
   esac
 }
