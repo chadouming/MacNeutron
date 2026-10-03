@@ -34,10 +34,13 @@ profile.
 ```sh
 make wine-arm64        # fetch Wine and FEX at the pins, patch, build, sign; build/wine-arm64/wine.app (a few minutes the first time)
 make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5 (about 8 min)
+
+make build wine-arm64-tests        # what check.sh needs besides the runtime: the launcher and the test programs
 sh wine-arm64/check.sh g2-litmus   # named steps only (and the steps they need); see STEPS in check.sh
 ```
 
-`make wine-arm64-check` also builds the launcher and the test programs (`make wine-arm64-tests`). Gate G4's Rosetta
+`make wine-arm64-check` builds the launcher (`make build`) and the test programs (`make wine-arm64-tests`) itself, but
+`make wine-arm64` does not, and `check.sh` run on its own needs both (G4 runs the launcher). Gate G4's Rosetta
 baseline runs MacNeutron's installed runtime-v4.7.3 (`MACNEUTRON_TOOL` names another tool folder). Each run starts from
 a clean prefix under `build/wine-arm64 check/`, and ends by checking that no process of either runtime is left.
 
@@ -58,7 +61,7 @@ The patch files are applied to the pins in `build/wine-arm64-src/wine` and `fex`
 
 1. Edit and commit in `build/wine-arm64-src/<wine or fex>`. Any change there makes the next build a "development
    build", which builds the tree as it is and skips the fetch, the patching and the up-to-date check.
-2. `make wine-arm64`.
+2. `make wine-arm64`, and once (or after a change to a test program or the Swift sources) `make build wine-arm64-tests`.
 3. `sh wine-arm64/check.sh <steps>` while working; `make wine-arm64-check` before committing.
 4. `make wine-arm64-export` writes the commits back to `wine-arm64/patches/`.
 5. Commit the patches in this repo. A commit message says why the change exists, with the failure that made it necessary.
@@ -67,15 +70,22 @@ Changing the pins or a patch file makes a tree with no work of its own start ove
 
 ## Licences
 
-- **Wine** is LGPL-2.1+; our patches to it are too. Patch 0006 is from citi94's Wine port, with its author kept. Patch
-  0009 is adapted from Madeira's LGPL Wine commits (`ac650deca3`, `d88d55eee0`, branch `madeira-lgpl`).
+- **Wine** is LGPL-2.1+; our patches to it are too.
+  - 0006: citi94's `citi94/wine-macos-arm64` commit `4a50ce17c8` ("ntdll: Handle macOS Apple Silicon W^X ..."), applied
+    with `git am`, author kept. Its message has no `Source:` line; this is where it comes from
+    (`docs/research/2026-10-02-native-arm64/entitled-trial.md`).
+  - 0009: adapted from Madeira's LGPL Wine commits `ac650deca3` and `d88d55eee0` (branch `madeira-lgpl`).
+  - The other Wine patches are ours.
 - **FEX** is MIT, and so are our patches to it.
   - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`.
   - 0003: Madeira (`willfaust/FEX`, branch `ios-port-2607`) `fdf361f0e`, applied unchanged.
   - 0004: the CASPAL part of Madeira's `ceabf254a`, ported to our pin.
-  - 0005: the dual-view JIT memory, derived from Madeira's dual-map commits (named in its message).
+  - 0005: the dual-view JIT memory, derived from Madeira's dual-map commits `fce78cefd`, `61f11e3cc` and `6084de076`
+    (the others it lists, `83e12849f`, `87b40c220` and `db4f32768`, are named there as not taken).
+  - 0002 is ours.
   - Madeira's commits we use are dated before 2026-08-28. Its `LICENSE-MADEIRA.md` says modifications published before
     then were granted under MIT, irrevocably. A Madeira commit published on or after that date would be GPL-3, so check
     the date before importing another. This is not legal advice.
-- Each patch's message names its source commit. Patch files keep their original authors.
-- Upstream FEX and DXMT refuse AI-authored contributions, so nothing here goes upstream.
+- Each patch taken or derived from another tree names its source in its message (0006's is given above, since its message
+  doesn't). Patch files keep their original authors.
+- Upstream FEX and DXMT refuse AI-authored contributions: no patches go upstream (issue reports only).

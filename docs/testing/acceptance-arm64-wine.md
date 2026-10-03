@@ -25,7 +25,7 @@ maintainer's Mac, with the Developer ID identity and the provisioning profile fo
 |---|---|---|---|---|---|
 | 2026-10-03 | Mac17,8 (Apple M5 Pro, 48 GB) | 27.0.1 (26A434) | wine-11.19, `455e3509b98a6919fd4ad1def4803e08c41c03b2` | `4ed80fd07176dce976a7351f559d59a47b68cbae` (2026-08-26) | 12 Wine (`patches/wine`), 5 FEX (`patches/fex`) |
 
-Repository at `0f0dbde` (the build inputs are the pins and patches in it). **All of spec §10 passes: items 1-4 below.**
+Repository at `0f0dbde` (the build inputs are the pins and patches in it). **All of spec §10 passes** (its four items are sections 1-4 below: the build, the checks, the Rosetta stack, G4).
 
 **Week-1 checkpoint:** met. The x64 hello ran in Task 5 on the first try.
 
@@ -96,7 +96,8 @@ PASS orphans
   FEX. `x64-hello`: `hello from x86_64`, `native machine 0xaa64`.
 - **G2 Memory ordering**, 10,000,000 iterations per pattern. **Default run** (FEX's defaults; the step log):
   `litmus MP forbidden=0`, `LB forbidden=0`, `2+2W forbidden=0`, `IRIW forbidden=0`, in 8 s. The program also prints
-  `MP: the reader saw flag before the writer was done in 9998823 runs` there (6117067 in the control).
+  `MP: the reader saw flag before the writer was done in 9998823 runs` there (6117067 in the control): an observation
+  count of the test's reader racing the writer, not forbidden outcomes.
   **Control run** (`FEX_TSOENABLED=0`): MP forbidden=12,578, LB 0, 2+2W 0, IRIW 7,036, in 6 s. The control sees
   violations, so the test can detect them; only MP is gated.
 - **G3 CPU features:** `feature LSE=1`, `LRCPC=1`, `LRCPC2=1`, `AFP=1`: ISAR0[23:20] >= 2, ISAR1[23:20] >= 2 and
@@ -116,7 +117,7 @@ PASS orphans
 ### 4. G4 Speed: FEX against Rosetta (measured, not gated)
 
 `x64-bench`: the same `.exe`, 5 separate processes per side, on this Mac in this session. FEX runs on this stack;
-Rosetta runs through `macneutron launch waitforexitandrun` with the pinned runtime-v4.7.3 in the `rosetta/` prefix
+Rosetta runs through `macneutron launch waitforexitandrun` with the pinned runtime-v4.7.3 in its own prefix (`build/wine-arm64 check/prefix rosetta`)
 (the launcher's normal environment). Each cell is the median of the 5 runs, in seconds; the ratio is FEX divided by Rosetta,
 so above 1 FEX is slower.
 
@@ -177,11 +178,16 @@ worst: mem_seq_read=2.119 mem_seq_write=2.009 call_std_function=1.373 branch_pre
 ratio > 1 means FEX is slower
 ```
 
-- **Geometric means:** single-threaded rows 0.934, multithreaded rows 0.915, call-heavy rows 1.212. On the single- and
-  multithreaded rows FEX is about 7-9% faster than Rosetta on this suite.
-- **Worst five:** `mem_seq_read` 2.119 and `mem_seq_write` 2.009 (scalar loads and stores over 64 MB; FEX's software TSO
-  is the likely cause, not isolated in this run), `call_std_function` 1.373, `branch_predictable` 1.372 and `call_virtual`
-  1.216. The best row, `rep_movsb_64MB` (0.072), is Rosetta's slow `rep movsb`, not a FEX strength.
+- **Geometric means:** single-threaded rows (29) 0.934, multithreaded rows (4) 0.915, call-heavy rows (3) 1.212. The
+  first two are pulled down by single rows where Rosetta is slow. Without `rep_movsb_64MB` (0.072, recomputed from the log)
+  the single-threaded mean is **1.023**, and without `sse_shuffle` (0.497) as well, 1.051; the multithreaded mean without
+  `mt_memcpy_4` (0.705) is 0.998. 10 of the 29 single-threaded rows are slower under FEX (three of them by under 0.5%).
+  So: on CPU-bound rows FEX is roughly at parity with Rosetta, not 7% faster.
+- **Worst five:** `mem_seq_read` 2.119 and `mem_seq_write` 2.009 (scalar loads and stores over 64 MB: about 2x slower on
+  streaming memory), `call_std_function` 1.373, `branch_predictable` 1.372 and `call_virtual` 1.216. The 2x on the
+  memory rows is FEX's software TSO: a diagnostic run with `FEX_TSOENABLED=0` in Task 10 (not part of this run, and not
+  safe for real programs) matched Rosetta's time on both. The best row, `rep_movsb_64MB` (0.072), is likely Rosetta's slow
+  `rep movsb` rather than a FEX strength.
 - **The call-heavy geometric mean is not settled.** It moves with the code layout of the benchmark binary:
   1.106 in Task 10's first run, 1.214 after its fix round (which also made `call_chain64` really 64 deep) and 1.212 now, and
   `call_virtual` alone has read between 0.93 and 1.22 across builds (1.216 here). A few rows (`branch_random`,
