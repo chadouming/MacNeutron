@@ -26,10 +26,12 @@ RWINE="$RTOOL/Libraries/Wine/bin"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
+# NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit g4-bench"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit g4-bench"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt g4-bench"
 NEEDS_FEX="$G1 g2-litmus g5-jit g4-bench"
+NEEDS_DXMT=""
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -117,6 +119,8 @@ step() {
 }
 
 wine_run() { WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$@"; }
+# A run on DXMT: the launcher's DXMT overrides (GraphicsBackend.swift), its front ends from system32 (the `dxmt` step).
+dxmt_run() { WINEDLLOVERRIDES="dxgi,d3d10core,d3d11,d3d12=n,b;d3d9,d3d10=b" wine_run "$@"; }
 
 # `env -u` options for every FEX_* variable the caller set: runs that measure FEX run it with its defaults.
 unfex() { env | sed -n 's/^\(FEX_[A-Za-z0-9_]*\)=.*/-u \1/p'; }
@@ -299,6 +303,27 @@ g4_bench_cmd() {
   cat "$b/report.txt"
 }
 
+# DXMT in the prefix (arm64 DXMT spec §6, §7): the bundle's front ends copied into system32, as the launcher will, and
+# the crash dialog off, so a crash ends the run instead of waiting for a watchdog. The markers and the version are
+# checked as bundle.sh checks them (Wine's builtin marker is bytes 64-79), and every front end in system32 has to be the
+# bundle's. Ends once the prefix's server has exited, so a later clone of the prefix gets a saved registry.
+builtin() { [ "$(dd if="$1" bs=1 skip=64 count=16 2> /dev/null)" = "Wine builtin DLL" ]; }
+dxmt_cmd() {
+  . "$ROOT/dxmt/pins"  # DXMT_COMMIT
+  d="$TOOL/Contents/Resources/DXMT" sys="$PFX/drive_c/windows/system32"
+  cp "$d/aarch64-windows/"* "$sys/" || return 1
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || return 1
+  builtin "$TOOL/Contents/Resources/lib/wine/aarch64-windows/winemetal.dll" \
+    || { echo "winemetal.dll lacks Wine's builtin marker"; return 1; }
+  for f in "$d/aarch64-windows/"*; do
+    cmp -s "$f" "$sys/${f##*/}" || { echo "system32/${f##*/} is not the bundle's"; return 1; }
+    ! builtin "$sys/${f##*/}" || { echo "system32/${f##*/} carries Wine's builtin marker"; return 1; }
+  done
+  ver=$(cat "$d/version") || return 1
+  [ "${ver%%+*}" = "$DXMT_COMMIT" ] || { echo "DXMT/version is '$ver', not $DXMT_COMMIT+<series or dev>"; return 1; }
+  WINEPREFIX="$PFX" "$TOOL/Contents/Resources/bin/wineserver" -w
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -321,6 +346,7 @@ run_step() {
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
+    dxmt) step dxmt 120 dxmt_cmd ;;
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     *) die "no runner for $1" ;;
   esac
@@ -335,6 +361,9 @@ for s in $want; do
 done
 # g5-jit's zero flips mean something only once wxflip has shown the trace counts flips: its positive control.
 case " $want " in *" g5-jit "*) want="wxflip $want" ;; esac
+for s in $want; do
+  case " $NEEDS_DXMT " in *" $s "*) want="dxmt $want" ;; esac
+done
 for s in $want; do
   case " $NEEDS_PREFIX " in *" $s "*) want="boot $want" ;; esac
 done
