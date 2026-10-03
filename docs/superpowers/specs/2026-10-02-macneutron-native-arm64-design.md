@@ -475,4 +475,4 @@ Recorded in `docs/testing/acceptance-arm64-wine.md`:
 - **16K with patch 6** is untested. If 4K pages ever had to go, that is the first thing to try.
 - **Upstream churn:** Wine and FEX move weekly. We rebase on our own schedule; patch files keep each rebase reviewable.
 - **wineserver's 16K rounding** of shared mappings is believed harmless (inferred).
-- **GPL-3 in the runtime:** the FEX fork's Madeira-derived changes are GPL-3, in a process that also loads Valve's `steamclient` (sub-project 4). The maintainer accepted this; it is not legal advice.
+- **Licences in the runtime:** the FEX fork's Madeira-derived changes are MIT under Madeira's pre-2026-08-28 grant (all commits used are dated earlier). A Madeira commit published on or after 2026-08-28 would be GPL-3; check the date before importing one. Not legal advice.
