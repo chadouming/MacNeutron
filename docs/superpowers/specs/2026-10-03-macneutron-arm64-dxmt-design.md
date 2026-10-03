@@ -79,7 +79,7 @@ Direct3D 10/11/12 programs running in the arm64 runtime draw through our DXMT fo
 **Source.** `wine-arm64/build.sh` gets a DXMT step between FEX and bundling:
 - **Clone:** `fetch_dxmt`, modelled on `fetch_fex`: `git init` of `build/wine-arm64-src/dxmt`, `fetch --depth 1` of `DXMT_COMMIT` from `DXMT_REPO`, `checkout -b macneutron FETCH_HEAD`, `submodule update --init --depth 1`, then `patch_tree` with `wine-arm64/patches/dxmt/*.patch`. One local branch, so `build_mode` gives pinned/applied/reapply/development exactly as for Wine and FEX; the development test covers all three trees. The shared `build/dxmt-src/dxmt` clone is never touched.
 - **Series:** `dxmt_series = series_of dxmt/pins wine-arm64/patches/dxmt/*.patch`, computed the same way by `build.sh` and `export.sh` (whose `export_tree` takes the pins file as an argument), so a `DXMT_COMMIT` bump re-applies the tree.
-- **LLVM:** a new sourced file, `dxmt/llvm.sh`, holds `build_llvm <arch> <install folder>`: the shared `build/dxmt-src/llvm-project` source (cloned into a `.tmp` folder and moved into place, so two builds can't half-clone it) and `dxmt/build.sh`'s flags with `-DCMAKE_OSX_ARCHITECTURES=<arch> -DLLVM_HOST_TRIPLE=<arch>-apple-darwin`. `dxmt/build.sh` calls it for x86_64 into `build/dxmt-src/llvm-release` (behaviour unchanged); `wine-arm64/build.sh` for arm64 into `build/wine-arm64-src/llvm-arm64`. Built once per install folder, as today; a change of `LLVM_TAG` needs the install folder removed, as today. It uses the caller's `die`; `dxmt/lib.sh` is not sourced by `wine-arm64/` (its `die` would relabel every message).
+- **LLVM:** a new sourced file, `dxmt/llvm.sh`, holds `build_llvm <arch> <install folder>`: the shared `build/dxmt-src/llvm-project` source (cloned into a `.tmp` folder and moved into place, so an interrupted clone is never taken for a source tree) and `dxmt/build.sh`'s flags with `-DCMAKE_OSX_ARCHITECTURES=<arch> -DLLVM_HOST_TRIPLE=<arch>-apple-darwin`. `dxmt/build.sh` calls it for x86_64 into `build/dxmt-src/llvm-release` (behaviour unchanged); `wine-arm64/build.sh` for arm64 into `build/wine-arm64-src/llvm-arm64`. Built once per install folder, as today; a change of `LLVM_TAG` needs the install folder removed, as today. It uses the caller's `die`; `dxmt/lib.sh` is not sourced by `wine-arm64/` (its `die` would relabel every message).
 - **Meson:**
   ```
   meson setup <build> <dxmt> --cross-file build-arm64ec.txt --buildtype release --strip --prefix <install>
@@ -137,7 +137,7 @@ The draft in the research folder is the starting point. Known limits it shares w
 - Tool `x86` runs our DXMT under Rosetta (the `ours` clone). Section 1 compares `ours` (arm64) with `x86`, best of three each, and prints both as `info` lines, ungraded (gate D6); its "ran our d3d11.dll" check compares the bundle's front end with the prefix's.
 - `dxil-probe` and `dxil-translate` come from `MACNEUTRON_ARM64_TOOLS`.
 - Skipped, as launcher features (sub-project 5): `MACNEUTRON_LOG` naming the unsupported op (`:421-424`) and section 10 (`:729-744`).
-- At exit, `wineserver -k` for each arm64 prefix.
+- At exit, and on TERM, the lanes are stopped and `wineserver -k` runs for each arm64 prefix (a trap: `check.sh`'s step stop reaches `dxmt/check.sh` but not its lanes).
 - Everything else, including the expected strings and every D3DMetal comparison, runs unchanged. Rosetta mode (no `MACNEUTRON_ARM64_APP`) behaves exactly as before.
 
 **One change for both modes:** `invalid` prints `off` when a run lacks the `Metal API Validation Enabled` line, so a run where validation never switched on can't count as 0 errors.
@@ -160,7 +160,7 @@ The draft in the research folder is the starting point. Known limits it shares w
 
 | Gate | Pass |
 |---|---|
-| **D1 Build** | `make wine-arm64`, with `build/wine-arm64-src/dxmt`, `build/wine-arm64-src/llvm-arm64` and `build/wine-arm64/` removed first, builds DXMT arm64 into §6's layout; `bundle.sh`'s assertions and `codesign --verify --strict --deep` pass |
+| **D1 Build** | `make wine-arm64`, with `build/wine-arm64-src/dxmt`, `build/wine-arm64-src/llvm-arm64` (and its `-build` folder and log) and `build/wine-arm64/` removed first, builds DXMT arm64 into §6's layout; `bundle.sh`'s assertions and `codesign --verify --strict --deep` pass |
 | **D2 On screen** | `dxmt-present` passes (the integration gate: Wine patch 13 + DXMT, pixels on screen in both lanes, 20 window cycles) |
 | **D3 ARM64EC correctness** | `dxmt-arm64ec` passes |
 | **D4 x64 programs** | `dxmt-x64` passes, FSR 3 check included |
