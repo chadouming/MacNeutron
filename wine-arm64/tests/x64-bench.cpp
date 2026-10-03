@@ -1,7 +1,8 @@
 // Gate G4 (native arm64 spec §8): x64 microbenchmarks, one .exe run under FEX and under Rosetta. Measured, not gated.
-// Prints the CPUID features this side sees, then OutputDebugStringA("jit: start") (gate G5 counts W^X flips after it),
-// then `row <name> <seconds>` per row, or `row <name> skipped` when CPUID lacks the row's instructions. Each row does
-// a fixed amount of work, the same on both sides, timed with QueryPerformanceCounter; setup is outside the timing.
+// Prints the CPUID features this side sees and MXCSR, then OutputDebugStringA("jit: start") (gate G5 counts W^X flips
+// after it), then `row <name> <seconds>` per row, or `row <name> skipped` when CPUID lacks the row's instructions.
+// Each row does a fixed amount of work, the same on both sides, timed with QueryPerformanceCounter; setup and the
+// result checks of the rows that have one are outside the timing. A row that did the wrong work prints FAIL x64-bench.
 // The 29 single-threaded rows carry the names of neo773's fex-vs-rosetta gist (its source isn't published, so the
 // kernels are ours); mt_* rows are multithreaded, call_* rows call-heavy. Built -O2: opaque() hides a value from the
 // optimizer (an empty asm that "changes" it), so no row is folded, hoisted, vectorized or turned into a library call.
@@ -11,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <functional>
 
 typedef uint64_t u64;
@@ -32,6 +34,10 @@ static void row(const char *name, u64 (*kernel)()) {
   printf("row %s %.6f\n", name, now() - t0);
 }
 static void skipped(const char *name) { printf("row %s skipped\n", name); }
+static void fail(const char *name, const char *why) {  // a row that did the wrong work: no more rows
+  printf("FAIL x64-bench: %s: %s\n", name, why);
+  ExitProcess(1);
+}
 
 static u64 rng = 0x9E3779B97F4A7C15ull;
 static u64 next_random() {  // xorshift64
@@ -94,12 +100,12 @@ __attribute__((target("popcnt"))) static u64 popcnt() {
   return acc;
 }
 
-static u64 bitops_mix() {  // rotates, shifts, bsf, bsr, bswap, and/or/xor
+static u64 bitops_mix() {  // rol, shr, bswap, tzcnt (rep bsf, so bsf before BMI1), bsr, bt+adc, and/or/xor
   u64 x = 0x0123456789ABCDEFull, acc = 0;
   for (u64 i = 0; i < 700000000; i++) {
     x = __builtin_rotateleft64(x, 13) ^ (x >> 7);
     x = __builtin_bswap64(x) + i;
-    acc += __builtin_ctzll(x | 1) + __builtin_clzll(x | 1) + ((x >> (i & 63)) & 1);
+    acc += __builtin_ctzll(x | 1ull << 63) + __builtin_clzll(x | 1) + ((x >> (i & 63)) & 1);  // the bit test is a bt
     acc ^= (x & 0xF0F0F0F0F0F0F0F0ull) | (acc << 1);
     opaque(x); opaque(acc);
   }
@@ -181,12 +187,12 @@ static u64 sse_packed_ps() {  // four independent chains of mulps/addps
     v1 = _mm_add_ps(_mm_mul_ps(v1, m), a);
     v2 = _mm_add_ps(_mm_mul_ps(v2, m), a);
     v3 = _mm_add_ps(_mm_mul_ps(v3, m), a);
-    opaque_x(v0);
+    opaque_x(v0); opaque_x(v1); opaque_x(v2); opaque_x(v3);  // no chain folds
   }
   return (u64)_mm_cvtss_f32(_mm_add_ps(_mm_add_ps(v0, v1), _mm_add_ps(v2, v3)));
 }
 
-static u64 sse_int_paddd() {  // paddd/psubd/pxor chains
+static u64 sse_int_paddd() {  // paddd/pxor chains (the subtraction of k compiles to a paddd of -k)
   __m128i k = _mm_set_epi32(1, 2, 3, 4), v0 = _mm_set1_epi32(5), v1 = _mm_set1_epi32(6), v2 = _mm_set1_epi32(7);
   for (u64 i = 0; i < 900000000; i++) {
     v0 = _mm_add_epi32(v0, k); opaque_x(v0);
@@ -226,7 +232,7 @@ static u64 sqrtps() {  // four independent chains of addps + sqrtps
     v1 = _mm_sqrt_ps(_mm_add_ps(v1, c));
     v2 = _mm_sqrt_ps(_mm_add_ps(v2, c));
     v3 = _mm_sqrt_ps(_mm_add_ps(v3, c));
-    opaque_x(v0);
+    opaque_x(v0); opaque_x(v1); opaque_x(v2); opaque_x(v3);  // v1 = 2 is sqrt(v1 + 2)'s fixed point
   }
   return (u64)_mm_cvtss_f32(_mm_add_ps(_mm_add_ps(v0, v1), _mm_add_ps(v2, v3)));
 }
@@ -239,19 +245,25 @@ static u64 divps() {  // four independent chains of addps + divps
     v1 = _mm_div_ps(c, _mm_add_ps(v1, one));
     v2 = _mm_div_ps(c, _mm_add_ps(v2, one));
     v3 = _mm_div_ps(c, _mm_add_ps(v3, one));
-    opaque_x(v0);
+    opaque_x(v0); opaque_x(v1); opaque_x(v2); opaque_x(v3);  // no chain folds
   }
   return (u64)(_mm_cvtss_f32(_mm_add_ps(_mm_add_ps(v0, v1), _mm_add_ps(v2, v3))) * 1000);
 }
 
-static u64 denormal_adds() {  // addss/subss on denormal operands and results (MXCSR as Wine sets it: no FTZ, no DAZ)
-  float x = 1e-39f, y = 2e-39f, d = 1e-40f, e = 3e-41f;  // all below FLT_MIN (1.18e-38); the sums are exact
-  opaque_x(d); opaque_x(e);
+// addss/subss on denormal operands and results, with MXCSR as Wine sets it (printed with the CPUID line). All four
+// values are below FLT_MIN (1.18e-38) and their sums are exact, so each chain ends where it started; flushing any input
+// or result to zero (DAZ, FTZ) would end it at 0. main checks that, untimed.
+static const float denormal_x = 1e-39f, denormal_y = 2e-39f;
+static float denormal_end[2];
+static u64 denormal_adds() {
+  float x = denormal_x, y = denormal_y, d = 1e-40f, e = 3e-41f;
+  opaque_x(x); opaque_x(y); opaque_x(d); opaque_x(e);
   for (u64 i = 0; i < 900000000; i++) {
     x = x + d; x = x - d; opaque_x(x);
     y = y + e; y = y - e; opaque_x(y);
   }
-  return x == 1e-39f && y == 2e-39f;
+  denormal_end[0] = x, denormal_end[1] = y;
+  return 0;
 }
 
 __attribute__((target("sse4.1"))) static u64 sse41_dpps() {  // four independent chains of dpps
@@ -261,7 +273,7 @@ __attribute__((target("sse4.1"))) static u64 sse41_dpps() {  // four independent
     v1 = _mm_dp_ps(v1, w, 0xFF);
     v2 = _mm_dp_ps(v2, w, 0xFF);
     v3 = _mm_dp_ps(v3, w, 0xFF);
-    opaque_x(v0);
+    opaque_x(v0); opaque_x(v1); opaque_x(v2); opaque_x(v3);  // each start is a fixed point
   }
   return (u64)_mm_cvtss_f32(_mm_add_ps(_mm_add_ps(v0, v1), _mm_add_ps(v2, v3)));
 }
@@ -274,7 +286,7 @@ __attribute__((target("avx2"))) static u64 avx2_packed_ps() {  // four independe
     v1 = _mm256_add_ps(_mm256_mul_ps(v1, m), a);
     v2 = _mm256_add_ps(_mm256_mul_ps(v2, m), a);
     v3 = _mm256_add_ps(_mm256_mul_ps(v3, m), a);
-    opaque_x(v0);
+    opaque_x(v0); opaque_x(v1); opaque_x(v2); opaque_x(v3);  // no chain folds
   }
   __m256 s = _mm256_add_ps(_mm256_add_ps(v0, v1), _mm256_add_ps(v2, v3));
   return (u64)_mm_cvtss_f32(_mm256_castps256_ps128(s));
@@ -284,8 +296,10 @@ __attribute__((target("avx2,fma"))) static u64 fma256_ps() {  // eight independe
   __m256 m = _mm256_set1_ps(0.999f), a = _mm256_set1_ps(0.5f), v[8];
   for (int k = 0; k < 8; k++) v[k] = _mm256_set1_ps((float)k);
   for (u64 i = 0; i < 400000000; i++) {
-    for (int k = 0; k < 8; k++) v[k] = _mm256_fmadd_ps(v[k], m, a);
-    opaque_x(v[0]);
+    for (int k = 0; k < 8; k++) {
+      v[k] = _mm256_fmadd_ps(v[k], m, a);
+      opaque_x(v[k]);  // no chain folds
+    }
   }
   __m256 s = v[0];
   for (int k = 1; k < 8; k++) s = _mm256_add_ps(s, v[k]);
@@ -336,7 +350,7 @@ static u64 rep_movsb_64MB() {  // rep movsb, 64 MB each, 200 times
   return (u64)buf_b[4321];
 }
 
-static u64 memcpy_256B_hot() {  // 256-byte copies in 16-byte movdqu, the way compilers inline them, within 4 KB
+static u64 memcpy_256B_hot() {  // 256-byte copies in 16-byte movups, the way compilers inline them, within 4 KB
   static char hot[4096];
   char *h = hot;
   for (u64 i = 0; i < 400000000; i++) {
@@ -358,10 +372,16 @@ static u64 atomic_xadd() {  // lock xadd, uncontended
   return acc;
 }
 
-static u64 atomic_cmpxchg() {  // lock cmpxchg, uncontended (it always succeeds)
-  u64 old = shared_counter;
-  for (u64 i = 0; i < 250000000; i++)
-    __atomic_compare_exchange_n(&shared_counter, &old, old + 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+#define CMPXCHGS 250000000
+static u64 cmpxchg_ok;  // how many succeeded; main checks all of them did
+static u64 atomic_cmpxchg() {  // lock cmpxchg, uncontended: each one succeeds
+  u64 old = shared_counter, ok = 0;
+  for (u64 i = 0; i < CMPXCHGS; i++) {
+    u64 want = old + 1;
+    if (__atomic_compare_exchange_n(&shared_counter, &old, want, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+      old = want, ok++;
+  }
+  cmpxchg_ok = ok;
   return old;
 }
 
@@ -448,7 +468,7 @@ static void mt_spsc_ring() {
   printf("row mt_spsc_ring %.6f\n", threads(2, ring_worker, roles));
 }
 
-static DWORD WINAPI copy_worker(void *arg) {  // 256 passes of a 64 MB copy, 64 bytes per iteration in movdqu
+static DWORD WINAPI copy_worker(void *arg) {  // 256 passes of a 64 MB copy, 64 bytes per iteration in movups
   char *d = (char *)arg, *s = d + 64 * MB;
   wait_for_go();
   for (int pass = 0; pass < 256; pass++) {
@@ -473,7 +493,10 @@ static void mt_memcpy_4() {
 // ---- Call-heavy rows ----
 
 template <int N> NOINLINE u64 chain(u64 x) { return chain<N - 1>(x + N) * 3 + 1; }  // not a tail call
-template <> NOINLINE u64 chain<0>(u64 x) { return x; }
+template <> NOINLINE u64 chain<0>(u64 x) {  // opaque: an identity function's call would be dropped, noinline or not
+  opaque(x);
+  return x;
+}
 static u64 call_chain64() {  // chain<63> .. chain<0>: 64 nested direct calls per iteration
   u64 x = 1;
   for (u64 i = 0; i < 4000000; i++) x = chain<63>(x);
@@ -516,7 +539,7 @@ int main() {
   if (!__get_cpuid_count(7, 0, &a7, &b7, &c7, &d7)) b7 = 0;
   int sse41 = c >> 19 & 1, avx = (c >> 28 & 1) && osxsave && (xcr0 & 6) == 6;
   int avx2 = avx && (b7 >> 5 & 1), fma = avx && (c >> 12 & 1);
-  printf("cpuid sse41=%d avx=%d avx2=%d fma=%d\n", sse41, avx, avx2, fma);
+  printf("cpuid sse41=%d avx=%d avx2=%d fma=%d mxcsr=0x%04x\n", sse41, avx, avx2, fma, _mm_getcsr());
   OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
 
   LARGE_INTEGER f;
@@ -525,6 +548,7 @@ int main() {
   for (int i = 0; i < 65536; i++) random_bits[i] = next_random() >> 63, pattern_bits[i] = (i & 7) == 0;
   for (int i = 0; i < 1024; i++) doubles[i] = (double)(next_random() >> 12) / 7.0 - 1e15;
   buf_a = alloc(64 * MB), buf_b = alloc(64 * MB);
+  for (u64 i = 0; i < 64 * MB / 8; i++) ((u64 *)buf_a)[i] = i * 0x9E3779B97F4A7C15ull;  // rep_movsb_64MB's source
   u64 lines = 64 * MB / 64;
   char *chase_buf = alloc(64 * MB);
   u64 *order = (u64 *)buf_b;  // scratch for the shuffle
@@ -555,16 +579,24 @@ int main() {
   row("sqrtps", sqrtps);
   row("divps", divps);
   row("denormal_adds", denormal_adds);
+  // The bits, not a float compare: under DAZ a compare would read both denormals as zero and call them equal.
+  if (memcmp(denormal_end, &denormal_x, 4) || memcmp(denormal_end + 1, &denormal_y, 4))
+    fail("denormal_adds", "denormals were flushed");
   if (sse41) row("sse41_dpps", sse41_dpps); else skipped("sse41_dpps");
   if (avx2) row("avx2_packed_ps", avx2_packed_ps); else skipped("avx2_packed_ps");
   if (avx2 && fma) row("fma256_ps", fma256_ps); else skipped("fma256_ps");
   row("mem_seq_read", mem_seq_read);
   row("mem_seq_write", mem_seq_write);
   row("mem_random_chase", mem_random_chase);
+  memset(buf_b, 0, 64 * MB);  // so a copy that did nothing shows
   row("rep_movsb_64MB", rep_movsb_64MB);
+  if (memcmp(buf_a, buf_b, 64 * MB)) fail("rep_movsb_64MB", "the destination differs from the source");
   row("memcpy_256B_hot", memcpy_256B_hot);
   row("atomic_xadd", atomic_xadd);
+  u64 counter_before = shared_counter;
   row("atomic_cmpxchg", atomic_cmpxchg);
+  if (cmpxchg_ok != CMPXCHGS || shared_counter != counter_before + CMPXCHGS)
+    fail("atomic_cmpxchg", "a compare-exchange failed");
   release(chase_buf), release(buf_a), release(buf_b);
 
   mt_xadd("mt_xadd_4", 4);

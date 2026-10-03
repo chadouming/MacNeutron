@@ -235,9 +235,12 @@ bench_rows() {
 # Gate G5 (spec §8): FEX's code memory never flips W^X (patch 12's trace) once a program runs, over one full x64-bench
 # run. It calls OutputDebugStringA("jit: start") (kernel32 WARNs it on debugstr) before its rows; the flips counted
 # are those after it, and the run has to print every row. A log with no marker fails: its count would mean nothing.
+# FEX runs with its defaults, as in G2 and G4.
 g5_jit_cmd() {
   log="$WORK/g5-x64-bench.log" out="$WORK/g5-x64-bench.txt"
-  WINEDEBUG=+wxflip,warn+debugstr,warn+seh wine_run "$TESTS/x64-bench.exe" 2> "$log" | tr -d '\r' > "$out" || true
+  # shellcheck disable=SC2046  # unfex prints a list of options
+  env $(unfex) WINEDEBUG=+wxflip,warn+debugstr,warn+seh WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" \
+    "$TESTS/x64-bench.exe" 2> "$log" | tr -d '\r' > "$out" || true
   cat "$out"
   grep -q 'jit: start' "$log" || { echo "FAIL g5-jit: no marker in ${log#"$ROOT"/}"; return 1; }
   bench_rows "$out" || return 1
