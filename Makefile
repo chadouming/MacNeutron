@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -54,6 +54,19 @@ dxmt-tests:
 build/dxmt-tests/%.exe: dxmt/tests/%.cpp dxmt/tests/d3d12_common.hpp
 	$(MINGWXX) -std=c++17 -o $@ $< -ld3d12 -ldxgi -luser32 -lpsapi
 
+# The same programs and present_loop for ARM64EC, for the arm64 runtime (arm64 DXMT spec §7), built in parallel.
+MINGW_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang -O2 -static -s
+MINGWXX_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang++ -O2 -static -s
+DXMT_TESTS_EC = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests-arm64ec/%.exe,$(wildcard dxmt/tests/d3d12_*.cpp)) \
+	build/dxmt-tests-arm64ec/present_loop.exe
+dxmt-tests-arm64ec:
+	mkdir -p build/dxmt-tests-arm64ec
+	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(DXMT_TESTS_EC)
+build/dxmt-tests-arm64ec/%.exe: dxmt/tests/%.cpp dxmt/tests/d3d12_common.hpp
+	$(MINGWXX_EC) -std=c++17 -o $@ $< -ld3d12 -ldxgi -luser32 -lpsapi
+build/dxmt-tests-arm64ec/present_loop.exe: presenter/tests/present_loop.c
+	$(MINGW_EC) -o $@ $< -ld3d11 -ldxgi -luser32 -lgdi32 -ldxguid -luuid
+
 # Translate a folder of captured DXIL shaders offline (DIR=~/dxil-smite2); never commit a game's shaders.
 dxil-corpus: dxmt
 	build/dxmt/dxil-translate "$(DIR)"
@@ -84,19 +97,19 @@ app: build bridge presenter dxmt
 	for f in $(APP)/Contents/Frameworks/DXMT/x86_64-unix/*; do codesign --force --sign - "$$f"; done
 	codesign --force --sign - $(APP)
 
-# Native arm64 Wine 11.19 with our patches, and FEX for x64 code
-# (docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md §5, §6).
-# First run: shallow clones of Wine and FEX and a few minutes of compiling; see wine-arm64/build.sh.
+# Native arm64 Wine 11.19 with our patches, FEX for x64 code and our DXMT for ARM64X
+# (docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md §5, §6; 2026-10-03-macneutron-arm64-dxmt-design.md).
+# First run: shallow clones of Wine, FEX and DXMT, an arm64 LLVM build and some compiling; see wine-arm64/build.sh.
 wine-arm64:
 	sh wine-arm64/build.sh
 
-# Commits made in build/wine-arm64-src/wine and fex back into wine-arm64/patches/wine and fex.
+# Commits made in build/wine-arm64-src/wine, fex and dxmt back into wine-arm64/patches/wine, fex and dxmt.
 wine-arm64-export:
 	sh wine-arm64/export.sh
 
 # Test programs for the arm64 stack, built in parallel. The file name's prefix picks the compiler (arm64-, arm64ec-,
 # x64-); a program that needs more flags sets WA_FLAGS_<name> (arm64ec-viewec: -lonecore), which comes last. x64-bench, a
-# benchmark (gate G4), is built -O2: the later -O wins.
+# benchmark (gate G4), is built -O2: the later -O wins. winshot is a Mac program: it reads a window's pixels off the screen.
 WA_TESTS = $(patsubst wine-arm64/tests/%.c,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.c)) \
 	$(patsubst wine-arm64/tests/%.cpp,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.cpp))
 WA_FLAGS = -O1 -fms-extensions -D_WIN32_WINNT=0x0A00
@@ -104,7 +117,7 @@ WA_FLAGS_arm64ec-viewec = -lonecore
 WA_FLAGS_x64-bench = -O2
 wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
-	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS)
+	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) build/wine-arm64-tests/winshot
 build/wine-arm64-tests/arm64-%.exe: wine-arm64/tests/arm64-%.c
 	$(MINGW_BIN)/aarch64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
 build/wine-arm64-tests/arm64ec-%.exe: wine-arm64/tests/arm64ec-%.c
@@ -113,6 +126,8 @@ build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.c
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
 build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.cpp
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang++ $(WA_FLAGS) -static -o $@ $< $(WA_FLAGS_$(basename $(@F)))
+build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
+	/usr/bin/clang -O1 -o $@ $< -framework CoreGraphics -framework ImageIO -framework CoreFoundation
 
 # The arm64 runtime on this Mac: boots, runs native ARM64 code, leaves nothing behind (spec §7.3). Needs
 # MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and for gate G4's
