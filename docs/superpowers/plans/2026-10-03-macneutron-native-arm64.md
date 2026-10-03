@@ -227,7 +227,7 @@
   - **`arm64`** (60 s): `wine_run "$TESTS/arm64-hello.exe"` prints `PASS arm64-hello`.
 
   Also:
-  - setup on every run (decision 1): `cleanup`, `rm -rf "$WORK"`, `cp -cR build/wine-arm64/wine.app "$TOOL"`, a fresh `$PFX`;
+  - setup on every run (decision 1): `cleanup`, `rm -rf "$WORK"`, `cp -cR build/wine-arm64/wine.app "$TOOL"` when the staged bundle exists (the `signature` step fails with `no bundle at build/wine-arm64/wine.app` when it doesn't), a fresh `$PFX`;
   - an `EXIT`/`INT`/`TERM` trap runs `cleanup`, then the orphan assertion, which prints `PASS orphans` or `FAIL orphans: <pids>`;
   - `cleanup` runs `WINEPREFIX=… <runtime>/wineserver -k` for each prefix, then `kill -9 $(lsof -t <each runtime binary>)`.
 
@@ -331,7 +331,7 @@
   - `sh wine-arm64/check.sh isec` gives `FAIL isec` (an access violation inside `RtlIsEcCode`), and `sh wine-arm64/check.sh g3-cpu` gives `FAIL g3-cpu: LSE LRCPC LRCPC2 AFP missing`.
 - [ ] **Step 3: Implement patch 9** in `dlls/ntdll/signal_arm64ec.c`:
   - `RtlIsEcCode`: `if (!map || ptr >= 0x800000000000) return FALSE;` (from Madeira `ac650deca3`; its message names that commit).
-  - `arm64x_check_call`: before the bitmap load, `lsr x16, x11, #47` then `cbnz x16` to the not-EC path (adapted from Madeira `d88d55eee0`, which shifts by 39).
+  - `arm64x_check_call`: before the bitmap load, `lsr x16, x11, #47` then `cbnz x16, .Lexit`, placed before `ldr x16, [x18, #0x60]` (adapted from Madeira `d88d55eee0`, which shifts by 39). Branch to `.Lexit` only: the fall-through and `.Ljmp` paths still load from `[x11]` and would fault on the bad target.
 - [ ] **Step 4: Implement patch 10.** Add `static DWORD get_core_id_regs_arm64( struct smbios_wine_id_reg_value_arm64 *regs, … )` for `__APPLE__`, replacing the stub at `dlls/ntdll/unix/system.c:2106`.
   - **Fields** come from `sysctlbyname("hw.optional.arm.FEAT_<X>")`, at Arm's ID-register positions, for: LSE, LSE2, LRCPC, LRCPC2, AFP, FlagM, FlagM2, SHA1, SHA256, SHA512, SHA3, AES, PMULL, CRC32, DotProd, FHM, FRINTTS, RPRES, ECV, BF16, I8MM. A sysctl that is missing reads as 0.
   - **Registers written:** `CP 4030`, `4031`, `4032`, `4020`, `4021`, `4038`, `4039`, `403A`, `4024` = 0, and `4000` = `0x61 << 24` (Apple, part 0).
@@ -520,7 +520,7 @@
 - [ ] **Step 1: Write the failing tests.**
   - **`x64-unaligned.c`:** `lock cmpxchg` on a 4-byte value that straddles a 16-byte boundary, through inline asm, 1000 times, with the expected final value. This reaches FEX's SIGBUS backpatcher, which rewrites code.
   - **`g1-unaligned`** (60 s) runs it.
-  - **`g5-jit`** (600 s) runs every G1 test under `WINEDEBUG=+wxflip,warn+seh`. `OutputDebugStringA` logs through `WARN` on the `seh` channel (`dlls/kernelbase/debug.c`), so the marker line contains `jit: start`. Task 10 switches the step to one full `x64-bench.exe` run (spec G5: "a full `x64-bench` run").
+  - **`g5-jit`** (600 s) runs every G1 test under `WINEDEBUG=+wxflip,warn+debugstr,warn+seh`. The x64 tests import kernel32's own `OutputDebugStringA`, which WARNs on `debugstr` (`dlls/kernel32/debugger.c`), printing `warn:debugstr:OutputDebugStringA "jit: start"`; kernelbase's logs on `seh`. Match the text `jit: start` on either channel. Task 10 switches the step to one full `x64-bench.exe` run (spec G5: "a full `x64-bench` run").
     - Each test calls `OutputDebugStringA("jit: start")` first; add that line to the G1 tests, the `.cpp` one included.
     - The step counts `trace:wxflip` lines after the first `jit: start` line in each log; the total must be 0, and a log with no marker is a FAIL (`FAIL g5-jit: no marker in <log>`).
 - [ ] **Step 2: Run them and see `g5-jit` fail.** Run `sh wine-arm64/check.sh boot fex g1-unaligned g5-jit`. Expected: `PASS g1-unaligned` (FEX still uses RWX through patch 6) and `FAIL g5-jit: <n> flips`.
