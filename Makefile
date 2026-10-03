@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check dxil-corpus
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check dxil-corpus wine-arm64 wine-arm64-export
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -83,3 +83,12 @@ app: build bridge presenter dxmt
 	cp -R build/dxmt/x86_64-unix $(APP)/Contents/Frameworks/DXMT/
 	for f in $(APP)/Contents/Frameworks/DXMT/x86_64-unix/*; do codesign --force --sign - "$$f"; done
 	codesign --force --sign - $(APP)
+
+# Native arm64 Wine 11.19 with our patches (docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md §5).
+# First run: a shallow clone of Wine and a few minutes of compiling; see wine-arm64/build.sh.
+wine-arm64:
+	sh wine-arm64/build.sh
+
+# Commits made in build/wine-arm64-src/wine back into wine-arm64/patches/wine.
+wine-arm64-export:
+	sh wine-arm64/export.sh

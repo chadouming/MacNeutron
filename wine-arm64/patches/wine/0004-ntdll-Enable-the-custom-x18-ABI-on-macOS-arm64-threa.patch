@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chad Cormier Roussel <chadcormierroussel@gmail.com>
+Date: Fri, 2 Oct 2026 22:45:08 -0400
+Subject: [PATCH] ntdll: Enable the custom x18 ABI on macOS arm64 threads
+ before running PE code.
+
+xnu clears x18 on context switch unless the thread opts in with
+os_set_custom_x18_abi_enabled (macOS 26.4). init_syscall_frame runs on every
+Wine thread right before it enters PE code. Without it, PE code loses the
+TEB pointer and dies in a recursive fault (stack overflow in ntdll.dll).
+---
+ dlls/ntdll/unix/signal_arm64.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/dlls/ntdll/unix/signal_arm64.c b/dlls/ntdll/unix/signal_arm64.c
+index 576f76b..f39db46 100644
+--- a/dlls/ntdll/unix/signal_arm64.c
++++ b/dlls/ntdll/unix/signal_arm64.c
+@@ -57,6 +57,9 @@
+ #include "winternl.h"
+ #include "wine/asm.h"
+ #include "unix_private.h"
++#ifdef __APPLE__
++# include <os/arch/arm64.h>
++#endif
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(seh);
+@@ -1621,6 +1624,11 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+     I386_CONTEXT *i386_context;
+     ARM_CONTEXT *arm_context;
+ 
++#ifdef __APPLE__
++    /* keep the TEB in x18 across context switches (toggling to the current state aborts) */
++    if (!os_custom_x18_abi_enabled()) os_set_custom_x18_abi_enabled( true );
++#endif
++
+     context.X0  = (DWORD64)entry;
+     context.X1  = (DWORD64)arg;
+     context.X18 = (DWORD64)teb;
+-- 
+2.54.0 (Apple Git-157)
+

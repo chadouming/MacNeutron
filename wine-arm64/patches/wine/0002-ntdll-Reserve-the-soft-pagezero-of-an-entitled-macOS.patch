@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chad Cormier Roussel <chadcormierroussel@gmail.com>
+Date: Fri, 2 Oct 2026 22:44:27 -0400
+Subject: [PATCH] ntdll: Reserve the soft pagezero of an entitled macOS arm64
+ loader.
+
+With com.apple.developer.cross-architecture-support the 4GB hard pagezero
+becomes one hard page plus a prot 0/0 reservation that MAP_FIXED may replace.
+Register it as a reserved area, like the x86_64 zerofill reserve, so
+map_fixed_area can place KUSER_SHARED_DATA at 0x7ffe0000.
+---
+ dlls/ntdll/unix/virtual.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 64eed72..31351f8 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -3693,6 +3693,26 @@ void virtual_init(void)
+     TRACE( "host page size: %uk\n", (UINT)host_page_size / 1024 );
+ #endif
+ 
++#if defined(__APPLE__) && defined(__aarch64__)
++    {
++        /* With com.apple.developer.cross-architecture-support the 4GB hard pagezero becomes one
++         * hard page plus a soft prot 0/0 reservation that MAP_FIXED may replace: treat it like
++         * the x86_64 zerofill reserve, so nothing else lands in the low 4GB. */
++        mach_vm_address_t addr = 0;
++        mach_vm_size_t size;
++        vm_region_basic_info_data_64_t info;
++        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++        mach_port_t obj;
++
++        if (!mach_vm_region( mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
++                             (vm_region_info_t)&info, &count, &obj ))
++        {
++            TRACE( "lowest region %#llx-%#llx prot %d/%d\n", addr, addr + size, info.protection, info.max_protection );
++            if (addr && addr < 0x100000000 && !info.max_protection) mmap_add_reserved_area( (void *)addr, size );
++        }
++    }
++#endif
++
+ #ifdef _WIN64
+     host_addr_space_limit = get_host_addr_space_limit();
+     TRACE( "host addr space limit: %p\n", host_addr_space_limit );
+-- 
+2.54.0 (Apple Git-157)
+
