@@ -95,11 +95,13 @@ wine-arm64-export:
 	sh wine-arm64/export.sh
 
 # Test programs for the arm64 stack, built in parallel. The file name's prefix picks the compiler (arm64-, arm64ec-,
-# x64-); a program that needs more flags sets WA_FLAGS_<name> (arm64ec-viewec: -lonecore), which comes last.
+# x64-); a program that needs more flags sets WA_FLAGS_<name> (arm64ec-viewec: -lonecore), which comes last. x64-bench, a
+# benchmark (gate G4), is built -O2: the later -O wins.
 WA_TESTS = $(patsubst wine-arm64/tests/%.c,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.c)) \
 	$(patsubst wine-arm64/tests/%.cpp,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.cpp))
 WA_FLAGS = -O1 -fms-extensions -D_WIN32_WINNT=0x0A00
 WA_FLAGS_arm64ec-viewec = -lonecore
+WA_FLAGS_x64-bench = -O2
 wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
 	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS)
@@ -113,8 +115,9 @@ build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.cpp
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang++ $(WA_FLAGS) -static -o $@ $< $(WA_FLAGS_$(basename $(@F)))
 
 # The arm64 runtime on this Mac: boots, runs native ARM64 code, leaves nothing behind (spec §7.3). Needs
-# MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime).
-wine-arm64-check: wine-arm64 wine-arm64-tests
+# MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and for gate G4's
+# Rosetta baseline an installed runtime-v4.7.3, run by the launcher `build` makes.
+wine-arm64-check: build wine-arm64 wine-arm64-tests
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
 	sh wine-arm64/check.sh

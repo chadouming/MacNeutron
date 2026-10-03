@@ -1,6 +1,7 @@
 #!/bin/sh
 # The arm64 Wine runtime on the maintainer's Mac (native arm64 spec §7.3): `make wine-arm64-check`.
-# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make wine-arm64 wine-arm64-tests`.
+# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`; g4-bench
+# also needs MacNeutron's runtime-v4.7.3 installed (MACNEUTRON_TOOL names another tool folder).
 # Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
 # Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
 # Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
@@ -16,29 +17,37 @@ PFX="$WORK/prefix arm64"
 # The `unentitled` step's loader: a clone of $TOOL re-signed without the entitlement, with a prefix of its own.
 UNENT="$WORK/unentitled.app"
 UPFX="$WORK/prefix unentitled"
+# Gate G4's baseline: a clone of the installed MacNeutron tool folder (x86_64 Wine under Rosetta), never the folder
+# itself, run by the launcher just built. RPFX is its STEAM_COMPAT_DATA_PATH; Wine's prefix is RPFX/pfx.
+RSRC="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
+RTOOL="$WORK/rosetta tool"
+RPFX="$WORK/prefix rosetta"
+RWINE="$RTOOL/Libraries/Wine/bin"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit"
-NEEDS_FEX="$G1 g2-litmus g5-jit"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit g4-bench"
+NEEDS_FEX="$G1 g2-litmus g5-jit g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
 runtime_pids() {
   for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver" \
-    "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver"; do
+    "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver" \
+    "$RTOOL/bin/macneutron" "$RTOOL/Libraries/Wine/lib/wine/x86_64-unix/wine" "$RWINE/wineserver"; do
     [ -e "$f" ] || continue
     lsof -t "$f" 2> /dev/null || true
   done | sort -u | tr '\n' ' '
 }
 
-# Stops the runtime: its servers first (the clone's too), then whatever still runs one of the binaries.
+# Stops the runtimes: their servers first (the clones' too), then whatever still runs one of the binaries.
 cleanup() {
-  for pair in "$TOOL|$PFX" "$UNENT|$UPFX"; do
-    if [ -d "${pair#*|}" ] && [ -x "${pair%%|*}/Contents/Resources/bin/wineserver" ]; then
-      WINEPREFIX="${pair#*|}" "${pair%%|*}/Contents/Resources/bin/wineserver" -k > /dev/null 2>&1 || true
+  for pair in "$TOOL/Contents/Resources/bin/wineserver|$PFX" "$UNENT/Contents/Resources/bin/wineserver|$UPFX" \
+    "$RWINE/wineserver|$RPFX/pfx"; do
+    if [ -d "${pair#*|}" ] && [ -x "${pair%%|*}" ]; then
+      WINEPREFIX="${pair#*|}" "${pair%%|*}" -k > /dev/null 2>&1 || true
     fi
   done
   pids=$(runtime_pids)
@@ -94,6 +103,9 @@ step() {
 }
 
 wine_run() { WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$@"; }
+
+# `env -u` options for every FEX_* variable the caller set: runs that measure FEX run it with its defaults.
+unfex() { env | sed -n 's/^\(FEX_[A-Za-z0-9_]*\)=.*/-u \1/p'; }
 
 macos_cmd() {
   v=$(sw_vers -productVersion)
@@ -177,10 +189,9 @@ g1_seh_cmd() { exe_cmd x64-seh && exe_cmd x64-seh-cpp; }
 # the test can't see reordering at all; its other patterns are only reported.
 g2_litmus_cmd() {
   n=10000000
-  unfex=$(env | sed -n 's/^\(FEX_[A-Za-z0-9_]*\)=.*/-u \1/p')
   t0=$(date +%s)
-  # shellcheck disable=SC2086  # unfex is a list of options
-  out=$(env $unfex WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-litmus.exe" $n | tr -d '\r') || true
+  # shellcheck disable=SC2046  # unfex prints a list of options
+  out=$(env $(unfex) WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-litmus.exe" $n | tr -d '\r') || true
   echo "$out"
   echo "info TSO on: $(($(date +%s) - t0)) s"
   for p in MP LB 2+2W IRIW; do
@@ -214,21 +225,59 @@ wxflip_cmd() {
   [ "$n" -ge 10 ] || { echo "FAIL wxflip: $n trace lines, wanted at least 10"; return 1; }
 }
 
-# Gate G5 (spec §8): FEX's code memory never flips W^X (patch 12's trace) once a program runs. Each G1 test prints
-# `jit: start` (OutputDebugStringA: kernel32 WARNs it on debugstr) before anything else; the flips counted are those
-# after it, and every test still has to pass. A log with no marker fails: its count would mean nothing.
+# x64-bench's rows (gates G5 and G4). bench_rows <file>: fails, saying so, unless the run printed every one.
+BENCH_ROWS=36
+bench_rows() {
+  n=$(grep -c '^row ' "$1" || true)
+  [ "$n" = "$BENCH_ROWS" ] || { echo "${1#"$WORK"/} has $n of $BENCH_ROWS rows; it ends: $(tail -n 1 "$1")"; return 1; }
+}
+
+# Gate G5 (spec §8): FEX's code memory never flips W^X (patch 12's trace) once a program runs, over one full x64-bench
+# run. It calls OutputDebugStringA("jit: start") (kernel32 WARNs it on debugstr) before its rows; the flips counted
+# are those after it, and the run has to print every row. A log with no marker fails: its count would mean nothing.
 g5_jit_cmd() {
-  total=0
-  for t in x64-hello x64-seh x64-seh-cpp x64-threads x64-kuser x64-smc x64-tsc x64-unaligned; do
-    log="$WORK/g5-$t.log"
-    out=$(WINEDEBUG=+wxflip,warn+debugstr,warn+seh wine_run "$TESTS/$t.exe" 2> "$log" | tr -d '\r') || true
-    grep -q 'jit: start' "$log" || { echo "FAIL g5-jit: no marker in ${log#"$ROOT"/}"; return 1; }
-    echo "$out" | grep -qx "PASS $t" || { echo "FAIL g5-jit: $t did not pass: $(echo "$out" | tail -n 1)"; return 1; }
-    n=$(sed -n '/jit: start/,$p' "$log" | grep -c 'trace:wxflip' || true)
-    echo "info $t: $n flips after the marker"
-    total=$((total + n))
+  log="$WORK/g5-x64-bench.log" out="$WORK/g5-x64-bench.txt"
+  WINEDEBUG=+wxflip,warn+debugstr,warn+seh wine_run "$TESTS/x64-bench.exe" 2> "$log" | tr -d '\r' > "$out" || true
+  cat "$out"
+  grep -q 'jit: start' "$log" || { echo "FAIL g5-jit: no marker in ${log#"$ROOT"/}"; return 1; }
+  bench_rows "$out" || return 1
+  n=$(sed -n '/jit: start/,$p' "$log" | grep -c 'trace:wxflip' || true)
+  echo "info x64-bench: $n flips after the marker"
+  [ "$n" = 0 ] || { echo "FAIL g5-jit: $n flips"; return 1; }
+}
+
+# Gate G4 (spec §8), measured, not gated: x64-bench, five processes per side, the sides alternating so drift falls on
+# both alike. FEX: this stack, with FEX's defaults. Rosetta: the launcher just built, in a clone of the installed tool
+# folder (the pinned runtime-v4.7.3), with dxmt/check.sh's environment; the launcher adds ROSETTA_ADVERTISE_AVX=1 and
+# WINEMSYNC=1. Both sides run with WINEDEBUG=-all, the launcher's default. Passes when every run printed every row;
+# bench_report.py's table (FEX time / Rosetta time per row) says how fast. Output in $WORK/bench.
+rosetta() {  # rosetta <launch verb> <args...>
+  env STEAM_COMPAT_DATA_PATH="$RPFX" SteamAppId=0 MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 \
+    "$RTOOL/bin/macneutron" launch "$@"
+}
+g4_bench_cmd() {
+  cp -cR "$RSRC" "$RTOOL" || return 1
+  v=$(cat "$RTOOL/runtime-version" 2> /dev/null || true)
+  [ "$v" = runtime-v4.7.3 ] || { echo "the tool folder at $RSRC holds ${v:-no runtime}, not runtime-v4.7.3"; return 1; }
+  cp "$ROOT/.build/release/macneutron" "$RTOOL/bin/macneutron" || return 1
+  rosetta getcompatpath "$WORK" > /dev/null || { echo "creating the Rosetta prefix failed"; return 1; }
+  b="$WORK/bench"
+  mkdir -p "$b/fex" "$b/rosetta"
+  for i in 1 2 3 4 5; do
+    t0=$(date +%s)
+    # shellcheck disable=SC2046  # unfex prints a list of options
+    env $(unfex) WINEDEBUG=-all WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-bench.exe" \
+      2> "$b/fex/run$i.err" | tr -d '\r' > "$b/fex/run$i.txt" || true
+    t1=$(date +%s)
+    WINEDEBUG=-all rosetta waitforexitandrun "$TESTS/x64-bench.exe" 2> "$b/rosetta/run$i.err" | tr -d '\r' \
+      > "$b/rosetta/run$i.txt" || true
+    echo "info run $i: fex $((t1 - t0)) s, rosetta $(($(date +%s) - t1)) s"
   done
-  [ "$total" = 0 ] || { echo "FAIL g5-jit: $total flips"; return 1; }
+  for f in "$b"/fex/run*.txt "$b"/rosetta/run*.txt; do bench_rows "$f" || return 1; done
+  echo "info fex: $(grep '^cpuid ' "$b/fex/run1.txt")"
+  echo "info rosetta: $(grep '^cpuid ' "$b/rosetta/run1.txt")"
+  python3 "$ROOT/wine-arm64/tools/bench_report.py" "$b/fex" "$b/rosetta" > "$b/report.txt" || return 1
+  cat "$b/report.txt"
 }
 
 run_step() {
@@ -253,6 +302,7 @@ run_step() {
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
+    g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     *) die "no runner for $1" ;;
   esac
 }
