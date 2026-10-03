@@ -1,6 +1,7 @@
 #!/bin/sh
-# Builds MacNeutron's arm64 Wine (11.19 + wine-arm64/patches/wine) into build/wine-arm64-src/wine-build
-# (native arm64 spec §5.4). Never installs tools. BUILD_DIR replaces build/ (tests).
+# Builds MacNeutron's arm64 Wine (11.19 + wine-arm64/patches/wine) into build/wine-arm64-src/wine-build, then stages
+# the signed build/wine-arm64/wine.app (native arm64 spec §5.4). Never installs tools. Needs MACNEUTRON_SIGN_IDENTITY
+# and MACNEUTRON_PROVISIONING_PROFILE. BUILD_DIR replaces build/ (tests).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/wine-arm64/pins"
@@ -19,6 +20,7 @@ PATCHES="$ROOT/wine-arm64/patches/wine"
 need_tool autoconf autoconf; need_tool bison bison keg; need_tool flex flex keg; need_tool cmake cmake
 need_tool ninja ninja
 die_if_missing
+check_signing  # before anything is fetched or built
 # llvm-mingw's arm64ec- and aarch64-w64-mingw32 wrappers, for the Windows side of Wine.
 PATH="$(sh "$ROOT/dxmt/toolchain.sh"):$PATH"
 export PATH
@@ -26,6 +28,9 @@ export MACOSX_DEPLOYMENT_TARGET=27.0
 
 # 2. Fetch and patch, once per series. A tree with work in it is never touched; a clean one follows the patches.
 series=$(series_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch)
+# Every build input, once: the up-to-date check and the stamp written at the end must agree.
+stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" "$ROOT/wine-arm64/lib.sh" \
+  "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" "$ROOT/wine-arm64/Info.plist")
 mode=$(build_mode "$W" "$APPLIED" "$SERIES_FILE" "$series")
 if [ "$mode" = reapply ]; then
   echo "wine-arm64: patch series changed, re-applying" >&2
@@ -50,8 +55,7 @@ case "$mode" in
     mv "$W.tmp" "$W"
     ;;
   applied)
-    stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" "$ROOT/wine-arm64/lib.sh")
-    if [ "$(cat "$OUT/version" 2> /dev/null)" = "$stamp" ]; then
+    if [ "$(cat "$OUT/version" 2> /dev/null)" = "$stamp" ] && [ -d "$OUT/wine.app" ]; then
       echo "wine-arm64: up to date" >&2
       exit 0
     fi
@@ -78,9 +82,12 @@ fi
 echo "wine-arm64: building (log: $SRC/make.log)" >&2
 make -C "$SRC/wine-build" -j"$(sysctl -n hw.ncpu)" > "$SRC/make.log" 2>&1 || die "make failed; see $SRC/make.log"
 
-# 5. Stamp, last: only a finished build of the applied patches gets one.
+# 5. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result).
+echo "wine-arm64: bundling (log: $OUT/install.log)" >&2
+sh "$ROOT/wine-arm64/bundle.sh"
+
+# 6. Stamp, last: only a finished build of the applied patches gets one.
 if [ "$mode" != development ]; then
-  mkdir -p "$OUT"
-  stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" "$ROOT/wine-arm64/lib.sh" > "$OUT/version"
+  echo "$stamp" > "$OUT/version"
 fi
-echo "wine-arm64: built $SRC/wine-build" >&2
+echo "wine-arm64: built $OUT/wine.app" >&2

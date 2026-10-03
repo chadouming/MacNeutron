@@ -1,0 +1,135 @@
+#!/bin/sh
+# The arm64 Wine runtime on the maintainer's Mac (native arm64 spec §7.3): `make wine-arm64-check`.
+# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make wine-arm64 wine-arm64-tests`.
+# Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
+# Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
+# Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/wine-arm64/lib.sh"
+B="${BUILD_DIR:-$ROOT/build}"
+STAGED="$B/wine-arm64/wine.app"
+TESTS="$B/wine-arm64-tests"
+WORK="$B/wine-arm64 check"
+TOOL="$WORK/Application Support/wine.app"
+PFX="$WORK/prefix arm64"
+
+# Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
+STEPS="macos signature boot arm64"
+NEEDS_PREFIX="arm64"
+
+# The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
+# knows the executable.
+runtime_pids() {
+  for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver"; do
+    [ -e "$f" ] || continue
+    lsof -t "$f" 2> /dev/null || true
+  done | sort -u | tr '\n' ' '
+}
+
+# Stops the runtime: its server first, then whatever still runs one of its binaries.
+cleanup() {
+  if [ -d "$PFX" ] && [ -x "$TOOL/Contents/Resources/bin/wineserver" ]; then
+    WINEPREFIX="$PFX" "$TOOL/Contents/Resources/bin/wineserver" -k > /dev/null 2>&1 || true
+  fi
+  pids=$(runtime_pids)
+  # shellcheck disable=SC2086  # pids is a list
+  [ -z "$pids" ] || kill -9 $pids 2> /dev/null || true
+}
+
+# Prints PASS orphans, or FAIL orphans: <pids> (the processes get a few seconds to die).
+orphans() {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pids=$(runtime_pids)
+    [ -n "$pids" ] || { echo "PASS orphans"; return 0; }
+    sleep 0.5
+  done
+  echo "FAIL orphans: $pids"
+  return 1
+}
+
+# On any exit: stop the runtime, then say whether anything is left. A leftover turns a pass into a failure.
+finish() {
+  rc=$?
+  trap - EXIT INT TERM
+  cleanup
+  orphans || rc=1
+  exit "$rc"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# step <name> <cap-seconds> <command...>: runs the command (output in $WORK/<name>.log) for at most the cap.
+# Prints PASS <name>, or FAIL <name>: <last output line> and exits 1.
+step() {
+  name=$1 cap=$2; shift 2
+  log="$WORK/$name.log"
+  ( trap - EXIT INT TERM; "$@" ) > "$log" 2>&1 &
+  pid=$!
+  waited=0
+  while kill -0 "$pid" 2> /dev/null && [ "$waited" -lt $((cap * 4)) ]; do sleep 0.25; waited=$((waited + 1)); done
+  why=
+  if kill -0 "$pid" 2> /dev/null; then
+    kill "$pid" 2> /dev/null || true
+    why="timed out after ${cap} s"
+    rc=1
+  else
+    wait "$pid" && rc=0 || rc=$?
+  fi
+  if [ "$rc" = 0 ]; then echo "PASS $name"; return 0; fi
+  last=$(tr -d '\r' < "$log" | grep . | tail -n 1 || true)
+  echo "FAIL $name: ${why:+$why; }${last:-exit $rc}"
+  exit 1
+}
+
+wine_run() { WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$@"; }
+
+macos_cmd() {
+  v=$(sw_vers -productVersion)
+  [ "${v%%.*}" -ge 27 ] || { echo "macOS $v is below 27"; return 1; }
+}
+
+signature_cmd() {
+  [ -d "$TOOL" ] || { echo "no bundle at ${STAGED#"$ROOT"/}"; return 1; }
+  codesign --verify --strict --deep "$TOOL" || return 1
+  codesign -d --entitlements - "$TOOL/Contents/MacOS/wine" 2>&1 | grep -q cross-architecture-support \
+    || { echo "the loader lacks com.apple.developer.cross-architecture-support"; return 1; }
+  got=$(realpath "$TOOL/Contents/Resources/lib/wine/aarch64-unix/wine")
+  want="$(realpath "$TOOL")/Contents/MacOS/wine"
+  [ "$got" = "$want" ] || { echo "aarch64-unix/wine is $got, not $want"; return 1; }
+}
+
+boot_cmd() { WINEDLLOVERRIDES="mscoree,mshtml=" wine_run wineboot -i; }
+
+arm64_cmd() {
+  out=$(wine_run "$TESTS/arm64-hello.exe" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
+  echo "$out"
+  echo "$out" | grep -qx "PASS arm64-hello"
+}
+
+run_step() {
+  case $1 in
+    macos) step macos 10 macos_cmd ;;
+    signature) step signature 60 signature_cmd ;;
+    boot) step boot 180 boot_cmd ;;
+    arm64) step arm64 60 arm64_cmd ;;
+  esac
+}
+
+want="${*:-$STEPS}"
+for s in $want; do
+  case " $STEPS " in *" $s "*) ;; *) die "no step named $s (steps: $STEPS)" ;; esac
+done
+for s in $want; do
+  case " $NEEDS_PREFIX " in *" $s "*) want="boot $want" ;; esac
+done
+
+cleanup
+rm -rf "$WORK"
+mkdir -p "$WORK/Application Support"
+# No staged bundle: the signature step says so.
+if [ -d "$STAGED" ]; then cp -cR "$STAGED" "$TOOL"; fi
+for s in $STEPS; do
+  case " $want " in *" $s "*) run_step "$s" ;; esac
+done

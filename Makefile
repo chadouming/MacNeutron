@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check dxil-corpus wine-arm64 wine-arm64-export
+.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -92,3 +92,27 @@ wine-arm64:
 # Commits made in build/wine-arm64-src/wine back into wine-arm64/patches/wine.
 wine-arm64-export:
 	sh wine-arm64/export.sh
+
+# Test programs for the arm64 stack, built in parallel. The file name's prefix picks the compiler (arm64-, arm64ec-,
+# x64-); a program that needs more flags sets WA_FLAGS_<name> (arm64ec-viewec: -lonecore), which comes last.
+WA_TESTS = $(patsubst wine-arm64/tests/%.c,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.c)) \
+	$(patsubst wine-arm64/tests/%.cpp,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.cpp))
+WA_FLAGS = -O1 -fms-extensions -D_WIN32_WINNT=0x0A00
+wine-arm64-tests:
+	mkdir -p build/wine-arm64-tests
+	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS)
+build/wine-arm64-tests/arm64-%.exe: wine-arm64/tests/arm64-%.c
+	$(MINGW_BIN)/aarch64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
+build/wine-arm64-tests/arm64ec-%.exe: wine-arm64/tests/arm64ec-%.c
+	$(MINGW_BIN)/arm64ec-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
+build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.c
+	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
+build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.cpp
+	$(MINGW_BIN)/x86_64-w64-mingw32-clang++ $(WA_FLAGS) -static -o $@ $< $(WA_FLAGS_$(basename $(@F)))
+
+# The arm64 runtime on this Mac: boots, runs native ARM64 code, leaves nothing behind (spec §7.3). Needs
+# MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime).
+wine-arm64-check: wine-arm64 wine-arm64-tests
+	sh wine-arm64/tests/mode_test.sh
+	sh wine-arm64/tests/profile_test.sh
+	sh wine-arm64/check.sh

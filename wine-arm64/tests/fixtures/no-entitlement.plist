@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Entitlements</key>
+	<dict>
+		<key>com.apple.application-identifier</key>
+		<string>49QMZXLR8S.net.authspot.macneutron.wine</string>
+		<key>com.apple.developer.team-identifier</key>
+		<string>49QMZXLR8S</string>
+	</dict>
+	<key>ExpirationDate</key>
+	<date>2044-09-28T02:29:58Z</date>
+	<key>Name</key>
+	<string>Fixture</string>
+</dict>
+</plist>

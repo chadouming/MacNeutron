@@ -40,3 +40,32 @@ stamp_of() {  # stamp_of <file>...
 series_of() {  # series_of <file>...
   ( MACNEUTRON_SIGN_IDENTITY=; stamp_of "$@" )
 }
+
+# The App ID the entitled loader is signed for; a provisioning profile has to be for it (spec §7.2).
+APP_ID=49QMZXLR8S.net.authspot.macneutron.wine
+
+# A decoded provisioning profile (security cms -D) grants this App ID, the cross-architecture entitlement, and has not
+# expired. Messages name what is wrong; the first problem found stops it.
+check_profile_plist() {  # check_profile_plist <decoded-plist>
+  pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$2" 2> /dev/null; }
+  id=$(pb Entitlements:com.apple.application-identifier "$1") || id="(no application identifier)"
+  [ "$id" = "$APP_ID" ] || die "profile is for $id, not $APP_ID"
+  [ "$(pb Entitlements:com.apple.developer.cross-architecture-support "$1" || true)" = true ] \
+    || die "profile lacks com.apple.developer.cross-architecture-support"
+  # PlistBuddy prints the date in local time ("Tue Sep 27 22:29:58 EST 2044"): off by hours at worst, fine for expiry.
+  exp=$(pb ExpirationDate "$1") || die "profile has no ExpirationDate"
+  at=$(date -j -f '%a %b %d %T %Z %Y' "$exp" +%s 2> /dev/null) || die "can't read the profile's ExpirationDate: $exp"
+  [ "$at" -gt "$(date +%s)" ] || die "profile expired on $exp"
+}
+
+# The signing variables are set and name something usable: build.sh checks this before fetching or building (a missing
+# variable costs seconds, not a build), bundle.sh before assembling. There is no ad-hoc mode: an unentitled loader can't boot.
+check_signing() {
+  [ -n "${MACNEUTRON_SIGN_IDENTITY:-}" ] || die "set MACNEUTRON_SIGN_IDENTITY"
+  [ -n "${MACNEUTRON_PROVISIONING_PROFILE:-}" ] || die "set MACNEUTRON_PROVISIONING_PROFILE"
+  plist=$(mktemp)
+  security cms -D -i "$MACNEUTRON_PROVISIONING_PROFILE" > "$plist" 2> /dev/null \
+    || { rm -f "$plist"; die "$MACNEUTRON_PROVISIONING_PROFILE is not a provisioning profile"; }
+  ( check_profile_plist "$plist" ) || { rm -f "$plist"; exit 1; }  # check_profile_plist already said what is wrong
+  rm -f "$plist"
+}
