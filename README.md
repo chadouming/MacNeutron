@@ -15,6 +15,8 @@ make test    # unit tests
 make smoke   # real Wine
 make dxmt         # our DXMT fork with Direct3D 12 into build/dxmt; first run ~500 MB of downloads and a 30-60 min LLVM build
 make dxmt-check   # our DXMT under real Wine (needs GPTK imported)
+make wine-arm64        # native arm64 Wine + FEX in a signed wine.app (needs the Developer ID setup in wine-arm64/README.md)
+make wine-arm64-check  # its gates under real Wine
 ```
 
 `make dxmt` and `make app` need `brew install cmake ninja meson` and Xcode's Metal Toolchain
