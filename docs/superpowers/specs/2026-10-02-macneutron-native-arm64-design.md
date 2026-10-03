@@ -314,7 +314,7 @@ The transition table, the design and its stress tests are in `x18-boundaries.md`
 `wine-arm64/patches/fex/`:
 1. dappermint `4efc3abc8a`: the macOS unixlib helpers. It reports hardware TSO as unsupported, maps `madvise` values, makes naming anonymous mappings a no-op, and stubs the stats shared memory.
 2. On Apple, `Source/Windows/UnixLib/CMakeLists.txt` stops linking `rt`.
-3. Madeira (`willfaust/FEX`, branch `ios-port-2607`) `fdf361f0e` (variadic `ret_sp_misaligned` off by 8) and `ceabf254a` (128-bit CASPAL, plus a call-return-stack guard). Both are marked not iOS-specific; GPL-3 with attribution.
+3. Madeira (`willfaust/FEX`, branch `ios-port-2607`) `fdf361f0e` (variadic `ret_sp_misaligned` off by 8) and `ceabf254a` (128-bit CASPAL). Both are marked not iOS-specific; GPL-3 with attribution. (Amended 2026-10-03: `ceabf254a`'s call-return-stack guard is not taken. Its hunks only change an inline check added by Madeira's iOS-only `707f213f5`, which isn't at the pin; the pin's own guard pages bound the stack on our 4K-page Wine.)
 4. **Dual-view code memory** (§6.2).
 
 Madeira's other FEX commits are iOS-specific (debugger-attached JIT, alias tables, iOS address-space bands) and are not taken. Its WoW64 commits wait for sub-project 8.
