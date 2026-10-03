@@ -9,35 +9,11 @@ SRC="$B/dxmt-src"
 OUT="$B/dxmt"
 LLVM="$SRC/llvm-release"  # without assertions; its own folder, so switching rebuilds LLVM
 . "$ROOT/dxmt/lib.sh"
-
-# The DXIL probe (spec §6), against the same LLVM. -fno-rtti matches LLVM's own build.
-build_probe() {  # build_probe <folder>
-  clang++ -arch x86_64 -std=c++17 -O1 -fno-rtti -I"$LLVM/include" "$ROOT/dxmt/tools/dxil-probe.cpp" -o "$1/dxil-probe" \
-    -L"$LLVM/lib" -lLLVMBitReader -lLLVMCore -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMSupport \
-    -lLLVMDemangle -lz -lcurses > "$SRC/dxil-probe.log" 2>&1 || die "dxil-probe failed to build; see $SRC/dxil-probe.log"
-}
-
-# The offline corpus tool (DXIL translator plan, Task 5), against the fork's native airconv. The -lLLVM list is
-# src/airconv/meson.build's llvm_deps, in order.
-build_translate() {  # build_translate <folder>
-  W="$SRC/win64"
-  clang++ -arch x86_64 -std=c++20 -O1 -fno-rtti -fno-exceptions -fobjc-arc -I"$LLVM/include" -I"$SRC/dxmt/src/airconv" \
-    -I"$SRC/dxmt/include" -I"$SRC/dxmt/libs" -I"$SRC/dxmt/include/native/windows" -I"$SRC/dxmt/include/native/directx" \
-    "$ROOT/dxmt/tools/dxil-translate.mm" -o "$1/dxil-translate" \
-    "$W/src/airconv/darwin/libairconv.a" "$W/libs/DXBCParser/libDXBCParserNative.a" \
-    -L"$LLVM/lib" -lLLVMPasses -lLLVMTarget -lLLVMObjCARCOpts -lLLVMCoroutines -lLLVMipo -lLLVMInstrumentation \
-    -lLLVMVectorize -lLLVMLinker -lLLVMIRReader -lLLVMAsmParser -lLLVMFrontendOpenMP -lLLVMScalarOpts \
-    -lLLVMInstCombine -lLLVMAggressiveInstCombine -lLLVMTransformUtils -lLLVMBitWriter -lLLVMAnalysis \
-    -lLLVMProfileData -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoMSF -lLLVMDebugInfoDWARF -lLLVMObject \
-    -lLLVMTextAPI -lLLVMMCParser -lLLVMMC -lLLVMDebugInfoCodeView -lLLVMBitReader -lLLVMCore -lLLVMRemarks \
-    -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMSupport -lLLVMDemangle -lm -lz -lcurses -lxml2 \
-    -framework Metal -framework Foundation > "$SRC/dxil-translate.log" 2>&1 \
-    || die "dxil-translate failed to build; see $SRC/dxil-translate.log"
-}
+. "$ROOT/dxmt/llvm.sh"
 
 if [ "$(cat "$OUT/version" 2> /dev/null)" = "$DXMT_COMMIT" ] && [ -x "$OUT/dxil-probe" ]; then
-  [ "$OUT/dxil-probe" -nt "$ROOT/dxmt/tools/dxil-probe.cpp" ] || build_probe "$OUT"
-  [ "$OUT/dxil-translate" -nt "$ROOT/dxmt/tools/dxil-translate.mm" ] || build_translate "$OUT"
+  [ "$OUT/dxil-probe" -nt "$ROOT/dxmt/tools/dxil-probe.cpp" ] || build_probe x86_64 "$LLVM" "$OUT" "$SRC"
+  [ "$OUT/dxil-translate" -nt "$ROOT/dxmt/tools/dxil-translate.mm" ] || build_translate x86_64 "$LLVM" "$SRC/dxmt" "$SRC/win64" "$OUT" "$SRC"
   echo "dxmt: $OUT is up to date ($DXMT_COMMIT)"
   exit 0
 fi
@@ -75,20 +51,8 @@ git -C "$SRC/dxmt" -c advice.detachedHead=false checkout -q --detach "$DXMT_COMM
   || die "commit $DXMT_COMMIT isn't in $DXMT_REPO"
 git -C "$SRC/dxmt" submodule update -q --init --depth 1 || die "can't fetch DXMT's submodules"
 
-# 3. LLVM 15: x86_64, static, with DXMT's CI flags but no assertions (they slowed every pipeline's translation, which
-# Unreal does thousands of times a launch). Built once.
-if [ ! -f "$LLVM/.complete" ]; then
-  [ -d "$SRC/llvm-project/llvm" ] || git clone -q --depth 1 --branch "$LLVM_TAG" \
-    https://github.com/llvm/llvm-project.git "$SRC/llvm-project" || die "can't clone llvm-project $LLVM_TAG"
-  echo "dxmt: building LLVM $LLVM_TAG (30-60 minutes, once); log: $SRC/llvm-release.log"
-  { cmake -B "$SRC/llvm-release-build" -S "$SRC/llvm-project/llvm" -G Ninja \
-      -DCMAKE_INSTALL_PREFIX="$LLVM" -DCMAKE_OSX_ARCHITECTURES=x86_64 -DLLVM_HOST_TRIPLE=x86_64-apple-darwin \
-      -DLLVM_ENABLE_ASSERTIONS=Off -DLLVM_ENABLE_ZSTD=Off -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD="" \
-      -DLLVM_BUILD_TOOLS=Off -DLLVM_VERSION_PRINTER_SHOW_HOST_TARGET_INFO=Off -DCMAKE_POLICY_VERSION_MINIMUM=3.5 &&
-    cmake --build "$SRC/llvm-release-build" && cmake --install "$SRC/llvm-release-build"; } > "$SRC/llvm-release.log" 2>&1 \
-    || die "LLVM build failed; see $SRC/llvm-release.log"
-  touch "$LLVM/.complete"  # written last: an interrupted install is redone
-fi
+# 3. LLVM 15: x86_64 (dxmt/llvm.sh). Built once.
+build_llvm x86_64 "$LLVM" "$SRC/llvm-project"
 
 # 4. DXMT: 64-bit with Direct3D 12, and 32-bit, which gets no D3D12 (spec §5).
 # wine_builtin_dll=false keeps the front ends native, as in the runtime's DXMT 0.80: with Wine's builtin marker, a
@@ -130,7 +94,7 @@ done
 echo "$DXMT_COMMIT" > "$T/version"
 
 # 6. The DXIL probe and the offline corpus tool.
-build_probe "$T"
-build_translate "$T"
+build_probe x86_64 "$LLVM" "$T" "$SRC"
+build_translate x86_64 "$LLVM" "$SRC/dxmt" "$SRC/win64" "$T" "$SRC"
 rm -rf "$OUT"; mv "$T" "$OUT"
 echo "dxmt: built $OUT ($DXMT_COMMIT)"

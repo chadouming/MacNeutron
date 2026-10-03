@@ -54,4 +54,12 @@ bin=$(sh "$ROOT/dxmt/toolchain.sh")
 expect "the Windows compiler is Clang" "$("$bin/x86_64-w64-mingw32-gcc" --version | head -1 | grep -c clang)" 1
 expect "make uses it" "$(make -s -C "$ROOT" -n bridge | grep -c "$bin/x86_64-w64-mingw32-clang")" 3
 
+# dxmt/llvm.sh reuses a finished LLVM install: with .complete present, nothing is cloned or built (stub cmake/git fail).
+mkdir -p "$T/llvm/install" "$T/bin3"; touch "$T/llvm/install/.complete"
+printf '#!/bin/sh\necho called >> "%s/called"; exit 1\n' "$T" > "$T/bin3/cmake"; cp "$T/bin3/cmake" "$T/bin3/git"
+chmod +x "$T/bin3/cmake" "$T/bin3/git"
+out=$(PATH="$T/bin3:/usr/bin:/bin" sh -c '. "$1/dxmt/pins"; die() { echo "$*"; exit 1; }; . "$1/dxmt/llvm.sh"
+  build_llvm arm64 "$2/llvm/install" "$2/llvm/project" && echo reused' sh "$ROOT" "$T" 2>&1) || true
+expect "a finished LLVM install is reused" "$out:$([ -f "$T/called" ] && echo called)" "reused:"
+
 exit $fail
