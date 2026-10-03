@@ -76,8 +76,9 @@ stack's clone, is never touched) plus `patches/dxmt/`, built for ARM64X with DXM
 this Wine's build tree, with an arm64 LLVM 15 built once into `build/wine-arm64-src/llvm-arm64` by `dxmt/llvm.sh`.
 `make wine-arm64` also builds the arm64 `dxil-probe` and `dxil-translate` into `build/wine-arm64/`. A commit in
 `build/wine-arm64-src/dxmt` makes the build a development build, and DXMT's version token
-(`build/wine-arm64-src/dxmt-install/version`) ends in `+dev` instead of the series hash; `make wine-arm64-export` writes it to `patches/dxmt/`. A DXMT patch's message names the
-arm64 failure it fixes. Folding the patches into the fork (and moving the pin) is a separate maintainer step.
+(`build/wine-arm64-src/dxmt-install/version`) ends in `+dev` instead of the series hash; `make wine-arm64-export`
+writes the commits to `patches/dxmt/`. A DXMT patch's message names the arm64 failure it fixes. Folding the patches
+into the fork (and moving the pin) is a separate maintainer step.
 
 Changing the pins or a patch file makes a tree with no work of its own (no change, commit, stash, other branch or
 worktree) start over from the series: it is deleted and fetched again.

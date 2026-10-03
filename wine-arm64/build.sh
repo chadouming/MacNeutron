@@ -160,7 +160,8 @@ fi
 
 # 6. DXMT (arm64 DXMT spec §4): ARM64X front ends and winemetal.dll from DXMT's own cross file, linked against this
 #    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). The build
-#    folder is configured once per tree (fetch_dxmt removes it); dxmt-install is redone every build.
+#    folder is configured once per tree (fetch_dxmt removes it): changing the options below needs
+#    rm -rf build/wine-arm64-src/dxmt-build. dxmt-install is redone every build.
 build_llvm arm64 "$SRC/llvm-arm64" "$B/dxmt-src/llvm-project"
 echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 : > "$SRC/dxmt.log"

@@ -5,11 +5,14 @@
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/wine-arm64/lib.sh"
+. "$ROOT/dxmt/pins"  # DXMT_COMMIT
 B="${BUILD_DIR:-$ROOT/build}"
 OUT="$B/wine-arm64"
 BUILD="$B/wine-arm64-src/wine-build"
 FEX_DLL="$B/wine-arm64-src/fex-ec/Bin/libarm64ecfex.dll"
 FEX_SO="$B/wine-arm64-src/fex-unixlib/libarm64ecfex.so"
+DXMT_IN="$B/wine-arm64-src/dxmt-install"
+DXMT_TREE="$B/wine-arm64-src/dxmt"
 APP="$OUT/wine.app.tmp"
 R="$APP/Contents/Resources"
 INSTALL="$OUT/install.tmp"
@@ -18,6 +21,7 @@ export MACOSX_DEPLOYMENT_TARGET=27.0
 check_signing
 [ -x "$BUILD/loader/wine" ] || die "no Wine build at $BUILD: run make wine-arm64"
 [ -f "$FEX_DLL" ] && [ -f "$FEX_SO" ] || die "no FEX build in $B/wine-arm64-src: run make wine-arm64"
+[ -d "$DXMT_IN" ] || die "no DXMT build at $DXMT_IN: run make wine-arm64"
 mkdir -p "$OUT"
 rm -rf "$APP" "$INSTALL"
 trap 'rm -rf "$INSTALL"' EXIT
@@ -39,6 +43,18 @@ ln -s ../Resources/lib/wine/aarch64-unix/ntdll.so "$APP/Contents/MacOS/ntdll.so"
 # FEX, the x64 emulator (spec §6.3): its ARM64EC DLL among Wine's builtins, its unixlib beside theirs.
 cp "$FEX_DLL" "$R/lib/wine/aarch64-windows/"
 cp "$FEX_SO" "$R/lib/wine/aarch64-unix/"
+# DXMT (arm64 DXMT spec §6), before signing so macho() signs winemetal.so with the rest. winemetal.dll is a Wine builtin
+# (DXMT's own build marks it) among Wine's. The front ends are native DLLs that go into a prefix's system32: they keep
+# to DXMT/, with the licences and the version.
+put() { [ -f "$1/$2" ] || die "no $1/$2"; cp "$1/$2" "$3"; }  # put <dir> <file> <dest>
+mkdir -p "$R/DXMT/aarch64-windows"
+put "$DXMT_IN" aarch64-windows/winemetal.dll "$R/lib/wine/aarch64-windows/"
+put "$DXMT_IN" aarch64-unix/winemetal.so "$R/lib/wine/aarch64-unix/"
+for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
+  put "$DXMT_IN" "system32/$f" "$R/DXMT/aarch64-windows/"
+done
+for f in COPYING.LIB LICENSE LICENSE.OLD; do put "$DXMT_TREE" "$f" "$R/DXMT/"; done
+put "$DXMT_IN" version "$R/DXMT/"
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 
@@ -69,6 +85,16 @@ rm "$OUT/macho.list"
   || die "Contents/MacOS/ntdll.so does not resolve to lib/wine/aarch64-unix/ntdll.so"
 [ -e "$R/bin/wineserver" ] || die "no Resources/bin/wineserver"
 [ -e "$R/share/wine/wine.inf" ] || die "no Resources/share/wine/wine.inf"
+# DXMT: Wine's builtin marker as dxmt/build.sh checks it (bytes 64-79), the version token, the pin's place in the tree.
+builtin() { [ "$(dd if="$1" bs=1 skip=64 count=16 2> /dev/null)" = "Wine builtin DLL" ]; }
+builtin "$R/lib/wine/aarch64-windows/winemetal.dll" || die "winemetal.dll lacks Wine's builtin marker"
+for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
+  ! builtin "$R/DXMT/aarch64-windows/$f" || die "$f carries Wine's builtin marker"
+done
+ver=$(cat "$R/DXMT/version")
+case $ver in "$DXMT_COMMIT"+?*) ;; *) die "DXMT/version is '$ver', not $DXMT_COMMIT+<series or dev>" ;; esac
+git -C "$DXMT_TREE" merge-base --is-ancestor "$DXMT_COMMIT" HEAD \
+  || die "$DXMT_COMMIT (dxmt/pins) is not an ancestor of HEAD in $DXMT_TREE"
 others=$(macho | grep '/wine$' | grep -vxF "$LOADER" || true)
 [ -z "$others" ] || die "another Mach-O named wine: $others"
 
