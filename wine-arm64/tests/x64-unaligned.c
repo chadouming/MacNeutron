@@ -9,7 +9,6 @@
 static _Alignas(16) unsigned char buf[32];
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   volatile LONG *p = (volatile LONG *)(buf + 14);  // bytes 14..17: across the boundary at 16
   int failed = 0;
   buf[14] = buf[15] = buf[16] = buf[17] = 0xff;

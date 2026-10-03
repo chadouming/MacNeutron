@@ -66,10 +66,23 @@ orphans() {
   return 1
 }
 
-# On any exit: stop the runtime, then say whether anything is left. A leftover turns a pass into a failure.
+# Stops the running step, if any: its subshell, then the children it had (snapshot first: once the subshell is gone
+# they belong to launchd). As a background job of a non-interactive shell the subshell ignores SIGINT, so on an
+# interrupt it would go on to its next command; TERM is default there. Runtime processes further down are cleanup's.
+stop_step() {
+  [ -n "${pid:-}" ] || return 0
+  kids=$(pgrep -P "$pid" 2> /dev/null || true)
+  kill "$pid" 2> /dev/null || true
+  # shellcheck disable=SC2086  # kids is a list
+  [ -z "$kids" ] || kill $kids 2> /dev/null || true
+  pid=
+}
+
+# On any exit: stop the step and the runtime, then say whether anything is left. A leftover turns a pass into a failure.
 finish() {
   rc=$?
   trap - EXIT INT TERM
+  stop_step
   cleanup
   orphans || rc=1
   exit "$rc"
@@ -89,11 +102,12 @@ step() {
   while kill -0 "$pid" 2> /dev/null && [ "$waited" -lt $((cap * 4)) ]; do sleep 0.25; waited=$((waited + 1)); done
   why=
   if kill -0 "$pid" 2> /dev/null; then
-    kill "$pid" 2> /dev/null || true
+    stop_step
     why="timed out after ${cap} s"
     rc=1
   else
     wait "$pid" && rc=0 || rc=$?
+    pid=
   fi
   if [ "$rc" = 0 ]; then echo "PASS $name"; return 0; fi
   last=$(tr -d '\r' < "$log" | grep . | tail -n 1 || true)
@@ -259,9 +273,11 @@ rosetta() {  # rosetta <launch verb> <args...>
     "$RTOOL/bin/macneutron" launch "$@"
 }
 g4_bench_cmd() {
-  cp -cR "$RSRC" "$RTOOL" || return 1
-  v=$(cat "$RTOOL/runtime-version" 2> /dev/null || true)
+  v=$(cat "$RSRC/runtime-version" 2> /dev/null || true)
   [ "$v" = runtime-v4.7.3 ] || { echo "the tool folder at $RSRC holds ${v:-no runtime}, not runtime-v4.7.3"; return 1; }
+  # The folder itself, not a symlink to it: cp -R would copy the link, and the launcher copied next would land in the
+  # installed folder.
+  cp -cR "$(cd "$RSRC" && pwd -P)" "$RTOOL" || return 1
   cp "$ROOT/.build/release/macneutron" "$RTOOL/bin/macneutron" || return 1
   rosetta getcompatpath "$WORK" > /dev/null || { echo "creating the Rosetta prefix failed"; return 1; }
   b="$WORK/bench"
@@ -317,6 +333,8 @@ done
 for s in $want; do
   case " $NEEDS_FEX " in *" $s "*) want="fex $want" ;; esac
 done
+# g5-jit's zero flips mean something only once wxflip has shown the trace counts flips: its positive control.
+case " $want " in *" g5-jit "*) want="wxflip $want" ;; esac
 for s in $want; do
   case " $NEEDS_PREFIX " in *" $s "*) want="boot $want" ;; esac
 done

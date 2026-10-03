@@ -18,7 +18,8 @@ F="$SRC/fex"
 PATCHES="$ROOT/wine-arm64/patches/wine"
 FEX_PATCHES="$ROOT/wine-arm64/patches/fex"
 
-# 1. Tools, all named at once. bison and flex are keg-only: Homebrew's go first on PATH.
+# 1. Tools, all named at once. bison and flex are keg-only: Homebrew's go first on PATH. The build doesn't run autoconf;
+#    the development loop does, for a patch that changes configure.ac (README).
 need_tool autoconf autoconf; need_tool bison bison keg; need_tool flex flex keg; need_tool cmake cmake
 need_tool ninja ninja
 die_if_missing
@@ -93,16 +94,15 @@ else
   fi
 fi
 
-# 3. Configure, once per build folder: out of tree, with the checked-in configure regenerated first.
+# 3. Configure, once per build folder: out of tree, with the configure the patches carry (no autoreconf, spec §5.4: it
+#    would rewrite configure with whatever autoconf is installed, and the tree would no longer be the applied one).
 if [ ! -f "$SRC/wine-build/Makefile" ]; then
   echo "wine-arm64: configuring (log: $SRC/configure.log)" >&2
   mkdir -p "$SRC/wine-build"
-  ( cd "$W" && autoreconf && rm -rf autom4te.cache configure~ ) > "$SRC/configure.log" 2>&1 \
-    || die "autoreconf failed; see $SRC/configure.log"
   ( cd "$SRC/wine-build" && "$W/configure" --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests \
       --without-x --without-wayland --without-oss --without-alsa --without-pulse --without-sane --without-usb \
       --without-v4l2 --without-pcap --without-capi --without-opencl --without-cups CC=/usr/bin/clang ) \
-    >> "$SRC/configure.log" 2>&1 || die "configure failed; see $SRC/configure.log"
+    > "$SRC/configure.log" 2>&1 || die "configure failed; see $SRC/configure.log"
 fi
 
 # 4. Make.

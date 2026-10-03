@@ -26,10 +26,13 @@ Arm ARM's field positions:
     is a hash, not a part number
 
 A field holds the highest level present (LRCPC2 is 2, not 1|2). ECV is
-written as 2 although FEAT_ECV alone is 1: level 2 only adds CNTPOFF_EL2,
-which user code can't reach, and FEX needs 2 before it reads the
-self-synchronized CNTVCTSS_EL0 (which runs at EL0 on these CPUs) in place
-of isb; mrs CNTVCT_EL0. FCMA, WFxT and CSSC are fields FEX's JIT uses.
+written as 2 when hw.optional.arm.FEAT_ECV is set, although FEAT_ECV
+alone is 1: level 2 only adds CNTPOFF_EL2, which user code can't reach,
+and FEX's field fetcher counts ECV only at 2 or above. It changes nothing
+for RDTSC today: FEX's RDTSC reads plain CNTVCT_EL0, and only its RDTSCP
+reads the self-synchronized CNTVCTSS_EL0 when ECV is present, while FEX
+doesn't advertise RDTSCP under Wine (no CPU index in TPIDRRO_EL0). FCMA,
+WFxT and CSSC are fields FEX's JIT uses.
 
 CTR_EL0 (CP 5801) is not reported: reading it is a SIGILL on macOS, and
 FEX's default without it is fine.

@@ -16,12 +16,15 @@ need_tool() {  # need_tool <command> <brew formula> [keg]
 die_if_missing() { [ -z "$missing" ] || die "missing tools: ${missing#, }"; }
 
 # What a source tree is: pinned (no tree yet: fetch and patch it), applied (HEAD is the commit recorded in the
-# applied file, nothing else changed: the patches are the truth), development (anything else: build it as it is) or,
-# when a series file and the current series hash are given, reapply (an applied tree that was patched with another
-# series: it holds no work of its own, so build.sh starts it over).
+# applied file, nothing else changed: the patches are the truth), development (anything else, including a stash, a
+# second branch or a second worktree: build it as it is) or, when a series file and the current series hash are given,
+# reapply (an applied tree that was patched with another series: it holds no work of its own, so build.sh deletes it
+# and starts over).
 build_mode() {  # build_mode <src-dir> <applied-file> [<series-file> <series>]
   [ -d "$1" ] || { echo pinned; return 0; }
-  if [ -n "$(git -C "$1" status --porcelain)" ] || [ "$(git -C "$1" rev-parse HEAD)" != "$(cat "$2" 2> /dev/null)" ]; then
+  if [ -n "$(git -C "$1" status --porcelain)" ] || [ "$(git -C "$1" rev-parse HEAD)" != "$(cat "$2" 2> /dev/null)" ] \
+    || [ -n "$(git -C "$1" stash list)" ] || [ -n "$(git -C "$1" for-each-ref refs/heads | sed -n 2p)" ] \
+    || [ -n "$(git -C "$1" worktree list | sed -n 2p)" ]; then
     echo development
   elif [ $# -ge 4 ] && [ "$(cat "$3" 2> /dev/null)" != "$4" ]; then
     echo reapply

@@ -7,7 +7,6 @@
 #include <stdlib.h>
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   ULONG major = *(volatile ULONG *)0x7ffe026c;
   printf("NtMajorVersion %lu\n", major);
   if (major != 10) {

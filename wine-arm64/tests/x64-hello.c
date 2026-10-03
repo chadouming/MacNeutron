@@ -4,7 +4,6 @@
 #include <stdio.h>
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   USHORT process = 0, native = 0;
   printf("hello from x86_64\n");
   if (!IsWow64Process2(GetCurrentProcess(), &process, &native)) {

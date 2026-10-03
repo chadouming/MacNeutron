@@ -14,6 +14,7 @@ This is a development build for sub-project 1. The shipped runtime is still the 
 
 - Apple Silicon, **macOS 27**, and Xcode (Apple clang).
 - Homebrew `autoconf`, `bison`, `flex`, `cmake` and `ninja`. The build names whatever is missing and never installs it.
+  The build itself doesn't run `autoconf`; the development loop needs it for a patch that changes `configure.ac`.
 - Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once.
 - **A Developer ID with the "Cross-architecture Compatibility Framework" capability** (`com.apple.developer.cross-architecture-support`)
   granted for the App ID `net.authspot.macneutron.wine` (team `49QMZXLR8S`), and a Developer ID provisioning profile for it.
@@ -60,13 +61,16 @@ a clean prefix under `build/wine-arm64 check/`, and ends by checking that no pro
 The patch files are applied to the pins in `build/wine-arm64-src/wine` and `fex` (git trees on branch `macneutron`).
 
 1. Edit and commit in `build/wine-arm64-src/<wine or fex>`. Any change there makes the next build a "development
-   build", which builds the tree as it is and skips the fetch, the patching and the up-to-date check.
+   build", which builds the tree as it is and skips the fetch, the patching and the up-to-date check. So does a stash,
+   a second branch or a second worktree in that tree. If your patch changes `configure.ac`, run `autoreconf` with
+   autoconf 2.73 and commit `configure` in the same patch (as Wine patch 0001 does): the build doesn't run it.
 2. `make wine-arm64`, and once (or after a change to a test program or the Swift sources) `make build wine-arm64-tests`.
 3. `sh wine-arm64/check.sh <steps>` while working; `make wine-arm64-check` before committing.
 4. `make wine-arm64-export` writes the commits back to `wine-arm64/patches/`.
 5. Commit the patches in this repo. A commit message says why the change exists, with the failure that made it necessary.
 
-Changing the pins or a patch file makes a tree with no work of its own start over from the series.
+Changing the pins or a patch file makes a tree with no work of its own (no change, commit, stash, other branch or
+worktree) start over from the series: it is deleted and fetched again.
 
 ## Licences
 
@@ -77,7 +81,9 @@ Changing the pins or a patch file makes a tree with no work of its own start ove
   - 0009: adapted from Madeira's LGPL Wine commits `ac650deca3` and `d88d55eee0` (branch `madeira-lgpl`).
   - The other Wine patches are ours.
 - **FEX** is MIT, and so are our patches to it.
-  - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`.
+  - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`. MIT: the file it patches,
+    `Source/Windows/UnixLib/FEXUnixLib.cpp`, keeps its `SPDX-License-Identifier: MIT` header, and the fork carries
+    FEX's MIT `LICENSE` at that commit.
   - 0003: Madeira (`willfaust/FEX`, branch `ios-port-2607`) `fdf361f0e`, applied unchanged.
   - 0004: the CASPAL part of Madeira's `ceabf254a`, ported to our pin.
   - 0005: the dual-view JIT memory, derived from Madeira's dual-map commits `fce78cefd`, `61f11e3cc` and `6084de076`

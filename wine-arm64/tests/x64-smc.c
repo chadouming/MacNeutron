@@ -63,7 +63,6 @@ static int text(void) {
 }
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   if (!rwx() || !text()) return 1;
   printf("PASS x64-smc\n");
   return 0;

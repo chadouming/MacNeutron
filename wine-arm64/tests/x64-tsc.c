@@ -1,8 +1,9 @@
 // Gate G1: RDTSC under FEX. Each of 8 threads reads it 1e6 times and never sees it go backwards; its rate against
 // QueryPerformanceCounter over 200 ms is within 2% of the TSC frequency CPUID reports (leaf 0x15: crystal × EBX / EAX,
-// else leaf 0x16's base MHz; with neither, the rate is only printed). Games calibrate RDTSC. FEX's RDTSC is a plain
-// CNTVCT_EL0 read and leaf 0x15 is CNTFRQ_EL0: an ordinary macOS 27 process sees that counter tick ~4.8 GHz against a
-// CNTFRQ of 1 GHz; this runtime's processes see both at 1 GHz, and this test keeps it that way.
+// else leaf 0x16's base MHz; with neither, the test fails: the rate has nothing to be checked against). Games
+// calibrate RDTSC. FEX's RDTSC is a plain CNTVCT_EL0 read and leaf 0x15 is CNTFRQ_EL0: an ordinary macOS 27 process
+// sees that counter tick ~4.8 GHz against a CNTFRQ of 1 GHz; this runtime's processes see both at 1 GHz, and this
+// test keeps it that way.
 #include <windows.h>
 #include <intrin.h>
 #include <math.h>
@@ -24,7 +25,6 @@ static DWORD WINAPI reader(void *arg) {
 }
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   HANDLE threads[THREADS];
   for (int i = 0; i < THREADS; i++) threads[i] = CreateThread(NULL, 0, reader, NULL, 0, NULL);
   if (WaitForMultipleObjects(THREADS, threads, TRUE, 30000) != WAIT_OBJECT_0) {
@@ -67,13 +67,13 @@ int main(void) {
   double hz = (t1 - t0) / secs;
   printf("info QueryPerformanceFrequency %lld Hz; RDTSC ran at %.0f Hz over %.1f ms\n", freq.QuadPart, hz, secs * 1e3);
   if (!want) {
-    printf("info CPUID reports no TSC frequency: monotonic only\n");
-  } else {
-    printf("info CPUID says %.0f Hz; measured / CPUID = %.4f\n", want, hz / want);
-    if (fabs(hz / want - 1) > 0.02) {
-      printf("FAIL x64-tsc: RDTSC runs at %.4f x the CPUID frequency (more than 2%% off)\n", hz / want);
-      return 1;
-    }
+    printf("FAIL x64-tsc: neither CPUID leaf 0x15 nor 0x16 gives a TSC frequency to check RDTSC against\n");
+    return 1;
+  }
+  printf("info CPUID says %.0f Hz; measured / CPUID = %.4f\n", want, hz / want);
+  if (fabs(hz / want - 1) > 0.02) {
+    printf("FAIL x64-tsc: RDTSC runs at %.4f x the CPUID frequency (more than 2%% off)\n", hz / want);
+    return 1;
   }
   printf("PASS x64-tsc\n");
   return 0;

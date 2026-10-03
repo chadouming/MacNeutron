@@ -24,7 +24,6 @@ static DWORD fault(void) {
 }
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   DWORD code = fault();
   printf("__except caught 0x%08lx\n", code);
   if (code != 0xC0000005) {

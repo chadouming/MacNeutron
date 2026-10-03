@@ -5,7 +5,9 @@ Subject: [PATCH] ntdll: Exec the macOS arm64 loader with 4K pages.
 
 All loader execs (initial re-exec, new Windows processes) go through
 preloader_exec; use posix_spawn(POSIX_SPAWN_SETEXEC) with
-posix_spawnattr_set_4k_page_size_np, falling back to execv.
+posix_spawnattr_set_4k_page_size_np. A failed spawn still falls through
+to execv here; patch 7 refuses an unentitled loader before the spawn and
+removes that 16K fallback.
 ---
  dlls/ntdll/unix/loader.c | 12 ++++++++++++
  1 file changed, 12 insertions(+)

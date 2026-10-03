@@ -23,6 +23,13 @@ echo "$s" > "$T/s"
 [ "$(build_mode "$T/r" "$T/a" "$T/s" "$s")" = applied ]
 [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = reapply ]   # patched with another series
 [ "$(build_mode "$T/r" "$T/a" "$T/none" "$s")" = reapply ] # no series recorded
+# Work kept outside the checkout counts too: reapply would delete it with the tree.
+echo y >> "$T/r/f"; g stash -q;        [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = development ]  # a stash
+g stash drop -q;                       [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = reapply ]
+g branch other;                        [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = development ]  # another branch
+g branch -qD other
+g worktree add -q --detach "$T/wt";    [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = development ]  # another worktree
+g worktree remove "$T/wt";             [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = reapply ]
 echo x >> "$T/r/f";                    [ "$(build_mode "$T/r" "$T/a")" = development ]  # dirty
 [ "$(build_mode "$T/r" "$T/a" "$T/s" other)" = development ]  # work in the tree wins over a changed series
 g commit -qam e;                       [ "$(build_mode "$T/r" "$T/a")" = development ]  # ahead of .applied

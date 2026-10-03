@@ -38,7 +38,6 @@ static DWORD WINAPI worker(void *arg) {
 }
 
 int main(void) {
-  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   HANDLE threads[THREADS];
   tls = TlsAlloc();
   go = CreateEventW(NULL, TRUE, FALSE, NULL);
