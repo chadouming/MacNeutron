@@ -249,7 +249,7 @@ Not ported, and why:
 
 ### 5.3 x18
 
-Patch 4 turns the mode on once per thread, which behaves like Apple's legacy path for old SDKs. That breaks the header's rule against calling macOS code with the mode on. Today it does no harm: a disassembly scan of the shared cache (4,086 of 4,088 images; the two skipped are iOSSupport bundles whose paths contain spaces) found no code that depends on x18's value. The scan is `probes/x18-cache-scan.sh`, to be rerun on every macOS beta.
+Patch 4 turns the mode on once per thread, which behaves like Apple's legacy path for old SDKs. That breaks the header's rule against calling macOS code with the mode on. Today it does no harm: a disassembly scan of all 4,088 shared-cache images on macOS 27.0.1 (1,021 matches, all classified in `x18-boundaries.md`) found no code that depends on x18's value. The scan is `probes/x18-cache-scan.sh` (about 2.5 minutes), to be rerun on every macOS beta.
 
 Sub-project 3 replaces it with toggling at every transition. That is about 80–100 lines in `signal_arm64.c`:
 - off on syscall and unix-call entry, and on again on return;
