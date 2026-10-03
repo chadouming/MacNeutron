@@ -99,6 +99,7 @@ wine-arm64-export:
 WA_TESTS = $(patsubst wine-arm64/tests/%.c,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.c)) \
 	$(patsubst wine-arm64/tests/%.cpp,build/wine-arm64-tests/%.exe,$(wildcard wine-arm64/tests/*.cpp))
 WA_FLAGS = -O1 -fms-extensions -D_WIN32_WINNT=0x0A00
+WA_FLAGS_arm64ec-viewec = -lonecore
 wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
 	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS)

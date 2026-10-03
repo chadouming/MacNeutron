@@ -20,8 +20,8 @@ UPFX="$WORK/prefix unentitled"
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip"
 NEEDS_FEX="$G1 g2-litmus"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
@@ -197,6 +197,23 @@ g2_litmus_cmd() {
   [ "$f" -ge 1 ] || { echo "FAIL g2-litmus: control saw no MP violation"; return 1; }
 }
 
+# Patch 12's W^X flip trace (spec §5.2): an RWX page, rewritten and run 10 times, flips at least 10 times, in both
+# directions, and every trace line has the one format.
+wxflip_cmd() {
+  out=$(WINEDEBUG=+wxflip wine_run "$TESTS/arm64-wxflip.exe" 2>&1 | tr -d '\r') || true
+  echo "$out" | grep -v 'trace:wxflip' || true
+  n=$(echo "$out" | grep -c 'trace:wxflip' || true)
+  [ "$n" -gt 0 ] || { echo "FAIL wxflip: 0 trace lines"; return 1; }
+  bad=$(echo "$out" | grep 'trace:wxflip' | grep -Ev 'trace:wxflip:virtual_handle_fault 0x[0-9a-f]+ -> r[wx]$' || true)
+  [ -z "$bad" ] || { echo "FAIL wxflip: odd trace line: $(echo "$bad" | head -n 1)"; return 1; }
+  for to in rx rw; do
+    echo "$out" | grep -q "trace:wxflip:virtual_handle_fault 0x[0-9a-f]* -> $to\$" || { echo "FAIL wxflip: no flip to $to"; return 1; }
+  done
+  echo "$out" | grep -qx 'PASS arm64-wxflip' || { echo "FAIL wxflip: the program did not pass"; return 1; }
+  echo "info $n trace lines"
+  [ "$n" -ge 10 ] || { echo "FAIL wxflip: $n trace lines, wanted at least 10"; return 1; }
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -215,6 +232,8 @@ run_step() {
     g1-smc) step g1-smc 60 exe_cmd x64-smc ;;
     g1-tsc) step g1-tsc 60 exe_cmd x64-tsc; grep '^info ' "$WORK/g1-tsc.log" ;;
     g2-litmus) step g2-litmus 1800 g2_litmus_cmd; grep '^info ' "$WORK/g2-litmus.log" ;;
+    viewec) step viewec 60 exe_cmd arm64ec-viewec ;;
+    wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
     *) die "no runner for $1" ;;
   esac
 }
