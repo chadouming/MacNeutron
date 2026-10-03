@@ -13,8 +13,9 @@ This is a development build for sub-project 1. The shipped runtime is still the 
 ## Requirements
 
 - Apple Silicon, **macOS 27**, and Xcode (Apple clang).
-- Homebrew `autoconf`, `bison`, `flex`, `cmake` and `ninja`. The build names whatever is missing and never installs it.
-  The build itself doesn't run `autoconf`; the development loop needs it for a patch that changes `configure.ac`.
+- Homebrew `autoconf`, `bison`, `flex`, `cmake`, `ninja` and `meson`. The build names whatever is missing and never
+  installs it. The build itself doesn't run `autoconf`; the development loop needs it for a patch that changes `configure.ac`.
+- Xcode's Metal Toolchain, for DXMT's shaders (`xcodebuild -downloadComponent MetalToolchain`).
 - Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once.
 - **A Developer ID with the "Cross-architecture Compatibility Framework" capability** (`com.apple.developer.cross-architecture-support`)
   granted for the App ID `net.authspot.macneutron.wine` (team `49QMZXLR8S`), and a Developer ID provisioning profile for it.
@@ -50,7 +51,7 @@ a clean prefix under `build/wine-arm64 check/`, and ends by checking that no pro
 | Path | What |
 |---|---|
 | `pins` | Wine tag and commit, FEX commit, and the source of FEX's macOS unixlib |
-| `patches/wine/`, `patches/fex/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
+| `patches/wine/`, `patches/fex/`, `patches/dxmt/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
 | `build.sh`, `bundle.sh` | Build, then assemble and sign `wine.app`, and check the result |
 | `wine.entitlements`, `Info.plist` | The loader's entitlements and the bundle's identity |
 | `check.sh`, `tests/`, `tools/` | The checks, the test programs (`x64-*`, `arm64*`) and the helpers behind G3 and G4 |
@@ -58,9 +59,10 @@ a clean prefix under `build/wine-arm64 check/`, and ends by checking that no pro
 
 ## Development loop
 
-The patch files are applied to the pins in `build/wine-arm64-src/wine` and `fex` (git trees on branch `macneutron`).
+The patch files are applied to the pins in `build/wine-arm64-src/wine`, `fex` and `dxmt` (git trees on branch
+`macneutron`).
 
-1. Edit and commit in `build/wine-arm64-src/<wine or fex>`. Any change there makes the next build a "development
+1. Edit and commit in `build/wine-arm64-src/<wine, fex or dxmt>`. Any change there makes the next build a "development
    build", which builds the tree as it is and skips the fetch, the patching and the up-to-date check. So does a stash,
    a second branch or a second worktree in that tree. If your patch changes `configure.ac`, run `autoreconf` with
    autoconf 2.73 and commit `configure` in the same patch (as Wine patch 0001 does): the build doesn't run it.
@@ -68,6 +70,14 @@ The patch files are applied to the pins in `build/wine-arm64-src/wine` and `fex`
 3. `sh wine-arm64/check.sh <steps>` while working; `make wine-arm64-check` before committing.
 4. `make wine-arm64-export` writes the commits back to `wine-arm64/patches/`.
 5. Commit the patches in this repo. A commit message says why the change exists, with the failure that made it necessary.
+
+DXMT works the same way. Its tree is `dxmt/pins`' `DXMT_COMMIT` (the Rosetta stack's pin; `build/dxmt-src/dxmt`, that
+stack's clone, is never touched) plus `patches/dxmt/`, built for ARM64X with DXMT's own `build-arm64ec.txt` against
+this Wine's build tree, with an arm64 LLVM 15 built once into `build/wine-arm64-src/llvm-arm64` by `dxmt/llvm.sh`.
+`make wine-arm64` also builds the arm64 `dxil-probe` and `dxil-translate` into `build/wine-arm64/`. A commit in
+`build/wine-arm64-src/dxmt` makes the build a development build, and DXMT's version token
+(`build/wine-arm64-src/dxmt-install/version`) ends in `+dev` instead of the series hash; `make wine-arm64-export` writes it to `patches/dxmt/`. A DXMT patch's message names the
+arm64 failure it fixes. Folding the patches into the fork (and moving the pin) is a separate maintainer step.
 
 Changing the pins or a patch file makes a tree with no work of its own (no change, commit, stash, other branch or
 worktree) start over from the series: it is deleted and fetched again.
@@ -94,4 +104,5 @@ worktree) start over from the series: it is deleted and fetched again.
     the date before importing another. This is not legal advice.
 - Each patch taken or derived from another tree names its source in its message (0006's is given above, since its message
   doesn't). Patch files keep their original authors.
+- **DXMT** is LGPL-2.1+; our patches to it are too. 0001 is ours.
 - Upstream FEX and DXMT refuse AI-authored contributions: no patches go upstream (issue reports only).
