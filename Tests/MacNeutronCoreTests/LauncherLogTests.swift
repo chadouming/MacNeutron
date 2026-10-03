@@ -26,3 +26,13 @@ import Testing
     #expect(log.gameLog(appID: "42").lastPathComponent == "steam-42.log")
     #expect(FileManager.default.fileExists(atPath: log.directory.path(percentEncoded: false)))
 }
+
+@Test func concurrentAppendsKeepEveryLine() throws {
+    // Launches overlap (Steam's setup run and the game, check.sh's lanes): no append may overwrite another.
+    let log = LauncherLog(directory: try makeTempDir())
+    DispatchQueue.concurrentPerform(iterations: 8) { thread in
+        for i in 0..<50 { log.append("thread \(thread) line \(i)") }
+    }
+    let lines = try String(contentsOf: log.launcherLog, encoding: .utf8).split(separator: "\n")
+    #expect(lines.count == 400)
+}

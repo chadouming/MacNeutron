@@ -8,7 +8,12 @@ TOOL="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibil
 DXC="$ROOT/build/dxmt-src/dxc/bin/x64/dxc.exe"
 export WINEPREFIX="${TMPDIR:-/tmp}/macneutron dxc" WINEDEBUG=-all
 cd "$HERE"  # relative paths: dxc.exe would read a leading / as an option
-dxc() { "$TOOL/Libraries/Wine/bin/wine" "$DXC" "$@"; }
+# Every dxc.exe runs at once; finish waits for them (set -e: a failed one stops the script). The first call, alone,
+# creates the Wine prefix.
+"$TOOL/Libraries/Wine/bin/wine" "$DXC" --version > /dev/null
+pids=""
+dxc() { "$TOOL/Libraries/Wine/bin/wine" "$DXC" "$@" & pids="$pids $!"; }
+finish() { for p in $pids; do wait "$p"; done; pids=""; }
 dxc -T vs_6_0 -E vsmain -Fo triangle.vs.dxil triangle.hlsl
 dxc -T ps_6_0 -E psmain -Fo triangle.ps.dxil triangle.hlsl
 dxc -T cs_6_0 -E csmain -Fo compute.cs.dxil compute.hlsl
@@ -31,15 +36,20 @@ dxc -T ps_6_6 -E psmain -Fo vsread.ps.dxil vsread.hlsl
 dxc -T vs_6_6 -E vsmain -Fo indirect.vs.dxil indirect.hlsl
 dxc -T ps_6_6 -E psmain -Fo indirect.ps.dxil indirect.hlsl
 dxc -T cs_6_6 -E csmain -Fo indirect.cs.dxil indirect.hlsl
+dxc -T vs_6_6 -E vsid -Fo indirect.vsid.dxil indirect.hlsl
+dxc -T ps_6_6 -E psid -Fo indirect.psid.dxil indirect.hlsl
 dxc -T vs_6_6 -E vsfull -Fo hazards.vsfull.dxil hazards.hlsl
 dxc -T ps_6_6 -E psvalue -Fo hazards.psvalue.dxil hazards.hlsl
 dxc -T ps_6_6 -E pssample -Fo hazards.pssample.dxil hazards.hlsl
 dxc -T cs_6_6 -E csfill -Fo hazards.csfill.dxil hazards.hlsl
 dxc -T cs_6_6 -E cscount -Fo hazards.cscount.dxil hazards.hlsl
 dxc -T cs_6_6 -E csargs -Fo hazards.csargs.dxil hazards.hlsl
+dxc -T cs_6_0 -E csmain -Fo bounds.cs.dxil bounds.hlsl
+finish
 ls -l ./*.dxil
 # DXIL translator behaviour groups (dxmt/tests/dxil; see common.hlsli). 16-bit types where the group needs them.
 cd "$HERE/../dxil"
 for g in buffers math transcendental textures groupshared wave atomics quad heap specials; do dxc -T cs_6_6 -E main -Fo "$g.dxil" "$g.hlsl"; done
 for g in half packed; do dxc -T cs_6_6 -E main -enable-16bit-types -Fo "$g.dxil" "$g.hlsl"; done
+finish
 ls -l ./*.dxil

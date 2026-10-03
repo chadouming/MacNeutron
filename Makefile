@@ -46,26 +46,13 @@ presenter-check: presenter
 dxmt:
 	sh dxmt/build.sh
 
-# D3D12 test programs for our DXMT.
+# D3D12 test programs for our DXMT, built in parallel (one compiler per core).
+DXMT_TESTS = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests/%.exe,$(wildcard dxmt/tests/d3d12_*.cpp))
 dxmt-tests:
 	mkdir -p build/dxmt-tests
-	$(MINGWXX) -o build/dxmt-tests/d3d12_clear.exe dxmt/tests/d3d12_clear.cpp -ld3d12 -ldxgi -luser32
-	$(MINGWXX) -o build/dxmt-tests/d3d12_dxil.exe dxmt/tests/d3d12_dxil.cpp -ld3d12
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_dxil_exec.exe dxmt/tests/d3d12_dxil_exec.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_triangle.exe dxmt/tests/d3d12_triangle.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_depth.exe dxmt/tests/d3d12_depth.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_query.exe dxmt/tests/d3d12_query.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_api.exe dxmt/tests/d3d12_api.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_copy.exe dxmt/tests/d3d12_copy.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_null.exe dxmt/tests/d3d12_null.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_layered.exe dxmt/tests/d3d12_layered.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_volume.exe dxmt/tests/d3d12_volume.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_vsread.exe dxmt/tests/d3d12_vsread.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_indirect.exe dxmt/tests/d3d12_indirect.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_hazards.exe dxmt/tests/d3d12_hazards.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_timestamp.exe dxmt/tests/d3d12_timestamp.cpp -ld3d12 -ldxgi -lpsapi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_cache.exe dxmt/tests/d3d12_cache.cpp -ld3d12 -ldxgi
-	$(MINGWXX) -std=c++17 -o build/dxmt-tests/d3d12_ffx_swapchain.exe dxmt/tests/d3d12_ffx_swapchain.cpp -ld3d12 -ldxgi -luser32
+	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(DXMT_TESTS)
+build/dxmt-tests/%.exe: dxmt/tests/%.cpp dxmt/tests/d3d12_common.hpp
+	$(MINGWXX) -std=c++17 -o $@ $< -ld3d12 -ldxgi -luser32 -lpsapi
 
 # Translate a folder of captured DXIL shaders offline (DIR=~/dxil-smite2); never commit a game's shaders.
 dxil-corpus: dxmt

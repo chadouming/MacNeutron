@@ -6,6 +6,8 @@
 #include "d3d12_common.hpp"
 #include <cmath>
 #include <string>
+#include <utility>
+#include <vector>
 
 static const UINT kSize = 1024;
 static const DXGI_FORMAT kFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // blendable on every Mac; exact integers to 2048
@@ -1027,6 +1029,287 @@ static void FenceOrder() {
         exit(1);
 }
 
+// GPU efficiency spec E2 (prerequisite): a render pass sampled from two timestamp heaps at its end. Metal writes only
+// one counter buffer per encoder on Apple GPUs, so each further heap's sample needs its own encoder. Two frames: each
+// heap's timestamp nonzero, the second frame's later than the first. Prints heap A ok, heap B ok: 1 1.
+static void TwoHeaps() {
+    ID3D12QueryHeap *heaps[2];
+    for (auto &h : heaps) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&h));
+    }
+    UINT64 first[2] = {}, second[2] = {};
+    for (int frame = 0; frame < 2; frame++) {
+        uint8_t *p;
+        D3D12_RANGE whole = {0, 64 * 512}, none = {0, 0};
+        CHECK(readback->Map(0, &whole, (void **)&p));
+        memset(p + 60 * 512, 0, 16);
+        readback->Unmap(0, &whole);
+        Clear(T[0]);
+        Pass(T[0], add, 1, 16);
+        g->list->EndQuery(heaps[0], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        g->list->EndQuery(heaps[1], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        g->list->DrawInstanced(3, 1, 0, 0);
+        for (int h = 0; h < 2; h++)
+            g->list->ResolveQueryData(heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, 0, 1, readback, 60 * 512 + h * 8);
+        g->Submit();
+        CHECK(readback->Map(0, &whole, (void **)&p));
+        memcpy(frame ? second : first, p + 60 * 512, 16);
+        readback->Unmap(0, &none);
+    }
+    printf("hazard two-heaps %d %d\n", first[0] && second[0] > first[0], first[1] && second[1] > first[1]);
+}
+
+// GPU efficiency spec E4: a lone timestamp (a list's first; a list of timestamps alone) is taken at the start of the
+// next encoder the queue encodes, not by a blit of its own (DXMT_STATS: 2 here). One call, three lists:
+// [t0, pass on T0, t1], [t2, t3], [t4, pass on T1, t5]. Prints 1 when all six resolve nonzero and in order.
+static void TimestampStart() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 6};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    Queue2 b = MakeQueue(), c = MakeQueue(); // their lists only: all three lists run on the main queue
+    auto *main_list = g->list;
+    auto ts = [&](UINT i) { g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, i); };
+    ts(0);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 4);
+    ts(1);
+    g->list = b.l;
+    ts(2);
+    ts(3);
+    g->list = c.l;
+    ts(4);
+    Clear(T[1]);
+    Pass(T[1], add, 1, 4);
+    ts(5);
+    g->list->ResolveQueryData(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 6, readback, 59 * 512);
+    g->list = main_list;
+    ID3D12GraphicsCommandList *lists[] = {g->list, b.l, c.l};
+    for (auto *l : lists)
+        CHECK(l->Close());
+    g->queue->ExecuteCommandLists(3, (ID3D12CommandList *const *)lists);
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    if (!CpuWait(g->fence, g->value)) { printf("hazard ts-start timeout\n"); exit(1); }
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    UINT64 t[6];
+    uint8_t *p;
+    D3D12_RANGE whole = {0, 64 * 512}, none = {0, 0};
+    CHECK(readback->Map(0, &whole, (void **)&p));
+    memcpy(t, p + 59 * 512, sizeof t);
+    readback->Unmap(0, &none);
+    bool ok = t[0] != 0;
+    for (int i = 1; i < 6; i++)
+        ok = ok && t[i] >= t[i - 1];
+    printf("hazard ts-start %d\n", ok ? 1 : 0);
+}
+
+// Overlap order (DXMT_D3D12_OVERLAP=1): a pass sampled from two timestamp heaps puts one of the queue's own blits inside
+// the list (E2); later work in the list still waits on what it depends on: T0 rendered (heavy), work on T1, then T0
+// set to 7. Prints 7.
+static void AfterOwnBlit() {
+    static ID3D12QueryHeap *heaps[2];
+    if (!heaps[0])
+        for (auto &h : heaps) {
+            D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+            CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&h));
+        }
+    Clear(T[2]);
+    Pass(T[2], add, 1, 1);
+    g->list->EndQuery(heaps[0], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list->EndQuery(heaps[1], D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    Pass(T[1], set, 5, 1);
+    Pass(T[0], set, 7, 1);
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard after-own-blit %g\n", Texel(0));
+}
+
+// GPU efficiency spec E7: a clear-only pass folds into the first pass that binds its view later in the same
+// ExecuteCommandLists call, across lists, timestamps and barriers that don't name its texture. Lists on the main queue.
+struct List {
+    ID3D12CommandAllocator *a;
+    ID3D12GraphicsCommandList *l;
+};
+static List MakeList() {
+    List x;
+    CHECK(g->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void **)&x.a));
+    CHECK(g->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, x.a, nullptr, __uuidof(ID3D12GraphicsCommandList),
+                                       (void **)&x.l));
+    return x;
+}
+// Runs `lists` (closed) in one call on the main queue and waits.
+static void RunLists(std::initializer_list<ID3D12GraphicsCommandList *> lists) {
+    std::vector<ID3D12CommandList *> v(lists.begin(), lists.end());
+    g->queue->ExecuteCommandLists((UINT)v.size(), v.data());
+    CHECK(g->queue->Signal(g->fence, ++g->value));
+    if (!CpuWait(g->fence, g->value)) { printf("hazard fold timeout\n"); exit(1); }
+}
+static ID3D12QueryHeap *FoldHeap() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 4};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    return heap;
+}
+static void ClearTo(Target &t, float v) {
+    const float c[4] = {v, v, v, v};
+    g->list->ClearRenderTargetView(t.rtv, c, 0, nullptr);
+}
+// 4 additive draws of 1 into the left half of `t` (scissor).
+static void LeftHalf(Target &t) {
+    Bind(t, add, 1);
+    D3D12_RECT left = {0, 0, (LONG)kSize / 2, (LONG)kSize};
+    g->list->RSSetScissorRects(1, &left);
+    g->list->DrawInstanced(3, 4, 0, 0);
+}
+// List 1: clear T0 to 2, a timestamp. List 2: a barrier round trip on `barrier_on` (no encoder). List 3: a timestamp,
+// then 4 draws of +1 into T0's left half. Returns T0 left, T0 right.
+static std::pair<float, float> FoldLists(Target &barrier_on) {
+    auto *main_list = g->list;
+    List b = MakeList(), c = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    g->Barrier(barrier_on.texture, RT, PSR);
+    g->Barrier(barrier_on.texture, PSR, RT);
+    g->list = c.l;
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+    LeftHalf(T[0]);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l, c.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l, c.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    return {Texel(0), Texel(1)};
+}
+// The fold across lists: prints 6 2 (DXMT_STATS: 1 clear folded at execute).
+static void FoldListsMode() {
+    auto [l, r] = FoldLists(T[2]);
+    printf("hazard fold-lists %g %g\n", l, r);
+}
+// A barrier naming the cleared texture between: no fold, same pixels (DXMT_STATS: 1 refused, barrier).
+static void FoldListsBarrier() {
+    auto [l, r] = FoldLists(T[0]);
+    printf("hazard fold-lists-barrier %g %g\n", l, r);
+}
+// List 1: clear T0 to 2, a timestamp. List 2: clear T0 to 7 (M4 folds it into the pass), +1 x4 into the left half.
+// The later clear wins: prints 11 7.
+static void FoldM4() {
+    auto *main_list = g->list;
+    List b = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    ClearTo(T[0], 7);
+    LeftHalf(T[0]);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard fold-m4 %g %g\n", Texel(0), Texel(1));
+}
+// List A: clear T0 to 2, a timestamp. List B: +1 x4 over all of T0. One call runs {A, B, B}: 10; a second call runs
+// {B}: 14. The fold is for that execution of A's clear only. Prints 10 14.
+static void FoldTwice() {
+    auto *main_list = g->list;
+    List b = MakeList(), r = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    Pass(T[0], add, 1, 4);
+    g->list = r.l;
+    Read(T[0], RT, 512, 512, 0);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l, r.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l, b.l, r.l});
+    float first = Texel(0);
+    RunLists({b.l, r.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard fold-twice %g %g\n", first, Texel(0));
+}
+// List 2 copies a texel of T0 out (barriers around it name T0) before list 3's draws: the copy reads 2, the clear
+// stays a pass. Prints 2 6 2.
+static void FoldCopy() {
+    auto *main_list = g->list;
+    List b = MakeList(), c = MakeList();
+    ClearTo(T[0], 2);
+    g->list->EndQuery(FoldHeap(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->list = b.l;
+    Read(T[0], RT, 900, 512, 2);
+    g->list = c.l;
+    LeftHalf(T[0]);
+    Read(T[0], RT, 100, 512, 0);
+    Read(T[0], RT, 900, 512, 1);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l, c.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l, c.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard fold-copy %g %g %g\n", Texel(2), Texel(0), Texel(1));
+}
+
+// GPU efficiency E10: indirect draws read their arguments in the render pass. Its arguments {3, 1, 0, 0} (csargs).
+// T0 gets 256 (heavy); a dispatch elsewhere ends that pass; a second pass into T0 (which waits on the first, as both
+// write T0) adds 9 by the indirect draw; a barrier INDIRECT_ARGUMENT -> UNORDERED_ACCESS; cscount then makes the
+// instance count 3. Only that barrier orders cscount after the second pass: 265 (283 if cscount ran first).
+static void IndirectWar() {
+    ID3D12Resource *a = Zeroed(16, UA), *elsewhere = Zeroed(256, UA);
+    Dispatch(args, a, 1);
+    g->Barrier(a, UA, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    Clear(T[0]);
+    Pass(T[0], add, 1, 256);
+    Dispatch(fill, elsewhere, 1);
+    Bind(T[0], add, 9);
+    g->list->ExecuteIndirect(draw_signature, 1, a, 0, nullptr, 0);
+    g->Barrier(a, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, UA);
+    Dispatch(count, a, 1);
+    Read(T[0], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard indirect-war %g\n", Texel(0));
+}
+// List 1: clear T0 to 2, an indirect draw of 4 instances adding 1. List 2: the same draw. With no resolver pass before
+// them, the two passes are one Metal render pass (DXMT_STATS: 1 render pass merged). Prints 10.
+static void MergeIndirect() {
+    static const D3D12_DRAW_ARGUMENTS four = {3, 4, 0, 0};
+    ID3D12Resource *a = g->Buffer(D3D12_HEAP_TYPE_UPLOAD, sizeof(four), D3D12_RESOURCE_STATE_GENERIC_READ);
+    void *p;
+    CHECK(a->Map(0, nullptr, &p));
+    memcpy(p, &four, sizeof(four));
+    a->Unmap(0, nullptr);
+    auto *main_list = g->list;
+    List b = MakeList();
+    ClearTo(T[0], 2);
+    Bind(T[0], add, 1);
+    g->list->ExecuteIndirect(draw_signature, 1, a, 0, nullptr, 0);
+    g->list = b.l;
+    Bind(T[0], add, 1);
+    g->list->ExecuteIndirect(draw_signature, 1, a, 0, nullptr, 0);
+    Read(T[0], RT, 512, 512, 0);
+    g->list = main_list;
+    for (auto *l : {main_list, b.l})
+        CHECK(l->Close());
+    RunLists({main_list, b.l});
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    printf("hazard merge-indirect %g\n", Texel(0));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: d3d12_hazards.exe <shader folder> [mode...]\n"); return 2; }
     std::string dir = argv[1];
@@ -1075,7 +1358,9 @@ int main(int argc, char **argv) {
         {"unsplit-samebuffer", UnsplitSameBuffer}, {"unsplit-midbarrier", UnsplitMidBarrier},
         {"unsplit-query", UnsplitQuery}, {"unsplit-twice", UnsplitTwice}, {"deferred", Deferred}, {"zeroed", Zeroed}, {"fold", Fold}, {"fold-order", FoldOrder}, {"fence-reset", FenceReset}, {"fence-cpu-late", FenceCpuLate},
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
-        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}};
+        {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
+        {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
+        {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
