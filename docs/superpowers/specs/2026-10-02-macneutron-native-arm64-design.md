@@ -48,7 +48,7 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 | Apple entitlement | **Granted** on 2026-10-02: the "Cross-architecture Compatibility Framework" capability (`com.apple.developer.cross-architecture-support`) for App ID `net.authspot.macneutron.wine`, team `49QMZXLR8S`, through a Developer ID provisioning profile. The entitled path is the design; the unentitled design survives only in the research (`wine-11.19-survey.md`) |
 | Wine base | Upstream `wine-11.19`, not citi94's port, CrossOver's tree or Madeira's |
 | x18 (Windows TEB) | Apple's public `os_set_custom_x18_abi_enabled`. Once per thread for sub-project 1; strict toggling at every Windows↔Unix transition before shipping (sub-project 3). No old-SDK linking |
-| GPL-3 | Allowed in our FEX fork, so Madeira's GPL-3 FEX changes may be imported with attribution. Wine and DXMT stay LGPL |
+| GPL-3 | Allowed in our FEX fork, so Madeira's GPL-3 FEX changes may be imported with attribution. Wine and DXMT stay LGPL. (Amended 2026-10-03: every Madeira commit we use is dated before 2026-08-28, and Madeira's `LICENSE-MADEIRA.md` says such modifications were granted under MIT irrevocably, so our FEX patches stay MIT, with attribution.) |
 | FEX JIT memory | FEX emits into code mapped twice (a writable view and an executable view), never into RWX pages (§3.4, §6.2) |
 | Patches | Patch files committed in this repo are the source of truth, applied to pinned upstream commits. No public Wine or FEX fork until the maintainer decides otherwise |
 | Minimum macOS for the arm64 stack | 27, the maintainer's choice. The APIs would allow 26.6 (`os_cross_arch_is_supported` appeared in 26.6; the x18 call in 26.4), but 27 is what we test. Binaries are built with a 27.0 deployment target |
@@ -314,7 +314,7 @@ The transition table, the design and its stress tests are in `x18-boundaries.md`
 `wine-arm64/patches/fex/`:
 1. dappermint `4efc3abc8a`: the macOS unixlib helpers. It reports hardware TSO as unsupported, maps `madvise` values, makes naming anonymous mappings a no-op, and stubs the stats shared memory.
 2. On Apple, `Source/Windows/UnixLib/CMakeLists.txt` stops linking `rt`.
-3. Madeira (`willfaust/FEX`, branch `ios-port-2607`) `fdf361f0e` (variadic `ret_sp_misaligned` off by 8) and `ceabf254a` (128-bit CASPAL). Both are marked not iOS-specific; GPL-3 with attribution. (Amended 2026-10-03: `ceabf254a`'s call-return-stack guard is not taken. Its hunks only change an inline check added by Madeira's iOS-only `707f213f5`, which isn't at the pin; the pin's own guard pages bound the stack on our 4K-page Wine.)
+3. Madeira (`willfaust/FEX`, branch `ios-port-2607`) `fdf361f0e` (variadic `ret_sp_misaligned` off by 8) and `ceabf254a` (128-bit CASPAL). Both are marked not iOS-specific; MIT with attribution (Madeira's pre-2026-08-28 MIT grant). (Amended 2026-10-03: `ceabf254a`'s call-return-stack guard is not taken. Its hunks only change an inline check added by Madeira's iOS-only `707f213f5`, which isn't at the pin; the pin's own guard pages bound the stack on our 4K-page Wine.)
 4. **Dual-view code memory** (§6.2).
 
 Madeira's other FEX commits are iOS-specific (debugger-attached JIT, alias tables, iOS address-space bands) and are not taken. Its WoW64 commits wait for sub-project 8.
@@ -331,6 +331,7 @@ That executable path is replaced by one dual-view pool, so there is one code pat
   - an RW view that FEX writes;
   - an RX view that runs, mapped with `MEM_EXTENDED_PARAMETER_EC_CODE`, which Wine patch 11 honours.
 - **The write delta is fixed** (RX address + delta = RW address), as in Madeira's `DualMap::WriteOffset` (`CodeEmitter/Buffer.h`). The plan sizes the pool. If Wine's section commit can't grow views on demand, the plan reserves the whole pool up front.
+- **Failure** (amended 2026-10-03): a pool that can't be created is fatal (it means the platform or Wine patch 11 is broken). An allocation the full pool can't serve falls back to an RWX page, through patch 6's flip, and logs one ERROR per process: a game that outgrows 1 GiB of JIT code runs slower rather than crashing.
 - **Guard pages** stay on both views.
 
 **Code that must store through the write delta,** while it computes addresses and branch targets from the execute view:
