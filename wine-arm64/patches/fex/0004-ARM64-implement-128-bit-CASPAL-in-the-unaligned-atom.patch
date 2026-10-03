@@ -19,8 +19,9 @@ guest's retry loop converges. The [caspal128] probe now reports only the
 misaligned case it still hands back.
 
 Source: Madeira, https://github.com/willfaust/FEX.git branch ios-port-2607,
-commit ceabf254afbdc3c4c943d238f8c3082a13595028 (GPL-3), Arm64.cpp only,
-ported to FEX 4ed80fd071 (the commit rejects 7 hunks there).
+commit ceabf254afbdc3c4c943d238f8c3082a13595028, Arm64.cpp only, ported to
+FEX 4ed80fd071 (the commit rejects 7 hunks there). License: MIT (Madeira's
+pre-2026-08-28 MIT grant, see its LICENSE-MADEIRA.md).
 
 Not ported from it:
 - the call-return-stack guard (BranchOps.cpp): it tightens an inline

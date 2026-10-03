@@ -34,7 +34,8 @@ fix entirely.
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 
 Source: Madeira, https://github.com/willfaust/FEX.git branch ios-port-2607, commit
-fdf361f0ec3e0f86b8313a8c3fad360146a1bd90 (GPL-3), applied unchanged.
+fdf361f0ec3e0f86b8313a8c3fad360146a1bd90, applied unchanged. License: MIT
+(Madeira's pre-2026-08-28 MIT grant, see its LICENSE-MADEIRA.md).
 ---
  FEXCore/Source/Utils/ArchHelpers/Arm64.cpp | 26 ++++++++++++++++++++++
  Source/Windows/ARM64EC/Module.S            | 13 +++++++++++

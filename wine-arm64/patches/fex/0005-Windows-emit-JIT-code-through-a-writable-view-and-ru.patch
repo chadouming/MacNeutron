@@ -27,11 +27,17 @@ the same address in the read-write view:
   spin lock it takes.
 A code buffer's guard page is no-access in both views. Executable
 allocations go through new AllocExec/FreeExec allocator hooks (first fit in
-the pool; FreeExec gives a range back with its views' protections);
-WoW64 keeps RWX memory.
+the pool; FreeExec gives a range back with its views' protections, and logs
+a protection it couldn't restore); WoW64 keeps RWX memory.
+
+The pool is the one executable code path. DualView::Init failing is fatal
+(ERROR_AND_DIE with the NTSTATUS): the platform or Wine's ARM64EC marking of
+section views is broken. A full pool is not: the allocation falls back to
+RWX memory, which works with W^X flips, and the first such fallback in a
+process logs one error with the requested size and the pool's use.
 
 Derived from Madeira (https://github.com/willfaust/FEX.git, branch
-ios-port-2607, GPL-3), whose dual-mapped JIT pool on iOS is the map:
+ios-port-2607), whose dual-mapped JIT pool on iOS is the map:
 - fce78cefd: Buffer's WriteOffset/WritePtr, Bind() through it, block
   linking through DualMap::WriteAddr;
 - 61f11e3cc, 6084de076: the PE build's global write offset, the real
@@ -43,6 +49,9 @@ ios-port-2607, GPL-3), whose dual-mapped JIT pool on iOS is the map:
   doesn't have.
 Madeira's pool comes from a debugger-attached JIT region on iOS; here it is
 a section, mapped with plain views (no placeholders).
+
+License: MIT (Madeira's pre-2026-08-28 MIT grant, see its
+LICENSE-MADEIRA.md; the commits above are from 2026-07-08 or earlier).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
@@ -56,10 +65,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  .../include/FEXCore/Utils/AllocatorHooks.h    |  17 +++
  Source/Windows/Common/Allocator.cpp           |   8 ++
  Source/Windows/Common/CMakeLists.txt          |   1 +
- Source/Windows/Common/DualView.cpp            | 103 ++++++++++++++++++
- Source/Windows/Common/DualView.h              |  15 +++
+ Source/Windows/Common/DualView.cpp            | 116 ++++++++++++++++++
+ Source/Windows/Common/DualView.h              |  16 +++
  Source/Windows/include/winternl.h             |   1 +
- 13 files changed, 208 insertions(+), 30 deletions(-)
+ 13 files changed, 222 insertions(+), 30 deletions(-)
  create mode 100644 Source/Windows/Common/DualView.cpp
  create mode 100644 Source/Windows/Common/DualView.h
 
@@ -470,10 +479,10 @@ index 0a65c99..9ed94c6 100644
    SHMStats.cpp
 diff --git a/Source/Windows/Common/DualView.cpp b/Source/Windows/Common/DualView.cpp
 new file mode 100644
-index 0000000..797800b
+index 0000000..69a74b1
 --- /dev/null
 +++ b/Source/Windows/Common/DualView.cpp
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,116 @@
 +// SPDX-License-Identifier: MIT
 +#include "Windows/Common/DualView.h"
 +
@@ -491,8 +500,7 @@ index 0000000..797800b
 +
 +namespace FEX::Windows::DualView {
 +namespace {
-+  // ponytail: one fixed 1 GiB pool. Wine backs it with a sparse file, so pages never written cost nothing. When it's
-+  // full, AllocExec fails and FEX falls back to RWX memory (W^X flips again); grow it if a program ever gets there.
++  // ponytail: one fixed 1 GiB pool. Wine backs it with a sparse file, so pages never written cost nothing.
 +  constexpr size_t PoolSize = size_t {1} << 30;
 +  constexpr size_t PageSize = FEXCore::Utils::FEX_PAGE_SIZE;
 +
@@ -500,22 +508,33 @@ index 0000000..797800b
 +  // ponytail: one bit per page and a linear first-fit scan; executable allocations are rare (code buffers, the
 +  // dispatcher, code caches).
 +  std::bitset<PoolSize / PageSize> Used;
++  bool SaidFull;
 +  uint8_t* Exec;
 +
++  uint32_t Code(NTSTATUS Status) {
++    return static_cast<uint32_t>(Status);
++  }
++
++  // A failure is logged: a page left no-access here would fault inside a later allocation.
 +  void Protect(void* Ptr, SIZE_T Size, ULONG Prot) {
++    void* Base = Ptr;
++    SIZE_T Bytes = Size;
 +    ULONG Old;
-+    NtProtectVirtualMemory(NtCurrentProcess(), &Ptr, &Size, Prot, &Old);
++    if (NTSTATUS Status = NtProtectVirtualMemory(NtCurrentProcess(), &Base, &Bytes, Prot, &Old); !NT_SUCCESS(Status)) {
++      LogMan::Msg::EFmt("DualView: protecting {:#x} bytes at {} as {:#x} failed: {:#x}", Size, Ptr, Prot, Code(Status));
++    }
 +  }
 +} // namespace
 +
++// Fatal when it fails: FEX has no other executable memory on ARM64EC, and a failure here means the platform or Wine
++// (its patch 11: ARM64EC code marks on section views) is broken.
 +void Init() {
 +  HANDLE Section;
 +  LARGE_INTEGER Size {.QuadPart = PoolSize};
 +  NTSTATUS Status = NtCreateSection(&Section, SECTION_MAP_READ | SECTION_MAP_WRITE | SECTION_MAP_EXECUTE, nullptr, &Size,
 +                                    PAGE_EXECUTE_READWRITE, SEC_COMMIT, nullptr);
 +  if (!NT_SUCCESS(Status)) {
-+    LogMan::Msg::EFmt("DualView: NtCreateSection failed: {:#x}", Status);
-+    return;
++    ERROR_AND_DIE_FMT("DualView: NtCreateSection for the {} MiB code pool failed: {:#x}", PoolSize >> 20, Code(Status));
 +  }
 +
 +  // Plain views, mapped once for the life of the process: Wine keeps a placeholder's ARM64EC marks, so none is used.
@@ -523,21 +542,19 @@ index 0000000..797800b
 +  void* RX = nullptr;
 +  SIZE_T ViewSize = 0;
 +  Status = NtMapViewOfSectionEx(Section, NtCurrentProcess(), &RW, nullptr, &ViewSize, MEM_TOP_DOWN, PAGE_READWRITE, nullptr, 0);
-+  if (NT_SUCCESS(Status)) {
-+    MEM_EXTENDED_PARAMETER EC {};
-+    EC.Type = MemExtendedParameterAttributeFlags;
-+    EC.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE;
-+    ViewSize = 0;
-+    Status = NtMapViewOfSectionEx(Section, NtCurrentProcess(), &RX, nullptr, &ViewSize, MEM_TOP_DOWN, PAGE_EXECUTE_READ, &EC, 1);
++  if (!NT_SUCCESS(Status)) {
++    ERROR_AND_DIE_FMT("DualView: NtMapViewOfSectionEx of the code pool's read-write view failed: {:#x}", Code(Status));
++  }
++  MEM_EXTENDED_PARAMETER EC {};
++  EC.Type = MemExtendedParameterAttributeFlags;
++  EC.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE;
++  ViewSize = 0;
++  Status = NtMapViewOfSectionEx(Section, NtCurrentProcess(), &RX, nullptr, &ViewSize, MEM_TOP_DOWN, PAGE_EXECUTE_READ, &EC, 1);
++  if (!NT_SUCCESS(Status)) {
++    ERROR_AND_DIE_FMT("DualView: NtMapViewOfSectionEx of the code pool's read-execute view, as ARM64EC code, failed: {:#x}",
++                      Code(Status));
 +  }
 +  NtClose(Section); // the views keep it
-+  if (!NT_SUCCESS(Status)) {
-+    LogMan::Msg::EFmt("DualView: NtMapViewOfSectionEx failed: {:#x}", Status);
-+    if (RW) {
-+      NtUnmapViewOfSection(NtCurrentProcess(), RW);
-+    }
-+    return;
-+  }
 +
 +  Exec = static_cast<uint8_t*>(RX);
 +  ARMEmitter::DualMap::WriteOffset = static_cast<uint8_t*>(RW) - Exec;
@@ -548,7 +565,7 @@ index 0000000..797800b
 +void* AllocExec(size_t Size) {
 +  const size_t Pages = FEXCore::AlignUp(Size, PageSize) / PageSize;
 +  std::scoped_lock lk(Lock);
-+  for (size_t i = 0, Run = 0; Exec && i < Used.size(); i++) {
++  for (size_t i = 0, Run = 0; i < Used.size(); i++) {
 +    Run = Used[i] ? 0 : Run + 1;
 +    if (Run == Pages) {
 +      for (size_t j = i + 1 - Pages; j <= i; j++) {
@@ -557,13 +574,18 @@ index 0000000..797800b
 +      return Exec + (i + 1 - Pages) * PageSize;
 +    }
 +  }
-+  LogMan::Msg::EFmt("DualView: no room for {} bytes of code", Size);
++  // The caller falls back to RWX memory, which Wine flips W^X on every fault: slower, not broken. Said once per process.
++  if (!SaidFull) {
++    SaidFull = true;
++    LogMan::Msg::EFmt("DualView: no room for {:#x} bytes of code ({:#x} of the pool's {:#x} bytes in use): falling back to RWX memory",
++                      Size, Used.count() * PageSize, PoolSize);
++  }
 +  return nullptr;
 +}
 +
 +bool FreeExec(void* Ptr, size_t Size) {
 +  const auto Offset = reinterpret_cast<uintptr_t>(Ptr) - reinterpret_cast<uintptr_t>(Exec);
-+  if (!Exec || Offset >= PoolSize) {
++  if (Offset >= PoolSize) {
 +    return false;
 +  }
 +  Size = FEXCore::AlignUp(Size, PageSize);
@@ -579,10 +601,10 @@ index 0000000..797800b
 +} // namespace FEX::Windows::DualView
 diff --git a/Source/Windows/Common/DualView.h b/Source/Windows/Common/DualView.h
 new file mode 100644
-index 0000000..098fd41
+index 0000000..2be7b4a
 --- /dev/null
 +++ b/Source/Windows/Common/DualView.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,16 @@
 +// SPDX-License-Identifier: MIT
 +#pragma once
 +#include <cstddef>
@@ -591,9 +613,10 @@ index 0000000..098fd41
 +// ARM64EC code (MEM_EXTENDED_PARAMETER_EC_CODE), and is written through the read-write view (ARMEmitter::DualMap), so
 +// no page is ever writable and executable at once: macOS refuses that, and Wine would flip the page on every fault.
 +namespace FEX::Windows::DualView {
-+// Maps both views and points ARMEmitter::DualMap at them. Once, at process init, before any code is allocated.
++// Maps both views and points ARMEmitter::DualMap at them. Once, at process init, before any code is allocated; a
++// failure is fatal.
 +void Init();
-+// First fit in the read-execute view; nullptr when it's full or Init failed. Takes and returns read-execute addresses.
++// First fit in the read-execute view; nullptr when it's full. Takes and returns read-execute addresses.
 +void* AllocExec(size_t Size);
 +// False when Ptr isn't in the read-execute view.
 +bool FreeExec(void* Ptr, size_t Size);
