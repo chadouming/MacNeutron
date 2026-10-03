@@ -1,5 +1,6 @@
-// Gate G1: x64 threads under FEX. 32 threads each keep their own TLS value; all of them park on one manual-reset
-// event, which a single SetEvent releases; then each adds 100000 to a counter under one critical section.
+// Gate G1: x64 threads under FEX. 32 threads each keep their own TLS value, both a TlsAlloc slot and a
+// __declspec(thread) variable; all of them park on one manual-reset event, which a single SetEvent releases; then
+// each adds 100000 to a counter under one critical section.
 #include <windows.h>
 #include <stdio.h>
 
@@ -11,20 +12,29 @@ static HANDLE go;
 static CRITICAL_SECTION cs;
 static volatile LONG ready;
 static volatile LONG counter;
+static __declspec(thread) volatile ULONG_PTR implicit;  // the exe's TLS directory: one copy per thread, from the loader
+
+// Returns 0, or 3 when the TlsAlloc slot isn't this thread's value, 4 when the __declspec(thread) one isn't.
+static DWORD mine(ULONG_PTR i) {
+  if ((ULONG_PTR)TlsGetValue(tls) != i) return 3;
+  return implicit == i ? 0 : 4;
+}
 
 // Returns 0, or a non-zero step that went wrong.
 static DWORD WINAPI worker(void *arg) {
   ULONG_PTR i = (ULONG_PTR)arg;  // 1..THREADS: 0 is what an unset slot reads
   if (!TlsSetValue(tls, (void *)i)) return 1;
+  implicit = i;
   InterlockedIncrement(&ready);
   if (WaitForSingleObject(go, 10000) != WAIT_OBJECT_0) return 2;
-  if ((ULONG_PTR)TlsGetValue(tls) != i) return 3;
+  DWORD rc = mine(i);
+  if (rc) return rc;
   for (int n = 0; n < ADDS; n++) {
     EnterCriticalSection(&cs);
     counter = counter + 1;  // not atomic: only the critical section keeps it right
     LeaveCriticalSection(&cs);
   }
-  return (ULONG_PTR)TlsGetValue(tls) == i ? 0 : 4;
+  return mine(i);
 }
 
 int main(void) {
@@ -58,11 +68,11 @@ int main(void) {
     DWORD rc = 99;
     GetExitCodeThread(threads[i], &rc);
     if (rc) {
-      printf("FAIL x64-threads: thread %d failed at step %lu (1 TlsSetValue, 2 wait, 3/4 TLS value)\n", i + 1, rc);
+      printf("FAIL x64-threads: thread %d failed at step %lu (1 TlsSetValue, 2 wait, 3 TlsGetValue, 4 __declspec(thread))\n", i + 1, rc);
       return 1;
     }
   }
-  printf("every thread read back its own TLS value; counter %ld\n", counter);
+  printf("every thread read back its own TLS values; counter %ld\n", counter);
   if (counter != THREADS * ADDS) {
     printf("FAIL x64-threads: wanted counter %d\n", THREADS * ADDS);
     return 1;
