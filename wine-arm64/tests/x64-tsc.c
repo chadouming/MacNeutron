@@ -24,6 +24,7 @@ static DWORD WINAPI reader(void *arg) {
 }
 
 int main(void) {
+  OutputDebugStringA("jit: start");  // gate G5 counts W^X flips after this line (check.sh g5-jit)
   HANDLE threads[THREADS];
   for (int i = 0; i < THREADS; i++) threads[i] = CreateThread(NULL, 0, reader, NULL, 0, NULL);
   if (WaitForMultipleObjects(THREADS, threads, TRUE, 30000) != WAIT_OBJECT_0) {

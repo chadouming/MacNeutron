@@ -19,10 +19,10 @@ UPFX="$WORK/prefix unentitled"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
-G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip"
-NEEDS_FEX="$G1 g2-litmus"
+G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit"
+NEEDS_FEX="$G1 g2-litmus g5-jit"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -214,6 +214,23 @@ wxflip_cmd() {
   [ "$n" -ge 10 ] || { echo "FAIL wxflip: $n trace lines, wanted at least 10"; return 1; }
 }
 
+# Gate G5 (spec §8): FEX's code memory never flips W^X (patch 12's trace) once a program runs. Each G1 test prints
+# `jit: start` (OutputDebugStringA: kernel32 WARNs it on debugstr) before anything else; the flips counted are those
+# after it, and every test still has to pass. A log with no marker fails: its count would mean nothing.
+g5_jit_cmd() {
+  total=0
+  for t in x64-hello x64-seh x64-seh-cpp x64-threads x64-kuser x64-smc x64-tsc x64-unaligned; do
+    log="$WORK/g5-$t.log"
+    out=$(WINEDEBUG=+wxflip,warn+debugstr,warn+seh wine_run "$TESTS/$t.exe" 2> "$log" | tr -d '\r') || true
+    grep -q 'jit: start' "$log" || { echo "FAIL g5-jit: no marker in ${log#"$ROOT"/}"; return 1; }
+    echo "$out" | grep -qx "PASS $t" || { echo "FAIL g5-jit: $t did not pass: $(echo "$out" | tail -n 1)"; return 1; }
+    n=$(sed -n '/jit: start/,$p' "$log" | grep -c 'trace:wxflip' || true)
+    echo "info $t: $n flips after the marker"
+    total=$((total + n))
+  done
+  [ "$total" = 0 ] || { echo "FAIL g5-jit: $total flips"; return 1; }
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -234,6 +251,8 @@ run_step() {
     g2-litmus) step g2-litmus 1800 g2_litmus_cmd; grep '^info ' "$WORK/g2-litmus.log" ;;
     viewec) step viewec 60 exe_cmd arm64ec-viewec ;;
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
+    g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
+    g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     *) die "no runner for $1" ;;
   esac
 }
