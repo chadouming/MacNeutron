@@ -90,6 +90,8 @@ worktree) start over from the series: it is deleted and fetched again.
     with `git am`, author kept. Its message has no `Source:` line; this is where it comes from
     (`docs/research/2026-10-02-native-arm64/entitled-trial.md`).
   - 0009: adapted from Madeira's LGPL Wine commits `ac650deca3` and `d88d55eee0` (branch `madeira-lgpl`).
+  - 0013: adapted from CodeWeavers' `dlls/winemac.drv/d3dmetal.c` (Brendan Shanks, LGPL-2.1+, as published in
+    `athei/wine` branch `cx-26-patched`) and `dappermint/winecx` `713015fa9f`, `13e6a88a02`, `565f6386b7` (LGPL).
   - The other Wine patches are ours.
 - **FEX** is MIT, and so are our patches to it.
   - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`. MIT: the file it patches,

@@ -28,10 +28,10 @@ RWINE="$RTOOL/Libraries/Wine/bin"
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 # NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt g4-bench"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt g4-bench"
-NEEDS_FEX="$G1 g2-litmus g5-jit g4-bench"
-NEEDS_DXMT=""
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt dxmt-present g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt dxmt-present g4-bench"
+NEEDS_FEX="$G1 g2-litmus g5-jit dxmt-present g4-bench"
+NEEDS_DXMT="dxmt-present"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -320,8 +320,57 @@ dxmt_cmd() {
     ! builtin "$sys/${f##*/}" || { echo "system32/${f##*/} carries Wine's builtin marker"; return 1; }
   done
   ver=$(cat "$d/version") || return 1
-  [ "${ver%%+*}" = "$DXMT_COMMIT" ] || { echo "DXMT/version is '$ver', not $DXMT_COMMIT+<series or dev>"; return 1; }
+  case $ver in "$DXMT_COMMIT"+?*) ;; *) echo "DXMT/version is '$ver', not $DXMT_COMMIT+<series or dev>"; return 1 ;; esac
+  echo "waiting for the prefix's wineserver"
   WINEPREFIX="$PFX" "$TOOL/Contents/Resources/bin/wineserver" -w
+}
+
+# Gate D2's minimum winshot shares (percent of the window's pixels), from Task 4's measurement of the same programs on
+# our DXMT under the Rosetta runtime (dark mode, 1x display): present_loop green 71 white 24, d3d12_clear green 95
+# white 0. Green keeps 15 points of margin, white half the measured share (a light-mode title bar adds about 4 white).
+LOOP_GREEN=56 LOOP_WHITE=12 CLEAR_GREEN=80
+
+# onscreen <lane> <exe> <completion line> <min green> <min white> <args...>: runs the program on DXMT in the
+# background, reads its window (titled after the program) with winshot, then waits for the program, whatever winshot
+# said. Passes when the program printed a line starting with the completion line and the shares reach the minimums.
+# Files: $WORK/<lane>-<program>.png, .txt (stdout), .err (stderr, kept out of the log so a FAIL line stays last).
+onscreen() {
+  lane=$1 exe=$2 want=$3 green=$4 white=$5; shift 5
+  p=${exe##*/}; p=${p%.exe}; o="$WORK/$lane-$p"
+  echo "running $lane $p"
+  dxmt_run "$exe" "$@" > "$o.raw" 2> "$o.err" &
+  bg=$!
+  shot=$("$TESTS/winshot" "$p" "$o.png" 2>&1) && shot_ok=1 || shot_ok=0
+  wait "$bg" && rc=0 || rc=$?
+  tr -d '\r' < "$o.raw" > "$o.txt"  # CRLF line ends: text mode
+  cat "$o.txt"
+  if [ "$shot_ok" = 1 ]; then echo "info $lane $p: $shot"; else echo "$shot"; fi
+  grep -q "^$want" "$o.txt" || { echo "FAIL dxmt-present: $lane $p: no '$want' line, exit $rc"; return 1; }
+  [ "$shot_ok" = 1 ] || { echo "FAIL dxmt-present: $lane $p: $(echo "$shot" | tail -n 1)"; return 1; }
+  # shellcheck disable=SC2086  # pixels <n> green <pct> white <pct>
+  set -- $shot
+  [ "$4" -ge "$green" ] || { echo "FAIL dxmt-present: $lane $p: green $4 < $green"; return 1; }
+  [ "$6" -ge "$white" ] || { echo "FAIL dxmt-present: $lane $p: white $6 < $white"; return 1; }
+}
+
+# Gate D2 (arm64 DXMT spec §7, §8): D3D11 and D3D12 windows on screen in both lanes (ARM64EC programs natively, x64
+# programs under FEX), then, ARM64EC only, 20 rounds of window, device and swap chain torn down in both orders.
+dxmt_present_cmd() {
+  ec="$B/dxmt-tests-arm64ec"
+  for lane in arm64ec x64; do
+    if [ $lane = arm64ec ]; then loop="$ec/present_loop.exe" clear="$ec/d3d12_clear.exe"
+    else loop="$B/presenter/present_loop.exe" clear="$B/dxmt-tests/d3d12_clear.exe"; fi
+    onscreen $lane "$loop" "frames 3000," $LOOP_GREEN $LOOP_WHITE 1280 720 1280 720 3000 0 || return 1
+    onscreen $lane "$clear" "presented 3000/3000 frames" $CLEAR_GREEN 0 3000 || return 1
+  done
+  o="$WORK/arm64ec-cycles" what="arm64ec present_loop cycles=20"
+  echo "running $what"
+  dxmt_run "$ec/present_loop.exe" 640 360 640 360 60 0 cycles=20 > "$o.raw" 2> "$o.err" && rc=0 || rc=$?
+  tr -d '\r' < "$o.raw" > "$o.txt"
+  cat "$o.txt"
+  grep -qx 'cycles 20 ok' "$o.txt" || { echo "FAIL dxmt-present: $what: no 'cycles 20 ok' line, exit $rc"; return 1; }
+  [ "$rc" = 0 ] || { echo "FAIL dxmt-present: $what: exit $rc"; return 1; }
+  echo "info $what: cycles 20 ok"
 }
 
 run_step() {
@@ -347,6 +396,7 @@ run_step() {
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     dxmt) step dxmt 120 dxmt_cmd ;;
+    dxmt-present) step dxmt-present 600 dxmt_present_cmd; grep '^info ' "$WORK/dxmt-present.log" ;;
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     *) die "no runner for $1" ;;
   esac
