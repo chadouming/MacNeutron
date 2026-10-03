@@ -50,7 +50,7 @@
 - **FEX registration:** `HKLM\Software\Microsoft\Wow64\amd64`, default value `libarm64ecfex.dll`.
 - **Licences:**
   - Wine stays LGPL.
-  - FEX patches derived from Madeira (`willfaust/FEX`, branch `ios-port-2607`) are GPL-3; each keeps the original author and names the source commit in its message.
+  - FEX patches derived from Madeira (`willfaust/FEX`, branch `ios-port-2607`) are MIT, with attribution (amended 2026-10-03, as in the spec: every Madeira commit used is dated before 2026-08-28, which Madeira's `LICENSE-MADEIRA.md` grants under MIT irrevocably); each keeps the original author and names the source commit in its message.
   - Patch 6 keeps its original author.
 - **Never:** push, fork, open MRs or PRs, or post anywhere. Ask in chat before every `brew install`, and before any download not pinned in `wine-arm64/pins` or `dxmt/pins`.
 - **The Rosetta stack stays untouched:** `make test` and `make dxmt-check` pass after every task that touches shared files (`Makefile`, `README.md`).
@@ -351,7 +351,7 @@
 - Create:
   - `wine-arm64/patches/fex/*-Windows-UnixLib-implement-the-unix-helpers-for-macOS.patch` (dappermint `4efc3abc8a`, fetched from the pinned `FEX_MACOS_REPO`)
   - `*-Windows-UnixLib-don-t-link-rt-on-Apple.patch`
-  - two Madeira-derived patches (the spec's patch 3), from `build/arm64/madeira/fex`: `fdf361f0e` (applies cleanly), and a **port** of only the 128-bit CASPAL and call-return-stack guard parts of `ceabf254a`, which rejects 7 hunks at the pin and also carries unrelated CPU-area/dispatcher probes. Both keep Madeira's author and name the source commit (GPL-3)
+  - two Madeira-derived patches (the spec's patch 3), from `build/arm64/madeira/fex`: `fdf361f0e` (applies cleanly), and a **port** of only the 128-bit CASPAL and call-return-stack guard parts of `ceabf254a`, which rejects 7 hunks at the pin and also carries unrelated CPU-area/dispatcher probes. Both keep Madeira's author and name the source commit (MIT under Madeira's pre-2026-08-28 grant; amended 2026-10-03)
   - `wine-arm64/tests/x64-hello.c`
 
 **Interfaces:**
@@ -384,7 +384,7 @@
   - `RtlIsEcCode(PC)`;
   - the 4K page protections around the fault address.
 
-  Each fix becomes the next Wine or FEX patch in the development tree, with the observed failure in its message. Madeira's commits are the map: `willfaust/wine` branch `madeira-lgpl` (LGPL; local clone `build/arm64/madeira/wine`), and `willfaust/FEX` branch `ios-port-2607` (GPL-3, attribution; local clone `build/arm64/madeira/fex`). Repeat Step 4.
+  Each fix becomes the next Wine or FEX patch in the development tree, with the observed failure in its message. Madeira's commits are the map: `willfaust/wine` branch `madeira-lgpl` (LGPL; local clone `build/arm64/madeira/wine`), and `willfaust/FEX` branch `ios-port-2607` (MIT with attribution for commits dated before 2026-08-28, GPL-3 after; amended 2026-10-03; local clone `build/arm64/madeira/fex`). Repeat Step 4.
 
   If the week-1 checkpoint arrives without a running hello, write the understood cause into `docs/testing/acceptance-arm64-wine.md` under "Week-1 checkpoint", and tell the maintainer.
 - [ ] **Step 6: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: FEX for x64, registered; x64 hello runs (week-1 checkpoint)".
@@ -521,11 +521,11 @@
   - **`x64-unaligned.c`:** `lock cmpxchg` on a 4-byte value that straddles a 16-byte boundary, through inline asm, 1000 times, with the expected final value. This reaches FEX's SIGBUS backpatcher, which rewrites code.
   - **`g1-unaligned`** (60 s) runs it.
   - **`g5-jit`** (600 s) runs every G1 test under `WINEDEBUG=+wxflip,warn+debugstr,warn+seh`. The x64 tests import kernel32's own `OutputDebugStringA`, which WARNs on `debugstr` (`dlls/kernel32/debugger.c`), printing `warn:debugstr:OutputDebugStringA "jit: start"`; kernelbase's logs on `seh`. Match the text `jit: start` on either channel. Task 10 switches the step to one full `x64-bench.exe` run (spec G5: "a full `x64-bench` run").
-    - Each test calls `OutputDebugStringA("jit: start")` first; add that line to the G1 tests, the `.cpp` one included.
+    - Each test calls `OutputDebugStringA("jit: start")` first; add that line to the G1 tests, the `.cpp` one included. (Removed again at the final review, 2026-10-03: once Task 10 moved the step to `x64-bench`, nothing read them.)
     - The step counts `trace:wxflip` lines after the first `jit: start` line in each log; the total must be 0, and a log with no marker is a FAIL (`FAIL g5-jit: no marker in <log>`).
 - [ ] **Step 2: Run them and see `g5-jit` fail.** Run `sh wine-arm64/check.sh boot fex g1-unaligned g5-jit`. Expected: `PASS g1-unaligned` (FEX still uses RWX through patch 6) and `FAIL g5-jit: <n> flips`.
 - [ ] **Step 3: Implement the dual-view FEX patch** in `build/wine-arm64-src/fex`.
-  - Madeira's dual-mapped pool commits on `ios-port-2607` are the map: `fce78cefd`, `61f11e3cc`, `6084de076`, `83e12849f`, `87b40c220` and `db4f32768`. The patch message names them with attribution, GPL-3.
+  - Madeira's dual-mapped pool commits on `ios-port-2607` are the map: `fce78cefd`, `61f11e3cc`, `6084de076`, `83e12849f`, `87b40c220` and `db4f32768`. The patch message names them with attribution; MIT under Madeira's pre-2026-08-28 grant (amended 2026-10-03).
   - Replace Madeira's debugger-JIT pool source with `DualView::Init`.
   - Keep `IsAddressInCodeBuffer` and its users on RX addresses.
   - Leave `Module.cpp:629` (the x64 return-stub byte) and the guest-page SMC trap alone.
@@ -602,7 +602,7 @@
     - a Developer ID with the "Cross-architecture Compatibility Framework" capability granted for the App ID, and the two environment variables;
   - that anyone else needs their own App ID and grant;
   - the development loop (edit in `build/wine-arm64-src/<repo>`, `make wine-arm64`, `make wine-arm64-check <steps>`, `make wine-arm64-export`, commit);
-  - licences: Wine LGPL-2.1+, FEX MIT, and our Madeira-derived FEX patches GPL-3, each naming its source commit.
+  - licences: Wine LGPL-2.1+, FEX MIT, and our Madeira-derived FEX patches MIT too, under Madeira's pre-2026-08-28 grant (amended 2026-10-03), each naming its source commit.
 - [ ] **Step 2: Add two lines to `README.md`'s "Build and test" block:**
   ```
   make wine-arm64        # native arm64 Wine + FEX in a signed wine.app (needs the Developer ID setup in wine-arm64/README.md)

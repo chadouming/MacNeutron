@@ -289,6 +289,7 @@ make -j18                                               # ~2.5 min
    - Re-implement Madeira's guest-base window: `[B, B+4 GB)`, FEX 32-bit `B + zext32(EA)`, and wow64 thunks that add or remove `B` (`docs/WOW64.md:25-50`, Vs).
    - winemetal's i386 pointer paths (`winemetal.h:128,162` `high_part`; NoCopy buffers on guest memory at `winemetal_unix.c:156-170`) then need `B` translation (I).
    - Madeira is GPL-3.0 with an exception. That code lands in our Wine and FEX forks, not in the LGPL DXMT fork; the combined runtime becomes GPL-3 (I).
+     Superseded (2026-10-03): Madeira's FEX commits used here are MIT under its pre-2026-08-28 grant; see the spec.
    - Its PR #26 closed unmerged, and its device results are self-reported (Vs).
    - Effort is months (estimate).
 5. **Order within 32-bit:** D3D9 first (the biggest share of 32-bit titles, I), then D3D11 i386 DXMT (already built today), then lsteamclient32. 32-bit D3D12 stays unimplemented (`d3d12_descriptor_heap.cpp:132,533`).

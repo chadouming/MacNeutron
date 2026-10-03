@@ -375,6 +375,7 @@ Every row works without the entitlement. The only entitled candidate, CrossOver 
    - 4cc0b431f: sets `gs_cached` to the TEB in ThreadInit. Relevance INFERRED.
 
 Upstream FEX is MIT and willfaust's changes are GPL-3; the user has said GPL-3 is acceptable.
+Superseded (2026-10-03): Madeira's FEX commits used here are MIT under its pre-2026-08-28 grant; see the spec.
 
 **Keep upstream's link mode:** `-static -nostdlib -nostartfiles -nodefaultlibs` with static `-lc++ -lc++abi -lunwind`, and `ntdll_ex` as the only DLL import library (`Source/Windows/ARM64EC/CMakeLists.txt:14-22`, VERIFIED). Then none of Madeira's six Wine glue commits apply. Check after each build:
 - `llvm-objdump -p libarm64ecfex.dll | grep 'DLL Name'` lists only `ntdll.dll`.
