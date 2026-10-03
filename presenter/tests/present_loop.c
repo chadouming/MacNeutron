@@ -97,6 +97,7 @@ int main(int argc, char **argv)
         }
         QueryPerformanceCounter(&t1);
         printf("frames %d, avg frame %.3f ms\n", frames, (t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart / frames);
+        fflush(stdout);  /* teardown below is where a window-close crash would happen: keep this line */
         MSG msg;
         if (round % 2) { /* odd: release, then destroy the window */
             rtv->lpVtbl->Release(rtv); if (ctx1) ctx1->lpVtbl->Release(ctx1); ctx->lpVtbl->Release(ctx);

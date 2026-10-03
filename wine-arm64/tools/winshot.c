@@ -47,6 +47,7 @@ int main(int argc, char **argv)
     char l[32];
     snprintf(l, sizeof l, "-l%d", id);
     char *args[] = {"/usr/sbin/screencapture", "-x", "-o", l, argv[2], NULL};
+    unlink(argv[2]);  /* a capture that writes nothing must not leave an older image to measure */
     pid_t pid;
     int st = 0;
     if (posix_spawn(&pid, args[0], NULL, NULL, args, environ) || waitpid(pid, &st, 0) < 0 || !WIFEXITED(st) ||
