@@ -100,7 +100,7 @@ Further patches come only from failures seen during bring-up, each with the fail
 
 ## 5. Wine patch 13: window binding
 
-One Wine commit in sub-project 1's development tree, exported as the next Wine patch. Its message names its sources: CodeWeavers' `dlls/winemac.drv/d3dmetal.c` (Brendan Shanks, LGPL-2.1+, as published in `athei/wine` branch `cx-26-patched`), and `dappermint/winecx` `713015fa9f`, `13e6a88a02`, `565f6386b7` (LGPL).
+One Wine commit in sub-project 1's development tree, exported as the next Wine patch. Its message names its sources: CodeWeavers' `dlls/winemac.drv/d3dmetal.c` (Brendan Shanks, LGPL-2.1+) and `d3dmetal_objc.m` (`WineMetalLayer`), as published in `athei/wine` branch `cx-26-patched`, and `dappermint/winecx` `713015fa9f`, `13e6a88a02`, `565f6386b7` (LGPL).
 
 - **`window.c`:** a `DECLSPEC_EXPORT` 10-slot `macdrv_functions` table in DXMT's slot order (§2), and a stand-in struct whose `client_cocoa_view` is at offset 24 (`C_ASSERT`). `get_win_data` creates a client surface for the window, records it on the window's data, and returns with the window lock held; `release_win_data` unlocks. A window from another process gets a NULL view, so DXMT stops at its own message, not a NULL dereference. Surfaces are freed when the window is destroyed, after the lock is released.
 - **`cocoa_window.m`:** the Metal layer posts `CLIENT_SURFACE_PRESENTED` from `nextDrawable`, for DXMT's views only.

@@ -15,8 +15,8 @@ present_loop, whose AdjustWindowRect turned a 720-row client into
 33498 rows. Cocoa clamped the windows to 8576x33 at y=16000, off
 screen, and screencapture could not image them.
 
-Report a height of -1 and no external leading in that case too, as
-when the font can't be selected; the registry's heights then apply.
+In that case report a height of -1, as when the font can't be
+selected, and no external leading; the registry's heights then apply.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

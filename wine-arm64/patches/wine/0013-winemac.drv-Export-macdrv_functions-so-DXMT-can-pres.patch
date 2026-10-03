@@ -20,8 +20,9 @@ it on the client rect.
 Sources (LGPL), adapted to Wine 11.19's client surfaces:
 - CodeWeavers' dlls/winemac.drv/d3dmetal.c (Brendan Shanks,
   LGPL-2.1+), as published in athei/wine branch cx-26-patched: the
-  table, get_win_data's client surface and the present report
-  (WineMetalLayer, CW HACK 22435).
+  table, get_win_data's client surface and the present handler; and
+  its d3dmetal_objc.m: the present report (WineMetalLayer, CW HACK
+  22435).
 - dappermint/winecx 713015fa9f, 13e6a88a02 and 565f6386b7: the same
   code enabled on aarch64 and ported to Wine 11.
 
