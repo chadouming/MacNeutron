@@ -9,23 +9,29 @@ B="${BUILD_DIR:-$ROOT/build}"
 SRC="$B/wine-arm64-src"
 OUT="$B/wine-arm64"
 W="$SRC/wine"
-APPLIED="$SRC/wine.applied"  # HEAD after the patches went on; outside the tree, so it never counts as a change
+# What the tree was patched to, kept outside it so they never count as changes: HEAD after the patches went on, and
+# the hash of the series (pins and patches) that went on. A tree at that HEAD with another series is started over.
+APPLIED="$SRC/wine.applied"
+SERIES_FILE="$SRC/wine.series"
 PATCHES="$ROOT/wine-arm64/patches/wine"
 
-# 1. Tools. bison and flex are keg-only (macOS ships bison 2.3, too old), so Homebrew's go first on PATH.
-for t in bison flex; do
-  p=$(brew --prefix "$t" 2> /dev/null) || p=
-  [ -n "$p" ] && [ -x "$p/bin/$t" ] || die "missing tool: $t (brew install $t)"
-  PATH="$p/bin:$PATH"
-done
-need_tool autoconf autoconf; need_tool cmake cmake; need_tool ninja ninja
+# 1. Tools, all named at once. bison and flex are keg-only: Homebrew's go first on PATH.
+need_tool autoconf autoconf; need_tool bison bison keg; need_tool flex flex keg; need_tool cmake cmake
+need_tool ninja ninja
+die_if_missing
 # llvm-mingw's arm64ec- and aarch64-w64-mingw32 wrappers, for the Windows side of Wine.
 PATH="$(sh "$ROOT/dxmt/toolchain.sh"):$PATH"
 export PATH
 export MACOSX_DEPLOYMENT_TARGET=27.0
 
-# 2. Fetch and patch, once. A tree that exists is never touched: the patches are applied or the tree is yours.
-mode=$(build_mode "$W" "$APPLIED")
+# 2. Fetch and patch, once per series. A tree with work in it is never touched; a clean one follows the patches.
+series=$(series_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch)
+mode=$(build_mode "$W" "$APPLIED" "$SERIES_FILE" "$series")
+if [ "$mode" = reapply ]; then
+  echo "wine-arm64: patch series changed, re-applying" >&2
+  rm -rf "$W"
+  mode=pinned
+fi
 case "$mode" in
   pinned)
     echo "wine-arm64: fetching Wine $WINE_TAG" >&2
@@ -38,7 +44,9 @@ case "$mode" in
     for p in "$PATCHES"/*.patch; do
       git -C "$W.tmp" am -q "$p" || { git -C "$W.tmp" am --abort; die "patch $(basename "$p") does not apply to $WINE_COMMIT"; }
     done
-    git -C "$W.tmp" rev-parse HEAD > "$APPLIED"  # before the move: a stop in between leaves no tree, so it's redone
+    # Before the move: a stop in between leaves no tree, so it's redone.
+    git -C "$W.tmp" rev-parse HEAD > "$APPLIED"
+    echo "$series" > "$SERIES_FILE"
     mv "$W.tmp" "$W"
     ;;
   applied)

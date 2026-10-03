@@ -17,4 +17,5 @@ rm -f "$ROOT"/wine-arm64/patches/wine/*.patch
 mv "$SRC"/export.tmp/*.patch "$ROOT/wine-arm64/patches/wine/"
 rmdir "$SRC/export.tmp"
 git -C "$W" rev-parse HEAD > "$SRC/wine.applied"
+series_of "$ROOT/wine-arm64/pins" "$ROOT"/wine-arm64/patches/wine/*.patch > "$SRC/wine.series"
 echo "wine-arm64: exported $(ls "$ROOT"/wine-arm64/patches/wine/*.patch | wc -l | tr -d ' ') patches" >&2
