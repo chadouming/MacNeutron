@@ -13,25 +13,31 @@ TESTS="$B/wine-arm64-tests"
 WORK="$B/wine-arm64 check"
 TOOL="$WORK/Application Support/wine.app"
 PFX="$WORK/prefix arm64"
+# The `unentitled` step's loader: a clone of $TOOL re-signed without the entitlement, with a prefix of its own.
+UNENT="$WORK/unentitled.app"
+UPFX="$WORK/prefix unentitled"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
-STEPS="macos signature boot arm64"
-NEEDS_PREFIX="arm64"
+STEPS="macos signature boot pages unentitled arm64"
+NEEDS_PREFIX="pages arm64"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
 runtime_pids() {
-  for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver"; do
+  for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver" \
+    "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver"; do
     [ -e "$f" ] || continue
     lsof -t "$f" 2> /dev/null || true
   done | sort -u | tr '\n' ' '
 }
 
-# Stops the runtime: its server first, then whatever still runs one of its binaries.
+# Stops the runtime: its servers first (the clone's too), then whatever still runs one of the binaries.
 cleanup() {
-  if [ -d "$PFX" ] && [ -x "$TOOL/Contents/Resources/bin/wineserver" ]; then
-    WINEPREFIX="$PFX" "$TOOL/Contents/Resources/bin/wineserver" -k > /dev/null 2>&1 || true
-  fi
+  for pair in "$TOOL|$PFX" "$UNENT|$UPFX"; do
+    if [ -d "${pair#*|}" ] && [ -x "${pair%%|*}/Contents/Resources/bin/wineserver" ]; then
+      WINEPREFIX="${pair#*|}" "${pair%%|*}/Contents/Resources/bin/wineserver" -k > /dev/null 2>&1 || true
+    fi
+  done
   pids=$(runtime_pids)
   # shellcheck disable=SC2086  # pids is a list
   [ -z "$pids" ] || kill -9 $pids 2> /dev/null || true
@@ -102,6 +108,35 @@ signature_cmd() {
 
 boot_cmd() { WINEDLLOVERRIDES="mscoree,mshtml=" wine_run wineboot -i; }
 
+# Runs wine with +virtual (a new Windows process traces its host page size once); the run has to trace at least one
+# `host page size:` line, and every one says 4k. A 16K process only gets to say so if nothing re-execs it.
+pages_run() {  # pages_run <name> <wine args...>
+  name=$1; shift
+  trace="$WORK/pages-$name.trace"
+  WINEDEBUG=+virtual WINEDLLOVERRIDES="mscoree,mshtml=" wine_run "$@" > "$trace" 2>&1 || { echo "$name: exit $?"; return 1; }
+  lines=$(grep 'host page size:' "$trace" | tr -d '\r' || true)
+  [ -n "$lines" ] || { echo "$name: no host page size line in ${trace#"$ROOT"/}"; return 1; }
+  bad=$(echo "$lines" | grep -v 'host page size: 4k$' || true)
+  [ -z "$bad" ] || { echo "$name: $(echo "$bad" | head -n 1)"; return 1; }
+  echo "$name: $(echo "$lines" | wc -l | tr -d ' ') processes, all 4k"
+}
+
+pages_cmd() {
+  pages_run wineboot wineboot -u && pages_run arm64-hello "$TESTS/arm64-hello.exe"
+}
+
+# The entitlement is checked before the exec: without it the kernel kills the 4K exec with no message at all.
+unentitled_cmd() {
+  cp -cR "$TOOL" "$UNENT"
+  codesign -f -s - "$UNENT/Contents/MacOS/wine"  # ad hoc, no entitlements
+  rc=0
+  err=$(WINEPREFIX="$UPFX" WINEDLLOVERRIDES="mscoree,mshtml=" "$UNENT/Contents/MacOS/wine" wineboot 2>&1 > /dev/null) || rc=$?
+  echo "$err"
+  [ "$rc" != 0 ] || { echo "wineboot ran from a loader without the entitlement"; return 1; }
+  echo "$err" | grep -q "lacks the com.apple.developer.cross-architecture-support entitlement" \
+    || { echo "exit $rc, without saying the entitlement is missing"; return 1; }
+}
+
 arm64_cmd() {
   out=$(wine_run "$TESTS/arm64-hello.exe" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
   echo "$out"
@@ -113,7 +148,10 @@ run_step() {
     macos) step macos 10 macos_cmd ;;
     signature) step signature 60 signature_cmd ;;
     boot) step boot 180 boot_cmd ;;
+    pages) step pages 120 pages_cmd ;;
+    unentitled) step unentitled 30 unentitled_cmd ;;
     arm64) step arm64 60 arm64_cmd ;;
+    *) die "no runner for $1" ;;
   esac
 }
 

@@ -53,8 +53,9 @@ check_profile_plist() {  # check_profile_plist <decoded-plist>
   [ "$(pb Entitlements:com.apple.developer.cross-architecture-support "$1" || true)" = true ] \
     || die "profile lacks com.apple.developer.cross-architecture-support"
   # PlistBuddy prints the date in local time ("Tue Sep 27 22:29:58 EST 2044"): off by hours at worst, fine for expiry.
+  # Always in English, so date reads it in English too: LC_ALL=C (under fr_CA the month and day names don't parse).
   exp=$(pb ExpirationDate "$1") || die "profile has no ExpirationDate"
-  at=$(date -j -f '%a %b %d %T %Z %Y' "$exp" +%s 2> /dev/null) || die "can't read the profile's ExpirationDate: $exp"
+  at=$(LC_ALL=C date -j -f '%a %b %d %T %Z %Y' "$exp" +%s 2> /dev/null) || die "can't read the profile's ExpirationDate: $exp"
   [ "$at" -gt "$(date +%s)" ] || die "profile expired on $exp"
 }
 

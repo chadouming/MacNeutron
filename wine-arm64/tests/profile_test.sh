@@ -15,6 +15,8 @@ expect good 0
 expect wrong-app 1 "profile is for 49QMZXLR8S.com.example.other, not 49QMZXLR8S.net.authspot.macneutron.wine"
 expect no-entitlement 1 "profile lacks com.apple.developer.cross-architecture-support"
 expect expired 1 "profile expired on"
+# PlistBuddy prints English dates whatever the locale; date must read them as English too (this Mac lists fr-CA).
+( LC_ALL=fr_FR.UTF-8; export LC_ALL; expect good 0 )
 
 # check_signing names what is missing or wrong, before anything is built. (A good profile needs a signed one: bundle.sh.)
 sign() {  # sign <identity> <profile> <message>: "-" leaves the variable unset
