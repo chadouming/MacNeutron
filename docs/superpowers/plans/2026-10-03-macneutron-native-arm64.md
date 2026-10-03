@@ -59,21 +59,21 @@
 
 ## Plan-level decisions (beyond the spec's text)
 
-1. **Check steps have names, not numbers.** Each task appends its steps to `check.sh`'s ordered list. `check.sh <name>…` runs only the named steps, after the setup they need.
+1. **Check steps have names, not numbers.** Each task appends its steps to `check.sh`'s ordered list. `check.sh <name>…` runs only the named steps, after the setup they need. **Every run starts fresh:** `cleanup`, `rm -rf "$WORK"`, a new clone of the staged bundle, a new prefix; a named-step run that needs a prefix runs `boot` first. `step` exits on the first FAIL, so a task's RED step runs each failing step in its own invocation.
 2. **Where the check runs.** `check.sh` clones `build/wine-arm64/wine.app` with `cp -cR` to `build/wine-arm64 check/Application Support/wine.app`. Both folder names contain a space on purpose: Sub-project 5 installs under `~/Library/Application Support`.
 3. **One test-program rule.** The file-name prefix picks the compiler:
    - `arm64-*.c` → `aarch64-w64-mingw32-clang`
    - `arm64ec-*.c` → `arm64ec-w64-mingw32-clang`
-   - `x64-*.c` → `x86_64-w64-mingw32-clang -fms-extensions`
-   - `x64-*.cpp` → `x86_64-w64-mingw32-clang++ -fms-extensions -static`
+   - `x64-*.c` → `x86_64-w64-mingw32-clang`
+   - `x64-*.cpp` → `x86_64-w64-mingw32-clang++ -static`
 
-   All use `-O1`, and output goes to `build/wine-arm64-tests/<name>.exe`. Each test prints `PASS <name>` or `FAIL <name>: <why>` as its last line, and exits 0 or 1.
-4. **Development mode.** After `git am`, `build.sh` writes the resulting HEAD to `build/wine-arm64-src/<repo>.applied`. A source tree that is dirty, or whose HEAD differs from that file, is a development build: no fetch, no `git am`, no stamp skip.
+   All use `-O1 -fms-extensions -D_WIN32_WINNT=0x0A00` (llvm-mingw defaults to 0x601, which hides `IsWow64Process2` and `MapViewOfFile3`); `arm64ec-viewec` also links `-lonecore`, and output goes to `build/wine-arm64-tests/<name>.exe`. Each test prints `PASS <name>` or `FAIL <name>: <why>` as its last line, and exits 0 or 1.
+4. **Development mode.** After `git am`, `build.sh` writes the resulting HEAD to `build/wine-arm64-src/<repo>.applied` and the patch series' hash to `<repo>.series`. A source tree that is dirty (tracked files only), or whose HEAD differs from `.applied`, is a development build: no fetch, no `git am`, no stamp skip. A clean tree whose recorded series differs from the committed one is re-cloned and re-patched (`reapply`). The build is a development build if either tree (Wine or FEX) is.
 5. **The dual-view pool is fixed:** one 1 GiB `SEC_COMMIT` section, mapped once RW and once RX, at FEX start. Executable allocations are carved from it first-fit. Pagefile-backed pages that are never touched cost nothing.
-6. **Profile validation reads the decoded plist.** `bundle.sh` decodes it with `security cms -D`, then requires:
-   - application-identifier `49QMZXLR8S.net.authspot.macneutron.wine`;
-   - the cross-architecture entitlement;
-   - an `ExpirationDate` in the future.
+6. **Profile validation reads the decoded plist.** `bundle.sh` decodes it with `security cms -D`, then requires (PlistBuddy paths, as in the real decoded profile):
+   - `:Entitlements:com.apple.application-identifier` = `49QMZXLR8S.net.authspot.macneutron.wine`;
+   - `:Entitlements:com.apple.developer.cross-architecture-support` = true;
+   - `:ExpirationDate` in the future (PlistBuddy prints it as `%a %b %d %T %Z %Y`).
 
    This lives in a testable function that takes a plist file.
 7. **Report helpers are Python with a self-test:**
@@ -82,6 +82,8 @@
 
    Each has `--self-test`.
 8. **Patch 3's comment is corrected when imported.** It says an unentitled exec "falls back to execv"; in fact the kernel SIGKILLs it. Patch 7 then adds the real check.
+9. **Patches are named by subject, not number.** `git format-patch` numbers by commit order, so a bring-up fix from Tasks 5–7 shifts the numbers of patches added later. Spec patch numbers (7–12) identify patches in prose only.
+10. **Patch sources.** Madeira's commits are in local clones: `build/arm64/madeira/wine` (`ac650deca3`, `d88d55eee0`) and `build/arm64/madeira/fex` (`fdf361f0e`, `ceabf254a`, and the six dual-map commits). dappermint's macOS unixlib commit is pinned in `wine-arm64/pins` as `FEX_MACOS_REPO=https://github.com/dappermint/FEX.git` and `FEX_MACOS_COMMIT=4efc3abc8aca…` (full SHA resolved with `git ls-remote`/`git fetch` once), so fetching it is a pinned download.
 
 ## Review Focus
 
@@ -106,7 +108,7 @@
 | `wine-arm64/wine.entitlements` | The six entitlements |
 | `wine-arm64/Info.plist` | Bundle id, executable `wine`, `LSMinimumSystemVersion` 27.0 |
 | `wine-arm64/patches/wine/00NN-*.patch` | Wine patches 1–12 (spec §5.2) |
-| `wine-arm64/patches/fex/00NN-*.patch` | FEX patches (spec §6.1; its item 3 is two files, one per Madeira commit, so the dual view is `0005`) |
+| `wine-arm64/patches/fex/00NN-*.patch` | FEX patches (spec §6.1; numbered by commit order, decision 9) |
 | `wine-arm64/tests/*.c`, `*.cpp` | Test programs (decision 3) |
 | `wine-arm64/tests/mode_test.sh`, `profile_test.sh`, `fixtures/` | Unit tests for `lib.sh` |
 | `wine-arm64/tools/cpuregs.py`, `bench_report.py` | Report helpers (decision 7) |
@@ -191,7 +193,7 @@
 **Interfaces:**
 - Consumes: Task 1's `lib.sh`, and the build tree.
 - Produces:
-  - `check_profile_plist <decoded-plist>` exits 0, or calls `die` with one of:
+  - `check_profile_plist <decoded-plist>` reads decision 6's three PlistBuddy paths and exits 0, or calls `die` with one of:
     - `profile is for <id>, not 49QMZXLR8S.net.authspot.macneutron.wine`
     - `profile lacks com.apple.developer.cross-architecture-support`
     - `profile expired on <date>`
@@ -208,7 +210,7 @@
   - `no-entitlement`: message contains `lacks com.apple.developer.cross-architecture-support`;
   - `expired` (`ExpirationDate` 2020-01-01): message contains `expired`.
 
-  The fixtures are plain XML plists, holding only the keys the function reads.
+  The fixtures are plain XML plists with the real decoded profile's key layout (`Entitlements` dict holding `com.apple.application-identifier` and `com.apple.developer.cross-architecture-support`, top-level `ExpirationDate` as a `<date>`). Model `good.plist` on `security cms -D -i ~/Downloads/Mac_Neutron.provisionprofile`, trimmed to those keys; never commit the real profile.
 - [ ] **Step 2: Run it and see it fail.** Expected: `check_profile_plist: not found`.
 - [ ] **Step 3: Implement `check_profile_plist`** with `/usr/libexec/PlistBuddy`. The expiry check compares the date as `date -j -f`-parsed epoch seconds against `date +%s`.
 - [ ] **Step 4: Run it again.** Expected: `PASS profile_test`.
@@ -225,17 +227,19 @@
   - **`arm64`** (60 s): `wine_run "$TESTS/arm64-hello.exe"` prints `PASS arm64-hello`.
 
   Also:
+  - setup on every run (decision 1): `cleanup`, `rm -rf "$WORK"`, `cp -cR build/wine-arm64/wine.app "$TOOL"`, a fresh `$PFX`;
   - an `EXIT`/`INT`/`TERM` trap runs `cleanup`, then the orphan assertion, which prints `PASS orphans` or `FAIL orphans: <pids>`;
   - `cleanup` runs `WINEPREFIX=… <runtime>/wineserver -k` for each prefix, then `kill -9 $(lsof -t <each runtime binary>)`.
 
   Add `wine-arm64-check: wine-arm64 wine-arm64-tests` to the Makefile.
 - [ ] **Step 7: Run it and see it fail.** `make wine-arm64-check` stops at `FAIL signature` (no bundle yet), and prints `PASS orphans`.
 - [ ] **Step 8: Write `wine.entitlements` and `Info.plist`, then `bundle.sh`.**
-  1. Check the variables: `die "set MACNEUTRON_SIGN_IDENTITY"` or `"set MACNEUTRON_PROVISIONING_PROFILE"`.
+  1. Check the variables: `die "set MACNEUTRON_SIGN_IDENTITY"` or `"set MACNEUTRON_PROVISIONING_PROFILE"`. `build.sh` runs the same check (and the profile check) before fetching or building, so a missing variable costs seconds, not a full build (spec §5.4 step 1).
   2. Decode the profile with `security cms -D`. If that fails: `die "<path> is not a provisioning profile"`. Then `check_profile_plist`.
   3. Lay out the bundle:
      - `make install DESTDIR=<tmp>` with configure's default prefix, then move `<tmp>/usr/local/{bin,lib,share}` into `Contents/Resources` (configure's relative paths, such as `../lib/wine` from `bin`, then hold inside the bundle);
      - copy `wine-build/loader/wine` to `Contents/MacOS/wine`;
+     - replace `Contents/Resources/bin/wine` (`make install`'s Mach-O launcher, which every `bin/` program symlink points at) with `ln -s ../../MacOS/wine`;
      - `ln -s ../Resources/lib/wine/aarch64-unix/ntdll.so Contents/MacOS/ntdll.so`;
      - replace `Contents/Resources/lib/wine/aarch64-unix/wine` with `ln -s ../../../../MacOS/wine`;
      - copy `Info.plist` and the profile (as `embedded.provisionprofile`).
@@ -251,8 +255,8 @@
 
      Each failure is a `die` naming the check.
 
-  `build.sh` then calls `bundle.sh` after `make`.
-- [ ] **Step 9: Run the check.** Run `make wine-arm64-check` with the two variables set. Expected: `PASS macos`, `PASS signature`, `PASS boot`, `PASS arm64`, `PASS orphans`.
+  The bundle is assembled as `build/wine-arm64/wine.app.tmp` and moved to `wine.app` only after every assertion passes, so a failure stages nothing (spec §9). `build.sh` then calls `bundle.sh` after `make`.
+- [ ] **Step 9: Run the check.** Run `make wine-arm64-check` with the two variables set. Expected: `PASS macos`, `PASS signature`, `PASS orphans`. Then run `sh wine-arm64/check.sh boot arm64` and record its result in the report: until patch 8 (Task 3) the installed layout's first process runs with 16K pages, which is untested (spec §3.3), so `boot` and `arm64` are required to pass only from Task 3 on.
 - [ ] **Step 10: Run the failure path.** Run `MACNEUTRON_PROVISIONING_PROFILE=/etc/hosts sh wine-arm64/bundle.sh`. Expected: `wine-arm64: /etc/hosts is not a provisioning profile`, exit 1.
 - [ ] **Step 11: Commit.** Message: "wine-arm64: entitled wine.app, signing and make wine-arm64-check". Run `make test` first.
 
@@ -260,8 +264,8 @@
 
 **Files:**
 - Create:
-  - `wine-arm64/patches/wine/0007-ntdll-Refuse-to-exec-a-loader-without-the-cross-architecture-entitlement.patch`
-  - `wine-arm64/patches/wine/0008-ntdll-Re-exec-the-first-process-with-4K-pages-in-an-installed-layout.patch`
+  - `wine-arm64/patches/wine/*-ntdll-Refuse-to-exec-a-loader-without-the-cross-architecture-entitlement.patch` (spec patch 7)
+  - `wine-arm64/patches/wine/*-ntdll-Re-exec-the-first-process-with-4K-pages-in-an-installed-layout.patch` (spec patch 8)
 - Modify: `wine-arm64/check.sh` (steps `pages` and `unentitled`, inserted after `boot`)
 
 **Interfaces:**
@@ -277,7 +281,7 @@
     2. Run `codesign -f -s - $WORK/unentitled.app/Contents/MacOS/wine`, which drops the entitlements.
     3. Run `wine wineboot` from it.
     4. Expect a non-zero exit within the cap, and stderr containing `lacks the com.apple.developer.cross-architecture-support entitlement`.
-- [ ] **Step 2: Run them and see them fail.** Run `sh wine-arm64/check.sh pages unentitled`. Expected:
+- [ ] **Step 2: Run them and see them fail.** Run `sh wine-arm64/check.sh pages`, then `sh wine-arm64/check.sh unentitled`. Expected:
   - `FAIL pages`: the first process traces `16k`;
   - `FAIL unentitled`: the process dies with no message, or hangs until the cap.
 - [ ] **Step 3: Implement patch 7** in the development tree (`build/wine-arm64-src/wine`, branch `macneutron`).
@@ -286,26 +290,26 @@
   - `loader_is_entitled( wineloader )` is computed once in `init_paths`, right after `wineloader` is built, and cached in a static. So every later exec, including the double-forked grandchild in `exec_wineloader`, reads the cached answer.
   - A non-zero `posix_spawn` return is logged with `ERR( "posix_spawn %s: %s\n", argv[1], strerror( ret ) )`, followed by `fatal_error`.
 - [ ] **Step 4: Implement patch 8.** In `pre_exec`'s installed-layout branch (`dlls/ntdll/unix/loader.c:1979`), return 1 (re-exec) when `getpagesize() != 0x1000`. The re-exec goes through patch 7's checked `preloader_exec`.
-- [ ] **Step 5: Run them again.** Run `make wine-arm64 && sh wine-arm64/check.sh boot pages unentitled`. Expected: `PASS boot`, `PASS pages`, `PASS unentitled`.
+- [ ] **Step 5: Run them again.** Run `make wine-arm64 && sh wine-arm64/check.sh boot pages unentitled arm64`. Expected: `PASS boot`, `PASS pages`, `PASS unentitled`, `PASS arm64`.
 - [ ] **Step 6: Export and commit.** Run `make wine-arm64-export`, then the full `make wine-arm64-check` (all PASS). Commit with message "wine-arm64: every Windows process runs entitled with 4K pages (patches 7-8)".
 
 ### Task 4: Bitmap bounds and CPU ID registers (patches 9–10, gate G3)
 
 **Files:**
 - Create:
-  - `wine-arm64/patches/wine/0009-ntdll-Bound-ARM64EC-code-map-lookups-on-the-PE-side.patch`
-  - `wine-arm64/patches/wine/0010-ntdll-Report-the-arm64-CPU-ID-registers-on-macOS.patch`
+  - `wine-arm64/patches/wine/*-ntdll-Bound-ARM64EC-code-map-lookups-on-the-PE-side.patch` (spec patch 9)
+  - `wine-arm64/patches/wine/*-ntdll-Report-the-arm64-CPU-ID-registers-on-macOS.patch` (spec patch 10)
   - `wine-arm64/tests/arm64ec-isec.c`
   - `wine-arm64/tools/cpuregs.py`
 - Modify: `wine-arm64/check.sh` (steps `isec` and `g3-cpu`)
 
 **Interfaces:**
-- Produces: `cpuregs.py <reg-query-output-file>` prints one `feature name=0|1` line each for LSE, LRCPC, LRCPC2 and AFP, then `PASS g3-cpu` or `FAIL g3-cpu: <missing>`. Its decoding:
+- Produces: `cpuregs.py <exported .reg file>` prints one `feature name=0|1` line each for LSE, LRCPC, LRCPC2 and AFP, then `PASS g3-cpu` or `FAIL g3-cpu: <missing>`. Its decoding:
   - `CP 4030` bits 23:20 ≥ 2 → LSE
   - `CP 4031` bits 23:20 ≥ 1 → LRCPC; ≥ 2 → LRCPC2
   - `CP 4039` bits 47:44 ≥ 1 → AFP
 
-  Values come in as `reg query` prints them: `0x…` hex strings, `REG_QWORD`.
+  Values come from `wine reg export`: Wine's `reg query` prints nothing for REG_QWORD (`programs/reg/query.c` has no case for it), but `reg export` writes a UTF-16LE file with a BOM in which each value reads `"CP 4030"=hex(b):xx,xx,…` (8 bytes, little-endian).
 
 - [ ] **Step 1: Write the failing tests.**
   - **`cpuregs.py --self-test`** asserts:
@@ -313,16 +317,18 @@
     decode({'CP 4030': 0x0021100110212120, 'CP 4031': 0x0000000000200000, 'CP 4039': 0x0000100000000000}) \
         == {'LSE': 1, 'LRCPC': 1, 'LRCPC2': 1, 'AFP': 1}
     decode({}) == {'LSE': 0, 'LRCPC': 0, 'LRCPC2': 0, 'AFP': 0}
+    parse('"CP 4039"=hex(b):00,00,00,00,00,10,00,00\r\n') == {'CP 4039': 0x0000100000000000}
     ```
+    (`parse` takes the decoded text; `main` reads the file as UTF-16.)
   - **`arm64ec-isec.c`:** resolves `RtlIsEcCode` with `GetProcAddress(GetModuleHandleA("ntdll"), "RtlIsEcCode")`. It asserts:
     - `0xffff800000001000` and `0x800000000000` give `FALSE` without faulting (wrapped in `__try`);
     - its own `main` gives `TRUE`.
   - **Check steps:**
     - `isec` (60 s) runs it;
-    - `g3-cpu` (60 s) runs `wine_run reg query 'HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0'`, writes the output to `$WORK/cpu.txt`, and runs `python3 wine-arm64/tools/cpuregs.py "$WORK/cpu.txt"`.
+    - `g3-cpu` (60 s) runs `wine_run reg export 'HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0' "Z:$WORK/cpu.reg" /y`, then `python3 wine-arm64/tools/cpuregs.py "$WORK/cpu.reg"`.
 - [ ] **Step 2: Run them and see them fail.**
   - `python3 wine-arm64/tools/cpuregs.py --self-test` fails until `decode` exists. Write `decode` now, then the self-test passes.
-  - `sh wine-arm64/check.sh boot isec g3-cpu` gives `FAIL isec` (an access violation inside `RtlIsEcCode`) and `FAIL g3-cpu: LSE LRCPC LRCPC2 AFP missing`.
+  - `sh wine-arm64/check.sh isec` gives `FAIL isec` (an access violation inside `RtlIsEcCode`), and `sh wine-arm64/check.sh g3-cpu` gives `FAIL g3-cpu: LSE LRCPC LRCPC2 AFP missing`.
 - [ ] **Step 3: Implement patch 9** in `dlls/ntdll/signal_arm64ec.c`:
   - `RtlIsEcCode`: `if (!map || ptr >= 0x800000000000) return FALSE;` (from Madeira `ac650deca3`; its message names that commit).
   - `arm64x_check_call`: before the bitmap load, `lsr x16, x11, #47` then `cbnz x16` to the not-EC path (adapted from Madeira `d88d55eee0`, which shifts by 39).
@@ -330,22 +336,22 @@
   - **Fields** come from `sysctlbyname("hw.optional.arm.FEAT_<X>")`, at Arm's ID-register positions, for: LSE, LSE2, LRCPC, LRCPC2, AFP, FlagM, FlagM2, SHA1, SHA256, SHA512, SHA3, AES, PMULL, CRC32, DotProd, FHM, FRINTTS, RPRES, ECV, BF16, I8MM. A sysctl that is missing reads as 0.
   - **Registers written:** `CP 4030`, `4031`, `4032`, `4020`, `4021`, `4038`, `4039`, `403A`, `4024` = 0, and `4000` = `0x61 << 24` (Apple, part 0).
   - **Never `CP 5801`, and no `mrs ctr_el0`:** reading CTR_EL0 is a SIGILL on macOS.
-- [ ] **Step 5: Run them again.** Run `make wine-arm64` and `rm -rf "build/wine-arm64 check"`, then `sh wine-arm64/check.sh boot isec g3-cpu`. Expected: `PASS isec`, `feature LSE=1`, `LRCPC=1`, `LRCPC2=1`, `AFP=1`, `PASS g3-cpu`.
+- [ ] **Step 5: Run them again.** Run `make wine-arm64`, then `sh wine-arm64/check.sh boot isec g3-cpu`. Expected: `PASS isec`, `feature LSE=1`, `LRCPC=1`, `LRCPC2=1`, `AFP=1`, `PASS g3-cpu`.
 - [ ] **Step 6: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: bounded EC code map lookups and CPU ID registers for FEX (patches 9-10, G3)".
 
 ### Task 5: FEX built, registered, and the x64 hello (week-1 checkpoint)
 
 **Files:**
 - Modify:
-  - `wine-arm64/pins` (FEX lines, if not already there)
+  - `wine-arm64/pins` (add `FEX_MACOS_REPO`, `FEX_MACOS_COMMIT`, decision 10)
   - `wine-arm64/build.sh` (FEX)
   - `wine-arm64/bundle.sh` (install FEX into the bundle)
   - `wine-arm64/export.sh` (FEX)
   - `wine-arm64/check.sh` (steps `fex` and `g1-hello`)
 - Create:
-  - `wine-arm64/patches/fex/0001-Windows-UnixLib-implement-the-unix-helpers-for-macOS.patch` (dappermint `4efc3abc8a`)
-  - `0002-Windows-UnixLib-don-t-link-rt-on-Apple.patch`
-  - `0003-*` and `0004-*`: Madeira `fdf361f0e` and `ceabf254a` (the spec's patch 3, one file per commit)
+  - `wine-arm64/patches/fex/*-Windows-UnixLib-implement-the-unix-helpers-for-macOS.patch` (dappermint `4efc3abc8a`, fetched from the pinned `FEX_MACOS_REPO`)
+  - `*-Windows-UnixLib-don-t-link-rt-on-Apple.patch`
+  - two Madeira-derived patches (the spec's patch 3), from `build/arm64/madeira/fex`: `fdf361f0e` (applies cleanly), and a **port** of only the 128-bit CASPAL and call-return-stack guard parts of `ceabf254a`, which rejects 7 hunks at the pin and also carries unrelated CPU-area/dispatcher probes. Both keep Madeira's author and name the source commit (GPL-3)
   - `wine-arm64/tests/x64-hello.c`
 
 **Interfaces:**
@@ -359,15 +365,15 @@
   - `g1-hello` (60 s): `WINEDEBUG=+seh,+loaddll wine_run "$TESTS/x64-hello.exe"`.
 - [ ] **Step 2: Run them and see them fail.** Running `sh wine-arm64/check.sh boot fex g1-hello` gives `FAIL g1-hello`: Wine's stub `xtajit64.dll` terminates the process at the first x64 entry, or FEX isn't installed.
 - [ ] **Step 3: Build FEX in `build.sh`.**
-  - **Clone:** `git clone --depth 1 --recurse-submodules --shallow-submodules`, then check out the pin, then `git am` the `patches/fex` series. Same modes as Wine.
-  - **The DLL:** `cmake -S fex -B fex-ec -G Ninja -DCMAKE_TOOLCHAIN_FILE=fex/Data/CMake/toolchain_mingw.cmake -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False`, then `ninja -C fex-ec arm64ecfex`.
+  - **Clone** (FEX `main` has moved past the pin, so a depth-1 clone can't reach it): `git init`, `git fetch --depth 1 origin <FEX_COMMIT>`, `git checkout -b macneutron FETCH_HEAD`, `git submodule update --init --recursive --depth 1`, then `git am` the `patches/fex` series. Same modes as Wine (decision 4), with `fex.applied` and `fex.series`.
+  - **The DLL:** `cmake -S fex -B fex-ec -G Ninja -DCMAKE_TOOLCHAIN_FILE="<absolute path to the FEX tree>/Data/CMake/toolchain_mingw.cmake" -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False`, then `ninja -C fex-ec arm64ecfex`.
   - **The unixlib:** `cmake -S fex/Source/Windows/UnixLib -B fex-unixlib -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OSX_DEPLOYMENT_TARGET=27.0`, then `ninja -C fex-unixlib`.
   - **Assert** that `llvm-objdump -p libarm64ecfex.dll`:
     - lists only `ntdll.dll` under `DLL Name`;
     - shows no TLS directory (`llvm-readobj --coff-tls-directory`);
     - carries Wine's builtin marker (`grep -c 'Wine builtin DLL'` on the DLL is 1). Wine ignores non-builtin DLLs in its own directories.
 
-  `bundle.sh` copies the DLL and the `.so` in before signing. Add FEX to `export.sh`'s `format-patch`.
+  `bundle.sh` copies the DLL and the `.so` in before signing. Add FEX to `export.sh`'s `format-patch` (absolute `-o`), and the `patches/fex` files to the stamp. Any new tool goes through `need_tool` followed by `die_if_missing`.
 - [ ] **Step 4: Run the test.** Run `make wine-arm64 && sh wine-arm64/check.sh boot fex g1-hello`.
   - **On `PASS g1-hello`:** go to Step 6.
   - **On failure:** Step 5.
@@ -378,7 +384,7 @@
   - `RtlIsEcCode(PC)`;
   - the 4K page protections around the fault address.
 
-  Each fix becomes the next Wine or FEX patch in the development tree, with the observed failure in its message. Madeira's commits are the map: `willfaust/wine` branch `madeira-lgpl` (LGPL), and `willfaust/FEX` branch `ios-port-2607` (GPL-3, attribution). Repeat Step 4.
+  Each fix becomes the next Wine or FEX patch in the development tree, with the observed failure in its message. Madeira's commits are the map: `willfaust/wine` branch `madeira-lgpl` (LGPL; local clone `build/arm64/madeira/wine`), and `willfaust/FEX` branch `ios-port-2607` (GPL-3, attribution; local clone `build/arm64/madeira/fex`). Repeat Step 4.
 
   If the week-1 checkpoint arrives without a running hello, write the understood cause into `docs/testing/acceptance-arm64-wine.md` under "Week-1 checkpoint", and tell the maintainer.
 - [ ] **Step 6: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: FEX for x64, registered; x64 hello runs (week-1 checkpoint)".
@@ -411,7 +417,7 @@
     1. `VirtualAlloc` RWX.
     2. Copy in `mov eax,1; ret` (`B8 01 00 00 00 C3`), call it, expect 1.
     3. Overwrite byte 1 with `02`, call it, expect 2.
-- [ ] **Step 2: Add the four check steps** (60 s each) and build the tests: `make wine-arm64-tests`.
+- [ ] **Step 2: Add the four check steps** (60 s each; `g1-seh` runs both `x64-seh.exe` and `x64-seh-cpp.exe`) and build the tests: `make wine-arm64-tests`.
 - [ ] **Step 3: Run them.** Run `sh wine-arm64/check.sh boot fex g1-seh g1-threads g1-kuser g1-smc`. Expected: `PASS` for all four. A failure is diagnosed as in Task 5, Step 5, and fixed with a new Wine or FEX patch.
 - [ ] **Step 4: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: gate G1 (x64 exceptions, threads, KUSER, self-modifying code under FEX)".
 
@@ -453,8 +459,8 @@
 
 **Files:**
 - Create:
-  - `wine-arm64/patches/wine/0011-ntdll-Honour-MEM_EXTENDED_PARAMETER_EC_CODE-when-mapping-a-section-view.patch`
-  - `wine-arm64/patches/wine/0012-ntdll-Trace-W-X-page-flips-on-macOS.patch`
+  - `wine-arm64/patches/wine/*-ntdll-Honour-MEM_EXTENDED_PARAMETER_EC_CODE-when-mapping-a-section-view.patch` (spec patch 11)
+  - `wine-arm64/patches/wine/*-ntdll-Trace-W-X-page-flips-on-macOS.patch` (spec patch 12)
   - `wine-arm64/tests/arm64ec-viewec.c`
   - `wine-arm64/tests/arm64-wxflip.c`
 - Modify: `wine-arm64/check.sh` (steps `viewec` and `wxflip`)
@@ -468,25 +474,26 @@
   - **`arm64ec-viewec.c`:**
     1. `CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE, 0, 0x10000, NULL)`.
     2. Map the RW view with `MapViewOfFile3(…, PAGE_READWRITE, NULL, 0)`.
-    3. Map the RX view with `MapViewOfFile3(…, PAGE_EXECUTE_READ, &p, 1)`, where `p.Type = MemExtendedParameterAttributeFlags` and `p.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE`. Define the constant as `0x1` if the headers lack it.
+    3. Map the RX view with `MapViewOfFile3(…, PAGE_EXECUTE_READ, &p, 1)`, where `p.Type = MemExtendedParameterAttributeFlags` and `p.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE` (0x40, from the headers; `MapViewOfFile3` needs `-lonecore`, decision 3).
     4. Assert `RtlIsEcCode(rx) == TRUE` and `RtlIsEcCode(rw) == FALSE`.
     5. Write `mov w0,#7; ret` (`0x528000e0, 0xd65f03c0`) through RW, `FlushInstructionCache` on RX, call RX, and expect 7.
   - **`arm64-wxflip.c`:** rewrites and runs one `VirtualAlloc(PAGE_EXECUTE_READWRITE)` page 10 times, like `probes/dualmap.c`.
   - **Check steps:**
     - `viewec` (60 s) runs `arm64ec-viewec`;
     - `wxflip` (60 s) runs `WINEDEBUG=+wxflip arm64-wxflip.exe` and counts `trace:wxflip` lines, which must be ≥ 10. That proves the trace works.
-- [ ] **Step 2: Run them and see them fail.** Running `sh wine-arm64/check.sh boot viewec wxflip` gives:
+- [ ] **Step 2: Run them and see them fail.** Running `sh wine-arm64/check.sh viewec` and `sh wine-arm64/check.sh wxflip` (separately) gives:
   - `FAIL viewec: RtlIsEcCode(rx) == FALSE`;
   - `FAIL wxflip: 0 trace lines`.
 - [ ] **Step 3: Implement patches 11 and 12** in the development tree.
 - [ ] **Step 4: Run them again.** Run `make wine-arm64 && sh wine-arm64/check.sh boot viewec wxflip`. Expected: both `PASS`.
 - [ ] **Step 5: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: EC-marked section views and W^X flip tracing (patches 11-12)".
 
-### Task 9: FEX's dual-view code memory (FEX patch 5, gate G5)
+### Task 9: FEX's dual-view code memory (gate G5)
 
 **Files:**
-- Create: `wine-arm64/patches/fex/0005-Windows-emit-JIT-code-through-a-writable-view-and-run-it-from-an-executable-view.patch`, built in `build/wine-arm64-src/fex`. Expected FEX files:
-  - `FEXCore/include/FEXCore/Utils/AllocatorHooks.h` (the executable path);
+- Create: `wine-arm64/patches/fex/*-Windows-emit-JIT-code-through-a-writable-view-and-run-it-from-an-executable-view.patch` (spec FEX patch 4), built in `build/wine-arm64-src/fex`. Expected FEX files:
+  - `Source/Windows/Common/Allocator.cpp` (the `HookPtrs` passed to `FEXCore::Allocator::SetupHooks`);
+  - `Source/Windows/include/winternl.h` (declare `NtMapViewOfSectionEx`; `NtCreateSection` is already there);
   - a new `Source/Windows/Common/DualView.{h,cpp}`;
   - the code emitter buffer (`CodeEmitter/Buffer.h`);
   - the block linker and backpatching;
@@ -496,7 +503,7 @@
 - Create: `wine-arm64/tests/x64-unaligned.c`
 - Modify:
   - `wine-arm64/check.sh` (steps `g1-unaligned`, and `g5-jit` after it)
-  - the G1 tests in `wine-arm64/tests/x64-*.c` (an `OutputDebugStringA("jit: start")` first line)
+  - the G1 tests in `wine-arm64/tests/x64-*.c` and `x64-seh-cpp.cpp` (an `OutputDebugStringA("jit: start")` first line)
 
 **Interfaces:**
 - Consumes: Wine patch 11 (EC marking of views); patch 12's `wxflip` trace.
@@ -505,24 +512,25 @@
     - `void Init()`, called once in ARM64EC process init: creates the 1 GiB `SEC_COMMIT` section (`NtCreateSection(…, PAGE_EXECUTE_READWRITE, SEC_COMMIT)`). It maps the RW view, then the RX view (`NtMapViewOfSectionEx` with `MEM_EXTENDED_PARAMETER_EC_CODE`), and sets `WriteOffset = rw - rx`.
     - `void *AllocExec(size_t)` and `void FreeExec(void *, size_t)`: first-fit within the RX view; each returns RX addresses.
     - `uintptr_t WriteOffset`.
-  - **`AllocatorHooks.h`'s executable branch** on `_WIN32` calls `DualView::AllocExec`/`FreeExec` instead of `VirtualAlloc(PAGE_EXECUTE_READWRITE)`.
+  - **The executable-allocation hook:** `AllocExec`/`FreeExec` join the existing `HookPtrs` that `Source/Windows/Common/Allocator.cpp` passes to `FEXCore::Allocator::SetupHooks`, gated on `ARCHITECTURE_arm64ec` (the WoW64 build has no dual view). `FEXCore/include/FEXCore/Utils/AllocatorHooks.h` (a public FEXCore header that can't include Windows code) only calls the hook for executable allocations, and its `VirtualFree(Ptr, Size)` routes to `FreeExec` when `Ptr` is inside the pool's RX range.
+  - **Cache maintenance** goes through `NtFlushInstructionCache` on the RX address (spec §6.2).
   - **Every store into code** goes to `addr + DualView::WriteOffset`; every address and branch-target computation uses RX addresses.
   - **The guard page** at the end of each code buffer is set no-access in both views.
 
 - [ ] **Step 1: Write the failing tests.**
   - **`x64-unaligned.c`:** `lock cmpxchg` on a 4-byte value that straddles a 16-byte boundary, through inline asm, 1000 times, with the expected final value. This reaches FEX's SIGBUS backpatcher, which rewrites code.
   - **`g1-unaligned`** (60 s) runs it.
-  - **`g5-jit`** (600 s) runs every G1 test under `WINEDEBUG=+wxflip,+debugstr`. Task 10 switches it to `x64-bench.exe --quick`.
-    - Each test calls `OutputDebugStringA("jit: start")` first; add that line to the G1 tests.
-    - The step counts `trace:wxflip` lines after the first `jit: start` line in each log, and the total must be 0.
+  - **`g5-jit`** (600 s) runs every G1 test under `WINEDEBUG=+wxflip,warn+seh`. `OutputDebugStringA` logs through `WARN` on the `seh` channel (`dlls/kernelbase/debug.c`), so the marker line contains `jit: start`. Task 10 switches the step to one full `x64-bench.exe` run (spec G5: "a full `x64-bench` run").
+    - Each test calls `OutputDebugStringA("jit: start")` first; add that line to the G1 tests, the `.cpp` one included.
+    - The step counts `trace:wxflip` lines after the first `jit: start` line in each log; the total must be 0, and a log with no marker is a FAIL (`FAIL g5-jit: no marker in <log>`).
 - [ ] **Step 2: Run them and see `g5-jit` fail.** Run `sh wine-arm64/check.sh boot fex g1-unaligned g5-jit`. Expected: `PASS g1-unaligned` (FEX still uses RWX through patch 6) and `FAIL g5-jit: <n> flips`.
-- [ ] **Step 3: Implement FEX patch 5** in `build/wine-arm64-src/fex`.
+- [ ] **Step 3: Implement the dual-view FEX patch** in `build/wine-arm64-src/fex`.
   - Madeira's dual-mapped pool commits on `ios-port-2607` are the map: `fce78cefd`, `61f11e3cc`, `6084de076`, `83e12849f`, `87b40c220` and `db4f32768`. The patch message names them with attribution, GPL-3.
   - Replace Madeira's debugger-JIT pool source with `DualView::Init`.
   - Keep `IsAddressInCodeBuffer` and its users on RX addresses.
   - Leave `Module.cpp:629` (the x64 return-stub byte) and the guest-page SMC trap alone.
-- [ ] **Step 4: Run them again.** Run `make wine-arm64 && sh wine-arm64/check.sh boot fex g1-hello g1-seh g1-threads g1-kuser g1-smc g1-unaligned g5-jit`. Expected: all `PASS`, and `g5-jit` with 0 flips. A G1 regression here is a dual-view bug: fix it in patch 5.
-- [ ] **Step 5: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: FEX emits through a writable view and runs from an executable view (FEX patch 5, G5)".
+- [ ] **Step 4: Run them again.** Run `make wine-arm64 && sh wine-arm64/check.sh boot fex g1-hello g1-seh g1-threads g1-kuser g1-smc g1-unaligned g5-jit`. Expected: all `PASS`, and `g5-jit` with 0 flips. A G1 regression here is a dual-view bug: fix it in the dual-view patch.
+- [ ] **Step 5: Export and commit.** Run `make wine-arm64-export` and the full check, then commit with message "wine-arm64: FEX emits through a writable view and runs from an executable view (G5)".
 
 ### Task 10: Gate G4 (speed against Rosetta)
 
@@ -530,15 +538,14 @@
 - Create:
   - `wine-arm64/tests/x64-bench.cpp`
   - `wine-arm64/tools/bench_report.py`
-- Modify: `wine-arm64/check.sh` (step `g4-bench`, last; and `g5-jit` switches to `x64-bench.exe --quick`)
+- Modify: `wine-arm64/check.sh` (step `g4-bench`, last; and `g5-jit` switches to one full `x64-bench.exe` run)
 
 **Interfaces:**
 - Produces:
-  - **`x64-bench.exe [--quick]`:**
+  - **`x64-bench.exe`:**
     - first prints `cpuid sse41=<0|1> avx=<0|1> avx2=<0|1> fma=<0|1>`;
     - calls `OutputDebugStringA("jit: start")`;
-    - then prints one `row <name> <seconds>` per row;
-    - `--quick` runs each row 1/20 as long.
+    - then prints one `row <name> <seconds>` per row.
   - **`bench_report.py <fex-dir> <rosetta-dir>`:** each directory holds `run1.txt`…`run5.txt`. It prints:
     - one table line per row: `<name> fex=<median s> rosetta=<median s> ratio=<fex/rosetta>`;
     - `geomean single-threaded=<x> multithreaded=<y> calls=<z>`;
@@ -603,7 +610,7 @@
   ```
 - [ ] **Step 3: Run the acceptance (spec §10)** on the maintainer's Mac:
   1. `rm -rf build/wine-arm64 build/wine-arm64-src && make wine-arm64`.
-  2. `make wine-arm64-check 2>&1 | tee "build/wine-arm64 check/acceptance.log"`.
+  2. `make wine-arm64-check 2>&1 | tee build/wine-arm64-acceptance.log` (outside `$WORK`, which every run deletes).
   3. `make test` and `make dxmt-check`.
 
   Record the following in `docs/testing/acceptance-arm64-wine.md`, with date, macOS build, Wine and FEX pins, and patch counts:
