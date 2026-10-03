@@ -20,9 +20,9 @@ UPFX="$WORK/prefix unentitled"
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1"
-NEEDS_FEX="$G1"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus"
+NEEDS_FEX="$G1 g2-litmus"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -172,6 +172,31 @@ g1_hello_cmd() {
 # The rest of gate G1 (spec §8), each test under FEX. Structured exceptions and a C++ throw are one step.
 g1_seh_cmd() { exe_cmd x64-seh && exe_cmd x64-seh-cpp; }
 
+# Gate G2 (spec §8): x64 memory ordering under FEX's software TSO. The default run, with FEX's defaults (every FEX_*
+# variable the caller set is dropped), forbids every pattern. The control run, TSO off, has to show MP reordering, or
+# the test can't see reordering at all; its other patterns are only reported.
+g2_litmus_cmd() {
+  n=10000000
+  unfex=$(env | sed -n 's/^\(FEX_[A-Za-z0-9_]*\)=.*/-u \1/p')
+  t0=$(date +%s)
+  # shellcheck disable=SC2086  # unfex is a list of options
+  out=$(env $unfex WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-litmus.exe" $n | tr -d '\r') || true
+  echo "$out"
+  echo "info TSO on: $(($(date +%s) - t0)) s"
+  for p in MP LB 2+2W IRIW; do
+    f=$(echo "$out" | sed -n "s/^litmus $p forbidden=\([0-9]*\) runs=$n\$/\1/p")
+    [ -n "$f" ] || { echo "FAIL g2-litmus: no $p result for $n runs"; return 1; }
+    [ "$f" = 0 ] || { echo "FAIL g2-litmus: $p forbidden=$f"; return 1; }
+  done
+  t0=$(date +%s)
+  out=$(FEX_TSOENABLED=0 wine_run "$TESTS/x64-litmus.exe" $n | tr -d '\r') || true
+  echo "$out" | sed 's/^litmus /info TSO off: litmus /'
+  echo "info TSO off: $(($(date +%s) - t0)) s"
+  f=$(echo "$out" | sed -n "s/^litmus MP forbidden=\([0-9]*\) runs=$n\$/\1/p")
+  [ -n "$f" ] || { echo "FAIL g2-litmus: control: no MP result for $n runs"; return 1; }
+  [ "$f" -ge 1 ] || { echo "FAIL g2-litmus: control saw no MP violation"; return 1; }
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -189,6 +214,7 @@ run_step() {
     g1-kuser) step g1-kuser 60 exe_cmd x64-kuser ;;
     g1-smc) step g1-smc 60 exe_cmd x64-smc ;;
     g1-tsc) step g1-tsc 60 exe_cmd x64-tsc; grep '^info ' "$WORK/g1-tsc.log" ;;
+    g2-litmus) step g2-litmus 1800 g2_litmus_cmd; grep '^info ' "$WORK/g2-litmus.log" ;;
     *) die "no runner for $1" ;;
   esac
 }
