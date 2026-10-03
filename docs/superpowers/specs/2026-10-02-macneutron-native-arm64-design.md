@@ -273,12 +273,12 @@ The transition table, the design and its stress tests are in `x18-boundaries.md`
 3. **Patch.** A branch `macneutron` at the pin, with `git am` of the series. A patch that fails to apply stops the build and names it.
 4. **Configure** with `MACOSX_DEPLOYMENT_TARGET=27.0`:
    ```
-   autoreconf
    configure --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests \
      --without-x --without-wayland --without-oss --without-alsa --without-pulse --without-sane --without-usb \
      --without-v4l2 --without-pcap --without-capi --without-opencl --without-cups CC=/usr/bin/clang
    ```
    - It runs out of tree, with the llvm-mingw `bin` on `PATH`.
+   - No `autoreconf` (amended 2026-10-03): a patch that changes `configure.ac` carries the regenerated `configure`, as patch 1 does. Running `autoreconf` at build time rewrote `configure` whenever Homebrew's autoconf differed from the one Wine used, which turned every build into a development build and stopped new patches from being applied.
    - `--with-mingw=llvm-mingw` stops configure picking Homebrew's `x86_64-w64-mingw32-gcc` for the x86_64 helper objects.
    - MoltenVK isn't needed until something uses Vulkan.
 5. **Make,** then `make install` into the `Contents/Resources` tree (§4). The loader binary is copied to `Contents/MacOS/wine`, and the installed loader copy is replaced by the symlink.
@@ -331,7 +331,7 @@ That executable path is replaced by one dual-view pool, so there is one code pat
   - an RW view that FEX writes;
   - an RX view that runs, mapped with `MEM_EXTENDED_PARAMETER_EC_CODE`, which Wine patch 11 honours.
 - **The write delta is fixed** (RX address + delta = RW address), as in Madeira's `DualMap::WriteOffset` (`CodeEmitter/Buffer.h`). The plan sizes the pool. If Wine's section commit can't grow views on demand, the plan reserves the whole pool up front.
-- **Failure** (amended 2026-10-03): a pool that can't be created is fatal (it means the platform or Wine patch 11 is broken). An allocation the full pool can't serve falls back to an RWX page, through patch 6's flip, and logs one ERROR per process: a game that outgrows 1 GiB of JIT code runs slower rather than crashing.
+- **Failure** (amended 2026-10-03): a pool that can't be created is fatal (it means the platform or Wine patch 11 is broken). An allocation the full pool can't serve falls back to an RWX page, through patch 6's flip, and logs one ERROR per process: a game that outgrows 1 GiB of JIT code runs slower rather than crashing. Both messages go through FEX's log, which is silent unless `FEX_SILENTLOG=0`; a failed pool still ends the process visibly (Wine reports the unhandled exception), and G5's flip count catches a full pool.
 - **Guard pages** stay on both views.
 
 **Code that must store through the write delta,** while it computes addresses and branch targets from the execute view:
