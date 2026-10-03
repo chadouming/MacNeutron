@@ -18,8 +18,8 @@ UNENT="$WORK/unentitled.app"
 UPFX="$WORK/prefix unentitled"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
-STEPS="macos signature boot pages unentitled arm64"
-NEEDS_PREFIX="pages arm64"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu"
+NEEDS_PREFIX="pages arm64 isec g3-cpu"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -85,6 +85,7 @@ step() {
   fi
   if [ "$rc" = 0 ]; then echo "PASS $name"; return 0; fi
   last=$(tr -d '\r' < "$log" | grep . | tail -n 1 || true)
+  last=${last#"FAIL $name: "}  # a command that already names the step
   echo "FAIL $name: ${why:+$why; }${last:-exit $rc}"
   exit 1
 }
@@ -137,10 +138,17 @@ unentitled_cmd() {
     || { echo "exit $rc, without saying the entitlement is missing"; return 1; }
 }
 
-arm64_cmd() {
-  out=$(wine_run "$TESTS/arm64-hello.exe" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
+# exe_cmd <test>: runs $TESTS/<test>.exe, which passes when it prints PASS <test>.
+exe_cmd() {
+  out=$(wine_run "$TESTS/$1.exe" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
   echo "$out"
-  echo "$out" | grep -qx "PASS arm64-hello"
+  echo "$out" | grep -qx "PASS $1"
+}
+
+# Gate G3: the CPU ID registers FEX reads (patch 10). `reg query` prints nothing for REG_QWORD; `reg export` does.
+g3_cpu_cmd() {
+  wine_run reg export 'HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0' "Z:$WORK/cpu.reg" /y || return 1
+  python3 "$ROOT/wine-arm64/tools/cpuregs.py" "$WORK/cpu.reg"
 }
 
 run_step() {
@@ -150,7 +158,9 @@ run_step() {
     boot) step boot 180 boot_cmd ;;
     pages) step pages 120 pages_cmd ;;
     unentitled) step unentitled 30 unentitled_cmd ;;
-    arm64) step arm64 60 arm64_cmd ;;
+    arm64) step arm64 60 exe_cmd arm64-hello ;;
+    isec) step isec 60 exe_cmd arm64ec-isec ;;
+    g3-cpu) step g3-cpu 60 g3_cpu_cmd; grep '^feature ' "$WORK/g3-cpu.log" ;;
     *) die "no runner for $1" ;;
   esac
 }
