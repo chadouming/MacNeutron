@@ -84,12 +84,13 @@ app: build bridge presenter dxmt
 	for f in $(APP)/Contents/Frameworks/DXMT/x86_64-unix/*; do codesign --force --sign - "$$f"; done
 	codesign --force --sign - $(APP)
 
-# Native arm64 Wine 11.19 with our patches (docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md §5).
-# First run: a shallow clone of Wine and a few minutes of compiling; see wine-arm64/build.sh.
+# Native arm64 Wine 11.19 with our patches, and FEX for x64 code
+# (docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md §5, §6).
+# First run: shallow clones of Wine and FEX and a few minutes of compiling; see wine-arm64/build.sh.
 wine-arm64:
 	sh wine-arm64/build.sh
 
-# Commits made in build/wine-arm64-src/wine back into wine-arm64/patches/wine.
+# Commits made in build/wine-arm64-src/wine and fex back into wine-arm64/patches/wine and fex.
 wine-arm64-export:
 	sh wine-arm64/export.sh
 

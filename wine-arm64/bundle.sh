@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="${BUILD_DIR:-$ROOT/build}"
 OUT="$B/wine-arm64"
 BUILD="$B/wine-arm64-src/wine-build"
+FEX_DLL="$B/wine-arm64-src/fex-ec/Bin/libarm64ecfex.dll"
+FEX_SO="$B/wine-arm64-src/fex-unixlib/libarm64ecfex.so"
 APP="$OUT/wine.app.tmp"
 R="$APP/Contents/Resources"
 INSTALL="$OUT/install.tmp"
@@ -15,6 +17,7 @@ export MACOSX_DEPLOYMENT_TARGET=27.0
 
 check_signing
 [ -x "$BUILD/loader/wine" ] || die "no Wine build at $BUILD: run make wine-arm64"
+[ -f "$FEX_DLL" ] && [ -f "$FEX_SO" ] || die "no FEX build in $B/wine-arm64-src: run make wine-arm64"
 mkdir -p "$OUT"
 rm -rf "$APP" "$INSTALL"
 trap 'rm -rf "$INSTALL"' EXIT
@@ -33,6 +36,9 @@ rm -f "$R/bin/wine" "$R/lib/wine/aarch64-unix/wine"
 ln -s ../../MacOS/wine "$R/bin/wine"
 ln -s ../../../../MacOS/wine "$R/lib/wine/aarch64-unix/wine"
 ln -s ../Resources/lib/wine/aarch64-unix/ntdll.so "$APP/Contents/MacOS/ntdll.so"
+# FEX, the x64 emulator (spec §6.3): its ARM64EC DLL among Wine's builtins, its unixlib beside theirs.
+cp "$FEX_DLL" "$R/lib/wine/aarch64-windows/"
+cp "$FEX_SO" "$R/lib/wine/aarch64-unix/"
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 

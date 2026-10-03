@@ -18,8 +18,10 @@ UNENT="$WORK/unentitled.app"
 UPFX="$WORK/prefix unentitled"
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu"
-NEEDS_PREFIX="pages arm64 isec g3-cpu"
+# NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex g1-hello"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex g1-hello"
+NEEDS_FEX="g1-hello"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable.
@@ -151,6 +153,21 @@ g3_cpu_cmd() {
   python3 "$ROOT/wine-arm64/tools/cpuregs.py" "$WORK/cpu.reg"
 }
 
+# FEX as the prefix's x64 emulator (native arm64 spec §6.3): the default value of HKLM\Software\Microsoft\Wow64\amd64.
+fex_cmd() {
+  wine_run reg add 'HKLM\Software\Microsoft\Wow64\amd64' /ve /d libarm64ecfex.dll /f || return 1
+  out=$(wine_run reg query 'HKLM\Software\Microsoft\Wow64\amd64' /ve | tr -d '\r') || return 1
+  printf '%s\n' "$out"  # not echo: it would read the key's \a as a bell
+  printf '%s\n' "$out" | grep -q 'REG_SZ *libarm64ecfex\.dll$' \
+    || { echo "the amd64 emulator is not libarm64ecfex.dll"; return 1; }
+}
+
+# Gate G1's hello: x64 code under FEX, with the exception and DLL-load traces in the step's log.
+g1_hello_cmd() {
+  export WINEDEBUG=+seh,+loaddll
+  exe_cmd x64-hello
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -161,6 +178,8 @@ run_step() {
     arm64) step arm64 60 exe_cmd arm64-hello ;;
     isec) step isec 60 exe_cmd arm64ec-isec ;;
     g3-cpu) step g3-cpu 60 g3_cpu_cmd; grep '^feature ' "$WORK/g3-cpu.log" ;;
+    fex) step fex 60 fex_cmd ;;
+    g1-hello) step g1-hello 60 g1_hello_cmd ;;
     *) die "no runner for $1" ;;
   esac
 }
@@ -168,6 +187,9 @@ run_step() {
 want="${*:-$STEPS}"
 for s in $want; do
   case " $STEPS " in *" $s "*) ;; *) die "no step named $s (steps: $STEPS)" ;; esac
+done
+for s in $want; do
+  case " $NEEDS_FEX " in *" $s "*) want="fex $want" ;; esac
 done
 for s in $want; do
   case " $NEEDS_PREFIX " in *" $s "*) want="boot $want" ;; esac
