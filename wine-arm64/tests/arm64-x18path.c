@@ -144,7 +144,9 @@ static const char *path_callback(void) {
   return err;
 }
 
-// NtReadFile into reserved memory: the syscall faults on the buffer and returns through its own handler.
+// NtReadFile into reserved memory: tests the error return. read() into the reserved buffer fails with EFAULT, no
+// signal, and NtReadFile returns STATUS_ACCESS_VIOLATION. The fault path through __wine_syscall_dispatcher_return
+// is the raw-syscall row's.
 static const char *path_ntreadfile(void) {
   char exe[MAX_PATH];
   IO_STATUS_BLOCK io;
