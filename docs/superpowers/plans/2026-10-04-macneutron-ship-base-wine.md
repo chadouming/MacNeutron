@@ -125,7 +125,7 @@
     - `sed -n 's/^Requires.private: *//p' freetype2.pc` is empty;
   - `deps.pins` and `dxmt/fetch.sh` join `stamp_of`, not any `series_of`.
 - [ ] **Step 5: Wine's configure.**
-  - Add `--with-freetype --with-gnutls`, plus `PKG_CONFIG_LIBDIR`, `FREETYPE_CFLAGS=-I$SRC/deps/include/freetype2`, `FREETYPE_LIBS="-L$SRC/deps/lib -lfreetype"`, `GNUTLS_CFLAGS=-I$SRC/deps/include` and `GNUTLS_LIBS="-L$SRC/deps/lib -lgnutls"`.
+  - Add `--with-freetype --with-gnutls`, plus `PKG_CONFIG_LIBDIR`, `FREETYPE_CFLAGS=-I$SRC/deps/include/freetype2`, `FREETYPE_LIBS="-L$SRC/deps/lib -lfreetype -Wl,-rpath,$SRC/deps/lib"` (the rpath lets the build-time `tools/sfnt2fon` load FreeType; nothing shipped links it, and `bundle.sh` refuses any non-`@` LC_RPATH), `GNUTLS_CFLAGS=-I$SRC/deps/include` and `GNUTLS_LIBS="-L$SRC/deps/lib -lgnutls"`.
   - Record the configure inputs (the configure line and `deps/.complete`) in `$SRC/wine-build/.configure-inputs`, and reconfigure (`rm -rf wine-build`) when they change.
   - After configure, die if any `cflags:` or `libs:` line in `wine-build/config.log` contains `/opt/homebrew`.
 - [ ] **Step 6: `bundle.sh`.**
