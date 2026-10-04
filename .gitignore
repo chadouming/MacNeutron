@@ -1,3 +1,6 @@
 .build/
 .swiftpm/
 build/
+.claude/worktrees/
+.claude/settings.local.json
+.superpowers/

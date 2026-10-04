@@ -1,7 +1,7 @@
 # MacNeutron — Native arm64 stack: roadmap and sub-project 1 (arm64 Wine + FEX for x64)
 
 - **Date:** 2026-10-02
-- **Status:** Approved 2026-10-03
+- **Status:** Approved 2026-10-03. Sub-project 1 implemented 2026-10-03: G1, G2, G3 and G5 pass and G4 is measured (`docs/testing/acceptance-arm64-wine.md`). Sub-projects 2 and 3 are done too (§2).
 - **Builds on:**
   - `2026-09-27-macproton-runtime-design.md` (tool folder, launcher, prefixes)
   - `2026-09-28-macneutron-dxmt-fork-design.md` (our DXMT fork, `dxmt/` build layout)
@@ -58,12 +58,12 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 
 | # | Sub-project | Depends on | Notes |
 |---|---|---|---|
-| 1 | **arm64 Wine + FEX for x64:** this spec | — | Durable build, signing, FEX bring-up, gates |
-| 2 | **DXMT for arm64:** ARM64X PE side, aarch64 `winemetal.so`, arm64 LLVM 15 | Wine build tree from 1 | Runs alongside 1. Testable with ARM64EC-built test programs, no FEX needed. Known blockers:<br>• `__rdtsc` in `src/d3d12/d3d12_stats.cpp`, the only compile error;<br>• Wine 11.19's `winemac.so` has no `macdrv_functions` and exports only two symbols, so both of DXMT's lookups (`winemetal_unix.c:1713-1722`) fail and nothing presents. Fix: a `macdrv_functions` shim table with default visibility in a winemac patch |
-| 3 | **Ship-base Wine** | 1 | Strict x18 toggling (§5.3); msync from CrossOver `wine1117`; FreeType and gnutls built from pinned source and bundled; the Steam bridge (lsteamclient ARM64X against Steam's universal `steamclient.dylib`, an aarch64 `steam.exe`); licence and notice files for every shipped component. Spec: `2026-10-04-macneutron-ship-base-wine-design.md` (amended 2026-10-04: row 4 folded in; `MAP_JIT` dropped, see §3.4) |
+| 1 | **arm64 Wine + FEX for x64:** this spec | — | Durable build, signing, FEX bring-up, gates<br>**Done** 2026-10-03: `docs/testing/acceptance-arm64-wine.md` |
+| 2 | **DXMT for arm64:** ARM64X PE side, aarch64 `winemetal.so`, arm64 LLVM 15 | Wine build tree from 1 | Runs alongside 1. Testable with ARM64EC-built test programs, no FEX needed. Blockers (fixed by DXMT patch 0001 and Wine patch 0013):<br>• `__rdtsc` in `src/d3d12/d3d12_stats.cpp`, the only compile error;<br>• Wine 11.19's `winemac.so` has no `macdrv_functions` and exports only two symbols, so both of DXMT's lookups (`winemetal_unix.c:1713-1722`) fail and nothing presents. Fix: a `macdrv_functions` shim table with default visibility in a winemac patch<br>**Done** 2026-10-03: `2026-10-03-macneutron-arm64-dxmt-design.md`, `docs/testing/acceptance-arm64-dxmt.md` |
+| 3 | **Ship-base Wine** | 1 | Strict x18 toggling (§5.3); msync from CrossOver `wine1117`; FreeType and gnutls built from pinned source and bundled; the Steam bridge (lsteamclient ARM64X against Steam's universal `steamclient.dylib`, an aarch64 `steam.exe`); licence and notice files for every shipped component. Spec: `2026-10-04-macneutron-ship-base-wine-design.md` (amended 2026-10-04: row 4 folded in; `MAP_JIT` dropped, see §3.4)<br>**Done** 2026-10-04: `docs/testing/acceptance-arm64-ship-base.md` (Wine 0004 and 0015-0019, lsteamclient 0001-0003) |
 | 4 | **Steam path** | — | Folded into row 3 (2026-10-04). The launcher's arm64 Steam wiring and the decision whether release bundles may include lsteamclient (it is under Valve's Steamworks SDK licence) moved to row 5 |
-| 5 | **Launcher: a second runtime** | 3 | Per-game runtime choice, separate prefixes, preflight split, the arm64 Steam bridge wiring and whether releases may include lsteamclient, notarization of the entitled bundle, the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`) |
-| 6 | **SMITE 2 parity and measurements** | 2, 3, 5 | Frame time vs the Rosetta stack; the cost of x64↔ARM64EC crossings; per-game CPU cost; a CPU-bound title |
+| 5 | **Launcher: a second runtime** | 3 | Per-game runtime choice, separate prefixes, preflight split; installing `wine.app` (at a path with spaces, as `wine-arm64/check.sh` tests); `WINEMSYNC=1` for every arm64 run (`WINEMSYNC=0` per game as the off switch; client and server must agree, §11); the arm64 Steam bridge wiring (copying `lsteamclient.dll`, and `build/bridge/arm64/`'s `steam.exe` and `tests/helper.exe`, into prefixes); whether releases may include lsteamclient (Steamworks SDK licence; not redistributed until decided); release packaging: notarization of the entitled bundle (it needs `notarytool` credentials, which only the maintainer can store), release source archives, refusing development inputs in release bundles, stripping builtin PE files (`lsteamclient.dll` is 57 MB); the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`); `dxmt/check.sh`'s launcher checks (section 10, `MACNEUTRON_LOG`) in arm64 mode. Deferred from sub-project 3: its spec's scope and §13, `docs/testing/acceptance-arm64-ship-base.md` "Found on the way". Parked here, with no owner in that spec ("a separate small change"): the Rosetta app's missing LLVM and mingw-w64 notices |
+| 6 | **SMITE 2 parity and measurements** | 2, 3, 5 | Frame time vs the Rosetta stack; the cost of x64↔ARM64EC crossings; per-game CPU cost; a CPU-bound title; classify the x18 hits in Steam's arm64 `steamclient.dylib` (552, counted, not classified, in sub-project 3) |
 | 7 | **Direct3D 9** (optional, can start now on Rosetta) | — | Import dacevedo12/dxmt `v0.4-d3d9` (LGPL) into our fork; Wine's wined3d stays the fallback |
 | 8 | **32-bit games** | 3, 7 | Standard WoW64: i386 in `--enable-archs` and FEX's `libwow64fex.dll`. The entitlement makes the low 4 GB usable, so Madeira's guest-window redesign isn't needed. FEX's WoW64 JIT still allocates RWX, so its dual-view port belongs here |
 | 9 | **Per-game cutover** | 6 (+7 for D3D9, +8 for 32-bit) | A game moves when its own measurements clear the bar in §1's decisions; then delete GPTK, DXVK, the AVX switch and the Rosetta preflight |
@@ -252,7 +252,7 @@ Not ported, and why:
 
 Patch 4 turns the mode on once per thread, which behaves like Apple's legacy path for old SDKs. That breaks the header's rule against calling macOS code with the mode on. Today it does no harm: a disassembly scan of all 4,088 shared-cache images on macOS 27.0.1 (1,021 matches, all classified in `x18-boundaries.md`) found no code that depends on x18's value. The scan is `probes/x18-cache-scan.sh` (about 2.5 minutes), to be rerun on every macOS beta.
 
-Sub-project 3 replaces it with toggling at every transition. That is about 110–140 lines in `signal_arm64.c` (amended 2026-10-04: the earlier 80–100 left out passing the toggle's `brk #1` through Wine's trap handler, a "PE stack implies ON" check, and a test hook; see the sub-project 3 spec §8):
+Sub-project 3 replaces it with toggling at every transition. That is about 110–140 lines in `signal_arm64.c` (amended 2026-10-04: the earlier 80–100 left out passing the toggle's `brk #1` through Wine's trap handler, a "PE stack implies ON" check, and a test hook; see the sub-project 3 spec §9):
 - off on syscall and unix-call entry, and on again on return;
 - on before user-callback entry;
 - a wrapper on the nine signal handlers;
@@ -465,7 +465,7 @@ Recorded in `docs/testing/acceptance-arm64-wine.md`:
 
 ## 11. Risks
 
-- **x18 under the once-per-thread mode** breaks Apple's documented rule until sub-project 3 makes it strict. If Apple gives x18 a meaning for system code, it fails silently. `probes/x18-cache-scan.sh` is rerun on every macOS beta.
+- **x18 under the once-per-thread mode** breaks Apple's documented rule until sub-project 3 makes it strict. If Apple gives x18 a meaning for system code, it fails silently. `probes/x18-cache-scan.sh` is rerun on every macOS beta. Resolved 2026-10-04: sub-project 3's patches 0004 and 0017-0019 toggle at every transition (`docs/testing/acceptance-arm64-ship-base.md`).
 - **Software TSO** is FEX's only option, because the entitlement grants no hardware TSO. G2 measures correctness for scalar accesses only, since vector and memcpy TSO are off by default. G4 and sub-project 6 measure the cost.
 - **Games with their own JIT** (Mono, .NET, LuaJIT): x64 JIT code runs under FEX, which reads guest code as data, so its RWX pages don't need host execute (inferred; sub-project 3's `wxflip-x64` check proves it). Native ARM64/ARM64EC JITs (rare) go through patch 6's flip at about 8.5 µs per switch, and patch 6 loops forever on native code that stores into its own RWX page; both are accepted and documented (amended 2026-10-04).
 - **A Homebrew leak through configure:** Wine's configure reads whatever `.pc` files Homebrew has, so a library could be linked from `/opt/homebrew` without notice. Sub-project 3 configures against its own deps only and asserts every bundled dependency path.

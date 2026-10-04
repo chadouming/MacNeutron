@@ -139,7 +139,7 @@ SteamID or the persona name; run it by hand the same way. The x18 hits in Valve'
 | Path | What |
 |---|---|
 | `pins` | Wine tag and commit, FEX commit, and the source of FEX's macOS unixlib |
-| `deps.pins` | The FreeType and gnutls tarballs, and lsteamclient's repository and commit |
+| `deps.pins` | The four tarballs (FreeType, gnutls, nettle, GMP), and lsteamclient's repository and commit |
 | `patches/wine/`, `patches/fex/`, `patches/dxmt/`, `patches/lsteamclient/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
 | `build.sh`, `bundle.sh` | Build, then assemble and sign `wine.app`, and check the result |
 | `wine.entitlements`, `Info.plist` | The loader's entitlements and the bundle's identity |
@@ -179,6 +179,22 @@ Its source is never committed here, only the patches.
 
 Changing the pins or a patch file makes a tree with no work of its own (no change, commit, stash, other branch or
 worktree) start over from the series: it is deleted and fetched again.
+
+## Next Wine rebase
+
+Do these when the Wine pin next moves. The first two rewrite patch files and change the series hash, so the trees
+re-clone; that is why they wait for the rebase.
+- Fold patches 0017, 0018 and 0019 into 0004, so strict x18 is one patch again (0017 exists only because an in-place
+  rewrite of 0004 was refused during sub-project 3: `docs/testing/acceptance-arm64-ship-base.md`, "Pins and
+  patches"). Run `check.sh x18` on the result.
+- Add `--no-signature` to `export.sh`'s `git format-patch`. Every patch now ends with the exporting git's version
+  (`2.54.0 (Apple Git-157)`), so an export after a git upgrade rewrites every patch file.
+- Re-check the x18 transitions in `signal_arm64.c` against upstream's changes there (ship-base spec §13).
+- Re-check the toggle layout that patch 0019 checks (`brk #1` at `os_set_custom_x18_abi_enabled` + 0x58 and + 0x78)
+  on the macOS in use. When it doesn't match, the `ERR` line comes from `signal_init_process`, so it prints from every
+  Wine process; once per run would be enough.
+- Keep patch 0014 even if it looks unneeded: a missing dylib then falls back silently instead of crashing
+  (`docs/research/2026-10-04-ship-base/brief.md`).
 
 ## Licences
 

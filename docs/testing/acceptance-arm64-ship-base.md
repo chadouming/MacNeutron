@@ -58,7 +58,7 @@ deviations".
 
 | Date | Mac | macOS | Wine | FEX | DXMT | Deps | lsteamclient | Patches |
 |---|---|---|---|---|---|---|---|---|
-| 2026-10-04 | Mac17,8 (Apple M5 Pro, 48 GB) | 27.0.1 (26A434) | wine-11.19, `455e3509b98a6919fd4ad1def4803e08c41c03b2` | `4ed80fd07176dce976a7351f559d59a47b68cbae` | fork `1fba8d25b5e29ab49012d633676a6b0d4b3b96c5`, LLVM 15.0.7 | FreeType 2.14.3, gnutls 3.8.13, nettle 4.0, GMP 6.3.0 | Proton `db9e6ffbf24a95b104fb699dd62532c70a2f9a51` | 17 Wine, 5 FEX, 1 DXMT, 3 lsteamclient |
+| 2026-10-04 | Mac17,8 (Apple M5 Pro, 48 GB) | 27.0.1 (26A434) | wine-11.19, `455e3509b98a6919fd4ad1def4803e08c41c03b2` | `4ed80fd07176dce976a7351f559d59a47b68cbae` | fork `1fba8d25b5e29ab49012d633676a6b0d4b3b96c5`, LLVM 15.0.7 | FreeType 2.14.3, gnutls 3.8.13, nettle 4.0, GMP 6.3.0 | Proton `db9e6ffbf24a95b104fb699dd62532c70a2f9a51` | 17 Wine (19 after 0018 and 0019, below), 5 FEX, 1 DXMT, 3 lsteamclient |
 
 Repository at `29d9d4e` (the build inputs are the pins and patches in it; the bundle's `licenses/SOURCE` says
 `MACNEUTRON_COMMIT=29d9d4e909c89d8516aeee5ba2f6859b2c84a193`, without `+dirty`). **S1-S7 pass and M1-M2 are

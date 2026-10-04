@@ -3,9 +3,12 @@
 Proton for macOS: Windows games from your Steam library, launched by the native macOS Steam
 client and translated by Wine and DXMT (Apple's D3DMetal optional, per game).
 
-**Status:** sub-project 1 (the runtime) is in progress. Design: `docs/superpowers/specs/`.
+**Status:** games run on the Rosetta runtime (x86_64 Wine under Rosetta 2). A native arm64 runtime (`make wine-arm64`)
+is in development: sub-projects 1-3 of `docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md` §2 are
+done, and sub-project 5, the launcher's second runtime, is next. Design: `docs/superpowers/specs/`.
 
-**Requirements:** Apple Silicon, macOS 26 or later, Rosetta 2, Xcode 27 (Swift 6).
+**Requirements:** Apple Silicon, macOS 26 or later, Rosetta 2, Xcode 27 (Swift 6). The native arm64 runtime needs
+macOS 27 and the Developer ID setup in `wine-arm64/README.md`.
 
 ## Build and test
 
