@@ -17,7 +17,11 @@ reports each nextDrawable to the window's thread, which presents the
 surface: that shows the view again after a GDI flush hid it and keeps
 it on the client rect. The handler presents only a surface the window
 still lists, since a nextDrawable during window close can post a
-pointer to a freed surface.
+pointer to a freed surface. The layer reads the view tree on the main
+thread, not on DXMT's, since DestroyWindow's macdrv_dispose_view frees
+the content view there: read on DXMT's thread, a present_loop round
+that destroyed the window mid-present sent isKindOfClass: to the freed
+view (NSZombieEnabled, with nextDrawable slowed by 3 ms).
 
 Sources (LGPL), adapted to Wine 11.19's client surfaces:
 - CodeWeavers' dlls/winemac.drv/d3dmetal.c (Brendan Shanks,
@@ -30,15 +34,15 @@ Sources (LGPL), adapted to Wine 11.19's client surfaces:
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- dlls/winemac.drv/cocoa_window.m | 38 ++++++++++++-
+ dlls/winemac.drv/cocoa_window.m | 45 ++++++++++++++-
  dlls/winemac.drv/event.c        |  5 ++
  dlls/winemac.drv/macdrv.h       |  2 +
  dlls/winemac.drv/macdrv_cocoa.h |  5 ++
  dlls/winemac.drv/window.c       | 98 +++++++++++++++++++++++++++++++++
- 5 files changed, 147 insertions(+), 1 deletion(-)
+ 5 files changed, 154 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
-index 94fc3e7..447c142 100644
+index 94fc3e7..3cad3e1 100644
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
 @@ -243,6 +243,8 @@ @interface WineContentView : WineBaseView <NSTextInputClient, NSViewLayerContent
@@ -50,14 +54,18 @@ index 94fc3e7..447c142 100644
  }
  
  @property (readonly, nonatomic) BOOL everHadGLContext;
-@@ -821,6 +823,35 @@ - (NSInteger) windowLevel
+@@ -821,6 +823,42 @@ - (NSInteger) windowLevel
  @end
  
  
 +/* DXMT presents straight to the layer, so nothing tells win32u about it. Report each
 + * nextDrawable on a macdrv_functions view to the window's thread, which runs
 + * client_surface_present(): that un-hides the view after a GDI flush hid it and
-+ * re-applies the window's client rect, since win32u never updates this surface itself. */
++ * re-applies the window's client rect, since win32u never updates this surface itself.
++ * nextDrawable runs on DXMT's thread, so the view tree is read on the main thread, the only
++ * one that changes it (macdrv_dispose_view frees the content view there, and AppKit
++ * deallocates windows there); the block holds the metal view, which DXMT keeps until
++ * macdrv_view_release_metal_view. */
 +@interface WineMetalLayer : CAMetalLayer
 +@end
 +
@@ -66,17 +74,20 @@ index 94fc3e7..447c142 100644
 +    - (id<CAMetalDrawable>) nextDrawable
 +    {
 +        NSView *view = (NSView*)self.delegate;
-+        WineContentView *content = (WineContentView*)view.superview;
 +
-+        if ([content isKindOfClass:[WineContentView class]] && content->client_surface &&
-+            [view.window isKindOfClass:[WineWindow class]])
-+        {
-+            WineWindow *window = (WineWindow*)view.window;
-+            macdrv_event *event = macdrv_create_event(CLIENT_SURFACE_PRESENTED, window);
-+            event->client_surface_presented.client_surface = content->client_surface;
-+            [window.queue postEvent:event];
-+            macdrv_release_event(event);
-+        }
++        OnMainThreadAsync(^{
++            WineContentView *content = (WineContentView*)view.superview;
++
++            if ([content isKindOfClass:[WineContentView class]] && content->client_surface &&
++                [view.window isKindOfClass:[WineWindow class]])
++            {
++                WineWindow *window = (WineWindow*)view.window;
++                macdrv_event *event = macdrv_create_event(CLIENT_SURFACE_PRESENTED, window);
++                event->client_surface_presented.client_surface = content->client_surface;
++                [window.queue postEvent:event];
++                macdrv_release_event(event);
++            }
++        });
 +        return [super nextDrawable];
 +    }
 +
@@ -86,7 +97,7 @@ index 94fc3e7..447c142 100644
  @implementation WineMetalView
  
      - (id) initWithFrame:(NSRect)frame device:(id<MTLDevice>)device
-@@ -849,7 +880,7 @@ - (void) setRetinaMode:(BOOL)mode
+@@ -849,7 +887,7 @@ - (void) setRetinaMode:(BOOL)mode
  
      - (CALayer*) makeBackingLayer
      {
@@ -95,7 +106,7 @@ index 94fc3e7..447c142 100644
          layer.device = _device;
          layer.framebufferOnly = YES;
          layer.magnificationFilter = kCAFilterNearest;
-@@ -3635,6 +3666,11 @@ void macdrv_release_metal_device(id<MTLDevice> device)
+@@ -3635,6 +3673,11 @@ void macdrv_release_metal_device(id<MTLDevice> device)
      return layer;
  }
  

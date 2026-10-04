@@ -233,11 +233,37 @@ parity is sub-project 6's (SMITE 2).
 - **The runtime still has no FreeType.** Every process prints Wine's FreeType warning and GDI text is missing until
   sub-project 3 bundles FreeType. Direct3D is unaffected: every check above passed with it.
 
+### The view race at window close (Wine patch 13, after the acceptance run)
+
+Spec §5's last open race: `nextDrawable` read the content view, its client surface and its window on DXMT's thread,
+while `macdrv_dispose_view` frees that view on the main thread at `DestroyWindow`. Runs of
+`present_loop 640 360 640 360 60 0 cycles=N` (ARM64EC, in the check's prefix):
+
+| Build | Environment, rounds | Result |
+|---|---|---|
+| Patch 13 as accepted | `NSZombieEnabled=YES MallocScribble=1`, 200 | `cycles 200 ok`: the race window is too narrow to hit |
+| Same, `nextDrawable` slowed by 3 ms between reading the superview and using it | `NSZombieEnabled=YES`, 20 | round 19 aborts: `-[WineContentView isKindOfClass:]: message sent to deallocated instance`, the view `macdrv_dispose_view` had just freed |
+| Fixed (the view tree read on the main thread), the 3 ms in the main-thread block | `NSZombieEnabled=YES`, 20 | `cycles 20 ok` |
+| Fixed | `NSZombieEnabled=YES MallocScribble=1`, 200 | `cycles 200 ok` |
+
+The instrumented builds also traced every `WineWindow` dealloc: all ran on the main thread, hidden windows whose last
+release came from the window thread included, so no window is freed under a main-thread reader and `DestroyWindow`'s
+order needed no change. Seen in passing, not pursued: a visible window outlives `DestroyWindow` (retain count 4-5 at
+close with no frame presented), and its count grows by about 3 per presented frame, the same with the present report
+disabled, so not through patch 13's report; what holds those references was not established.
+
+`sh wine-arm64/check.sh dxmt-present dxmt-arm64ec dxmt-x64` then passed on the fixed build, `PASS orphans` last, in
+6 min 24 s: `dxmt-present`'s shares as before (`present_loop` green 71 white 24, `d3d12_clear` green 95 white 0, both
+lanes) and `cycles 20 ok`; 162 `ok   ` checks and 0 FAIL in each lane, as on the accepted build, the FSR 3 check
+included (logs `build/wine-arm64-race-fix-*.log`). D6's lines in the same logs read 4.098 / 2.387 ms (ARM64EC lane,
+arm64 / Rosetta) and 4.349 / 4.494 ms (x64 lane): not display-paced this time, unlike §4's, and Rosetta's own two
+readings differ by 2.1 ms, so they don't measure the cost of the main-thread block each frame now queues.
+
 ### Patches added by this sub-project
 
 - DXMT 0001 `d3d12: Read the ARM64 counter on arm64 builds.`: `d3d12_stats.cpp` reads `cntvct_el0` on ARM64 instead of
   `__rdtsc`, the only file that didn't compile for ARM64X.
 - Wine 0013 `winemac.drv: Export macdrv_functions so DXMT can present.`: the 10-slot table DXMT looks up, a client
-  surface per window, and the Metal layer's present report (from CodeWeavers' `d3dmetal.c` and `d3dmetal_objc.m`, via
-  dappermint's port).
+  surface per window, and the Metal layer's present report, which reads the view tree on the main thread (from
+  CodeWeavers' `d3dmetal.c` and `d3dmetal_objc.m`, via dappermint's port).
 - Wine 0014 `win32u: Don't read unset text metrics when no font can be measured.`: the off-screen windows above.
