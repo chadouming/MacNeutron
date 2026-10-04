@@ -47,9 +47,9 @@ series_of() {  # series_of <file>...
 # lsteamclient's series (ship-base spec §7): deps.pins' LSTEAMCLIENT_ lines alone (a tarball pin is no input of that
 # tree) and its patches.
 lsteamclient_series() {  # lsteamclient_series <deps.pins> <patch>...
-  pins=$1; shift
-  for f in "$pins" "$@"; do [ -f "$f" ] || die "no such build input: $f"; done
-  { LC_ALL=C /usr/bin/grep -E '^LSTEAMCLIENT_' "$pins"; cat "$@"; } | shasum -a 256 | cut -d ' ' -f 1
+  _lsc_pins=$1; shift
+  for _lsc_f in "$_lsc_pins" "$@"; do [ -f "$_lsc_f" ] || die "no such build input: $_lsc_f"; done
+  { LC_ALL=C /usr/bin/grep -E '^LSTEAMCLIENT_' "$_lsc_pins"; cat "$@"; } | shasum -a 256 | cut -d ' ' -f 1
 }
 
 # The App ID the entitled loader is signed for; a provisioning profile has to be for it (spec §7.2).

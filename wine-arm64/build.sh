@@ -99,12 +99,12 @@ fetch_lsteamclient() {
   git -C "$LSC.tmp" sparse-checkout set --no-cone '/lsteamclient/' '!/lsteamclient/steamworks_sdk_*/' \
     '!/lsteamclient/gen_wrapper.py' || die "can't set lsteamclient's sparse checkout"
   git -C "$LSC.tmp" checkout -q -b macneutron FETCH_HEAD || die "can't check out lsteamclient/ from $LSTEAMCLIENT_REPO"
-  patch_tree "$LSC.tmp" lsteamclient "$LSC_PATCHES" "$lsteamclient_series" "$LSTEAMCLIENT_COMMIT"
+  patch_tree "$LSC.tmp" lsteamclient "$LSC_PATCHES" "$lsc_series" "$LSTEAMCLIENT_COMMIT"
 }
 wine_series=$(series_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch)
 fex_series=$(series_of "$ROOT/wine-arm64/pins" "$FEX_PATCHES"/*.patch)
 dxmt_series=$(series_of "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch)
-lsteamclient_series=$(lsteamclient_series "$ROOT/wine-arm64/deps.pins" "$LSC_PATCHES"/*.patch)
+lsc_series=$(lsteamclient_series "$ROOT/wine-arm64/deps.pins" "$LSC_PATCHES"/*.patch)
 # Every build input, once: the up-to-date check and the stamp written at the end must agree.
 stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" \
   "$ROOT/wine-arm64/lib.sh" "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" \
@@ -116,7 +116,7 @@ mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
 dxmt_mode=$(build_mode "$D" "$SRC/dxmt.applied" "$SRC/dxmt.series" "$dxmt_series")
-lsteamclient_mode=$(build_mode "$LSC" "$SRC/lsteamclient.applied" "$SRC/lsteamclient.series" "$lsteamclient_series")
+lsteamclient_mode=$(build_mode "$LSC" "$SRC/lsteamclient.applied" "$SRC/lsteamclient.series" "$lsc_series")
 # prepare <repo> <mode>: a tree that isn't there yet, or was patched with another series, is fetched and patched.
 prepare() {
   case "$2" in
@@ -331,7 +331,7 @@ mac=$(git -C "$ROOT" rev-parse HEAD)
   echo "LLVM_TAG=$LLVM_TAG"
   echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
   echo "LSTEAMCLIENT_COMMIT=$LSTEAMCLIENT_COMMIT"
-  echo "LSTEAMCLIENT_SERIES=$(series "$lsteamclient_mode" "$lsteamclient_series")"
+  echo "LSTEAMCLIENT_SERIES=$(series "$lsteamclient_mode" "$lsc_series")"
   deps_pins  # the tarballs' <NAME>_URL and <NAME>_SHA256
 } > "$SRC/SOURCE"
 echo "wine-arm64: bundling (log: $OUT/install.log)" >&2

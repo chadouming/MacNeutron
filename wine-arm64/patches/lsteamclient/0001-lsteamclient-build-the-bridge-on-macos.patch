@@ -12,8 +12,6 @@ leaves keyboard origins in steam input bindings blank and touches
 nothing else.
 
 From dappermint/winecx 8d188ec0db
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  lsteamclient/Makefile.in                 |  2 +-
  lsteamclient/unix_steam_input_manual.cpp | 13 +++++++++++++

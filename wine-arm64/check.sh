@@ -325,11 +325,13 @@ fonts_tls_cmd() {
 # steamprobe.exe under FEX with SMITE 2's steam_api64.dll, against Mac Steam's steamclient.dylib (or the one in
 # STEAM_COMPAT_CLIENT_INSTALL_PATH, passed through). PROBE_REDACT=1: the log never holds the SteamID or persona name.
 # The crash dialog is off, so a crash ends the run. The x18 hits in Valve's arm64 code (data after ret today) are
-# reported, not gated.
+# reported, not gated. The probe's redaction self-test runs first.
 SMITE2_API="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Engine/Binaries/ThirdParty"
 SMITE2_API="$SMITE2_API/Steamworks/Steamv157/Win64/steam_api64.dll"
 MAC_STEAM="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS"
 steam_bridge_cmd() {
+  sh "$ROOT/bridge/probe.sh" --redact-self-test \
+    || { echo "FAIL steam-bridge: the probe's redaction self-test failed"; return 1; }
   client="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$MAC_STEAM}"
   [ -f "$client/steamclient.dylib" ] || { echo "Steam's steamclient.dylib not found at $client/steamclient.dylib"; return 1; }
   [ -f "$SMITE2_API" ] || { echo "SMITE 2 isn't installed"; return 1; }
@@ -340,11 +342,12 @@ steam_bridge_cmd() {
   [ "$rc" = 0 ] || { echo "FAIL steam-bridge: bridge/check.sh: $(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' \
     || echo "$out" | tail -n 1)"; return 1; }
   out=$(PROBE_REDACT=1 STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" MACNEUTRON_ARM64_APP="$TOOL" \
-    MACNEUTRON_ARM64_PREFIX="$PFX" sh "$ROOT/bridge/probe.sh" "$SMITE2_API") && rc=0 || rc=$?
+    MACNEUTRON_ARM64_PREFIX="$PFX" sh "$ROOT/bridge/probe.sh" "$SMITE2_API" 2>&1) && rc=0 || rc=$?
   echo "$out"
   echo "info steam-bridge: probe exit $rc"
   has() { echo "$out" | LC_ALL=C /usr/bin/grep -qx "$1"; }
-  ! has 'init: FAIL' || { echo "FAIL steam-bridge: SteamAPI_Init failed: is Steam running and logged in?"; return 1; }
+  m=$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^init message: ' || true)
+  ! has 'init: FAIL' || { echo "FAIL steam-bridge: SteamAPI_Init failed: is Steam running and logged in?${m:+ ($m)}"; return 1; }
   for want in 'init: ok' 'steamid ok' 'persona ok' 'auth ticket: callback, result 1' 'fault: caught'; do
     has "$want" || { echo "FAIL steam-bridge: no '$want' line"; return 1; }
   done

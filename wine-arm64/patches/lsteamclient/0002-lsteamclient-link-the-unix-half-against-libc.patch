@@ -4,8 +4,6 @@ Date: Sun, 23 Aug 2026 04:00:35 +0400
 Subject: [PATCH] lsteamclient: link the unix half against libc++
 
 From dappermint/winecx dada36ebab
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  lsteamclient/Makefile.in | 1 +
  1 file changed, 1 insertion(+)

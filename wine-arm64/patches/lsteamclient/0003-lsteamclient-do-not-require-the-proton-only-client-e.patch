@@ -15,8 +15,6 @@ still asks and CreateInterface reports the real answer, and make the
 notify a no-op.
 
 From dappermint/winecx 6cfbd169a5
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  lsteamclient/unixlib.cpp | 22 ++++++++++++++++++----
  1 file changed, 18 insertions(+), 4 deletions(-)
