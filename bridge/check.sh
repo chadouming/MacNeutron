@@ -1,13 +1,25 @@
 #!/bin/sh
 # Runs steam.exe under the installed MacNeutron runtime: real Wine, no Steam needed (bridge spec §9).
 # Needs `make bridge` and an installed runtime; MACNEUTRON_TOOL overrides the default tool folder.
+# arm64 mode (ship-base spec §7), when MACNEUTRON_ARM64_APP names a wine.app: the aarch64 steam.exe and helper on that
+# runtime, in the booted prefix MACNEUTRON_ARM64_PREFIX (wine-arm64/check.sh's). BRIDGE_CHECK_WORK replaces the folder
+# the helper's files go in (and, on Rosetta, the prefix).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-B="$ROOT/build/bridge"
-TOOL="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
-WINE="$TOOL/Libraries/Wine/bin/wine"
-WORK="${TMPDIR:-/tmp}/macneutron bridge ü"   # a space and a non-ASCII letter on purpose
-export WINEPREFIX="$WORK/pfx" WINEDEBUG=-all WINEMSYNC=1
+WORK="${BRIDGE_CHECK_WORK:-${TMPDIR:-/tmp}/macneutron bridge ü}"   # a space and a non-ASCII letter on purpose
+if [ -n "${MACNEUTRON_ARM64_APP:-}" ]; then
+  B="$ROOT/build/bridge/arm64"
+  TOOL="$MACNEUTRON_ARM64_APP"
+  WINE="$TOOL/Contents/MacOS/wine"
+  export WINEPREFIX="${MACNEUTRON_ARM64_PREFIX:?arm64 mode needs MACNEUTRON_ARM64_PREFIX}"
+  [ -d "$WINEPREFIX" ] || { echo "check: no prefix at $WINEPREFIX" >&2; exit 1; }
+else
+  B="$ROOT/build/bridge"
+  TOOL="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
+  WINE="$TOOL/Libraries/Wine/bin/wine"
+  export WINEPREFIX="$WORK/pfx"
+fi
+export WINEDEBUG=-all WINEMSYNC=1
 
 [ -x "$WINE" ] || { echo "check: no runtime at $TOOL" >&2; exit 1; }
 mkdir -p "$WORK"   # Wine creates only the prefix folder itself

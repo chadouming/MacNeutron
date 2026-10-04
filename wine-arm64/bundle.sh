@@ -91,6 +91,13 @@ put "$DS/gnutls" COPYING.LESSERv2 "$L/gnutls/"
 for f in COPYING.LESSERv3 COPYINGv3; do
   put "$DS/nettle" "$f" "$L/gnutls/"; put "$DS/nettle" "$f" "$L/nettle/"; put "$DS/gmp" "$f" "$L/gmp/"
 done
+# lsteamclient (ship-base spec §7): Valve's Steamworks SDK licence, and a note for the one file under another.
+mkdir -p "$L/lsteamclient"
+put "$S/lsteamclient/lsteamclient" LICENSE "$L/lsteamclient/"
+cat > "$L/lsteamclient/NOTE" << 'EOF'
+lsteamclient is under Valve's Steamworks SDK licence (LICENSE, beside this note), except its cxx.h, which is
+LGPL-2.1-or-later: copyright 2012 Piotr Caban for CodeWeavers, from Wine (Wine's licence texts are in ../wine/).
+EOF
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 
@@ -185,6 +192,23 @@ ver=$(cat "$R/DXMT/version")
 case $ver in "$DXMT_COMMIT"+?*) ;; *) die "DXMT/version is '$ver', not $DXMT_COMMIT+<series or dev>" ;; esac
 git -C "$DXMT_TREE" merge-base --is-ancestor "$DXMT_COMMIT" HEAD \
   || die "$DXMT_COMMIT (dxmt/pins) is not an ancestor of HEAD in $DXMT_TREE"
+# The Steam bridge (ship-base spec §7): an ARM64X Wine builtin (llvm-readobj prints a CHPEMetadata block only for a
+# hybrid image) and an arm64 unix side that needs nothing from ntdll.so it doesn't export; and a loader that may load
+# Valve's steamclient.dylib, which Valve signs with its own team.
+ldll="$R/lib/wine/aarch64-windows/lsteamclient.dll" lso="$U/lsteamclient.so"
+for f in "$ldll" "$lso"; do [ -f "$f" ] || die "no ${f#"$APP"/}"; done
+"$(sh "$ROOT/dxmt/toolchain.sh")/llvm-readobj" --coff-load-config "$ldll" | LC_ALL=C /usr/bin/grep -q '^CHPEMetadata \[' \
+  || die "lsteamclient.dll has no CHPE metadata: it isn't ARM64X"
+builtin "$ldll" || die "lsteamclient.dll lacks Wine's builtin marker"
+a=$(lipo -archs "$lso")
+[ "$a" = arm64 ] || die "lsteamclient.so is ${a:-unreadable}, not arm64"
+nm -gU "$lso" | LC_ALL=C /usr/bin/grep -q ' ___wine_unix_call_funcs$' \
+  || die "lsteamclient.so doesn't export __wine_unix_call_funcs"
+out=$({ nm -gU "$U/ntdll.so" | awk '{ print "x", $3 }'; nm -u "$lso" | LC_ALL=C /usr/bin/grep -E '^(_Nt|___wine_)' \
+  | sed 's/^/w /'; } | awk '$1 == "x" { e[$2] = 1; next } !e[$2] { print substr($2, 2) }')
+[ -z "$out" ] || die "lsteamclient.so needs $(echo "$out" | tr '\n' ' ')from ntdll.so, which doesn't export it"
+codesign -d --entitlements - "$LOADER" 2>&1 | LC_ALL=C /usr/bin/grep -q com.apple.security.cs.disable-library-validation \
+  || die "the loader lacks com.apple.security.cs.disable-library-validation (wine.entitlements)"
 others=$(macho | grep '/wine$' | grep -vxF "$LOADER" || true)
 [ -z "$others" ] || die "another Mach-O named wine: $others"
 

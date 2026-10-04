@@ -57,7 +57,7 @@ check() {  # check <wine.app> <build dir>
     for n in FREETYPE GNUTLS NETTLE GMP; do key "${n}_URL"; key "${n}_SHA256"; done
   fi
   if has lsteamclient.so; then
-    [ -s "$L/lsteamclient/LICENSE" ] || miss lsteamclient/LICENSE
+    for f in LICENSE NOTE; do [ -s "$L/lsteamclient/$f" ] || miss "lsteamclient/$f"; done
     key LSTEAMCLIENT_COMMIT; key LSTEAMCLIENT_SERIES
   fi
 

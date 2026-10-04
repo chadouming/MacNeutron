@@ -63,4 +63,13 @@ GMP 6.3.0 (linked statically into libgnutls.30.dylib)
   Source: https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz (SHA-256 GMP_SHA256), unmodified, pinned and built as FreeType
   is.
 
+lsteamclient (lsteamclient.dll and lsteamclient.so: the Steam bridge, from Windows games' Steam API to Mac Steam's
+steamclient.dylib)
+  Licence: Valve's Steamworks SDK licence, lsteamclient/LICENSE (lsteamclient is Steamworks-SDK-derived); its cxx.h is
+  LGPL-2.1-or-later (CodeWeavers, from Wine), lsteamclient/NOTE. Whether a release bundle may include it is not
+  decided yet (ship-base spec §1): this bundle is a local build.
+  Source: https://github.com/ValveSoftware/Proton.git, its lsteamclient/ folder at LSTEAMCLIENT_COMMIT (pinned in
+  wine-arm64/deps.pins), with the patches in the repository's wine-arm64/patches/lsteamclient (dappermint/winecx's
+  three Mac fixes).
+
 FreeType: Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.

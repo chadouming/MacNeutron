@@ -5,6 +5,7 @@ APP = build/MacNeutron.app
 MINGW_BIN = $(shell sh dxmt/toolchain.sh)
 MINGW = $(MINGW_BIN)/x86_64-w64-mingw32-clang -O2 -static -s
 MINGWXX = $(MINGW_BIN)/x86_64-w64-mingw32-clang++ -O2 -static -s
+MINGW_A64 = $(MINGW_BIN)/aarch64-w64-mingw32-clang -O2 -static -s
 BRIDGE = build/bridge
 PRESENTER = build/presenter
 
@@ -18,12 +19,16 @@ test:
 smoke: build
 	sh Tests/Smoke/smoke.sh
 
-# Windows helpers for the Steam bridge (docs/superpowers/specs/2026-09-28-macneutron-steam-bridge-design.md).
+# Windows helpers for the Steam bridge (docs/superpowers/specs/2026-09-28-macneutron-steam-bridge-design.md), and
+# steam.exe and its test helper for the arm64 runtime in $(BRIDGE)/arm64 (ship-base spec §7: neither steam.exe runs
+# on the other runtime). steamprobe.exe stays x64: it runs under FEX there.
 bridge:
-	mkdir -p $(BRIDGE)/tests
+	mkdir -p $(BRIDGE)/tests $(BRIDGE)/arm64/tests
 	$(MINGW) -o $(BRIDGE)/steam.exe bridge/steam.c -ladvapi32
-	$(MINGW) -o $(BRIDGE)/steamprobe.exe bridge/probe.c
+	$(MINGW) -fms-extensions -o $(BRIDGE)/steamprobe.exe bridge/probe.c
 	$(MINGW) -o $(BRIDGE)/tests/helper.exe bridge/tests/helper.c -ladvapi32 -lshell32
+	$(MINGW_A64) -o $(BRIDGE)/arm64/steam.exe bridge/steam.c -ladvapi32
+	$(MINGW_A64) -o $(BRIDGE)/arm64/tests/helper.exe bridge/tests/helper.c -ladvapi32 -lshell32
 
 # steam.exe under the installed runtime (real Wine, no Steam).
 bridge-check: bridge

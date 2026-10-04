@@ -4,7 +4,8 @@
 # dxmt steps `make dxmt dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench also needs MacNeutron's runtime-v4.7.3
 # installed (MACNEUTRON_TOOL names another tool folder), and the dxmt-* steps, for their D3DMetal reference, the same
 # with GPTK imported and its tarball cached. dxmt-x64's FSR 3 check needs SMITE 2 installed (Steam): its
-# amd_fidelityfx_dx12.dll, read from the game's install, never copied.
+# amd_fidelityfx_dx12.dll, read from the game's install, never copied. steam-bridge needs `make bridge`, Steam running
+# and logged in, and SMITE 2 installed (its steam_api64.dll, read in place).
 # Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
 # Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
 # Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
@@ -36,11 +37,11 @@ export WINEMSYNC=1
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
 STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync"
 STEPS="$STEPS g5-jit"
-STEPS="$STEPS fonts-tls dxmt dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
+STEPS="$STEPS fonts-tls steam-bridge dxmt dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
 NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync g5-jit fonts-tls dxmt"
-NEEDS_PREFIX="$NEEDS_PREFIX $NEEDS_DXMT g4-bench"
-NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync g5-jit $NEEDS_DXMT g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync g5-jit fonts-tls steam-bridge"
+NEEDS_PREFIX="$NEEDS_PREFIX dxmt $NEEDS_DXMT g4-bench"
+NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync g5-jit steam-bridge $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
@@ -319,6 +320,44 @@ fonts_tls_cmd() {
   return $rc
 }
 
+# Gate S7 (ship-base spec §7): the Steam bridge on this runtime. bridge/check.sh in arm64 mode (the aarch64 steam.exe,
+# no Steam needed), then bridge/probe.sh in arm64 mode: the bundle's lsteamclient.dll as steamclient64.dll, the x64
+# steamprobe.exe under FEX with SMITE 2's steam_api64.dll, against Mac Steam's steamclient.dylib (or the one in
+# STEAM_COMPAT_CLIENT_INSTALL_PATH, passed through). PROBE_REDACT=1: the log never holds the SteamID or persona name.
+# The crash dialog is off, so a crash ends the run. The x18 hits in Valve's arm64 code (data after ret today) are
+# reported, not gated.
+SMITE2_API="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Engine/Binaries/ThirdParty"
+SMITE2_API="$SMITE2_API/Steamworks/Steamv157/Win64/steam_api64.dll"
+MAC_STEAM="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS"
+steam_bridge_cmd() {
+  client="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$MAC_STEAM}"
+  [ -f "$client/steamclient.dylib" ] || { echo "Steam's steamclient.dylib not found at $client/steamclient.dylib"; return 1; }
+  [ -f "$SMITE2_API" ] || { echo "SMITE 2 isn't installed"; return 1; }
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || return 1
+  out=$(BRIDGE_CHECK_WORK="$WORK/steam-bridge ü" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_PREFIX="$PFX" \
+    sh "$ROOT/bridge/check.sh" 2>&1) && rc=0 || rc=$?
+  echo "$out"
+  [ "$rc" = 0 ] || { echo "FAIL steam-bridge: bridge/check.sh: $(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' \
+    || echo "$out" | tail -n 1)"; return 1; }
+  out=$(PROBE_REDACT=1 STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" MACNEUTRON_ARM64_APP="$TOOL" \
+    MACNEUTRON_ARM64_PREFIX="$PFX" sh "$ROOT/bridge/probe.sh" "$SMITE2_API") && rc=0 || rc=$?
+  echo "$out"
+  echo "info steam-bridge: probe exit $rc"
+  has() { echo "$out" | LC_ALL=C /usr/bin/grep -qx "$1"; }
+  ! has 'init: FAIL' || { echo "FAIL steam-bridge: SteamAPI_Init failed: is Steam running and logged in?"; return 1; }
+  for want in 'init: ok' 'steamid ok' 'persona ok' 'auth ticket: callback, result 1' 'fault: caught'; do
+    has "$want" || { echo "FAIL steam-bridge: no '$want' line"; return 1; }
+  done
+  n=$(echo "$out" | sed -n 's/^auth ticket: handle [0-9]*, \([0-9]*\) bytes$/\1/p' | head -n 1)
+  [ "${n:-0}" -gt 0 ] || { echo "FAIL steam-bridge: auth ticket of ${n:-no} bytes"; return 1; }
+  echo "info steam-bridge: steamid ok, ticket $n bytes"
+  if h=$(sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$client/steamclient.dylib"); then
+    echo "info steam x18: $(echo "$h" | LC_ALL=C /usr/bin/grep -c . || true) hits"
+  else
+    echo "info steam x18: the scan failed"
+  fi
+}
+
 # Gate G5 (spec §8): FEX's code memory never flips W^X (patch 12's trace) once a program runs, over one full x64-bench
 # run. It calls OutputDebugStringA("jit: start") (kernel32 WARNs it on debugstr) before its rows; the flips counted
 # are those after it, and the run has to print every row. A log with no marker fails: its count would mean nothing.
@@ -493,6 +532,7 @@ run_step() {
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     fonts-tls) step fonts-tls 60 fonts_tls_cmd ;;
+    steam-bridge) step steam-bridge 300 steam_bridge_cmd; grep '^info ' "$WORK/steam-bridge.log" ;;
     dxmt) step dxmt 120 dxmt_cmd ;;
     dxmt-present) step dxmt-present 600 dxmt_present_cmd; grep '^info ' "$WORK/dxmt-present.log" ;;
     dxmt-arm64ec) step dxmt-arm64ec 3600 dxmt_lane_cmd arm64ec ARM64EC "$B/dxmt-tests-arm64ec" \

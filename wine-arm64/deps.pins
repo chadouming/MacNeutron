@@ -1,6 +1,6 @@
-# Third-party sources wine.app is built from beside Wine, FEX and DXMT (ship-base spec §5), sourced by
-# wine-arm64/build.sh. In the build stamp, not in any tree's patch series: editing this file never re-clones Wine or
-# FEX.
+# Third-party sources wine.app is built from beside Wine, FEX and DXMT (ship-base spec §5, §7), sourced by
+# wine-arm64/build.sh and export.sh. In the build stamp, not in the Wine, FEX or DXMT patch series: editing this file
+# never re-clones Wine or FEX.
 # The tarballs, checked by SHA-256 (the values match Homebrew's API cache and a fetch from these hosts, 2026-10-04):
 # FreeType (libfreetype.6.dylib) and gnutls, with nettle and gmp linked into it (libgnutls.30.dylib).
 FREETYPE_URL=https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz
@@ -11,3 +11,8 @@ NETTLE_URL=https://ftp.gnu.org/gnu/nettle/nettle-4.0.tar.gz
 NETTLE_SHA256=3addbc00da01846b232fb3bc453538ea5468da43033f21bb345cb1e9073f5094
 GMP_URL=https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
 GMP_SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
+# lsteamclient, the Steam bridge (spec §7): Proton's lsteamclient/ folder at this commit, a sparse, blob-filtered
+# checkout without the Steamworks SDK folders, with wine-arm64/patches/lsteamclient on top. Its series is these
+# LSTEAMCLIENT_ lines and those patches: a tarball pin never re-fetches it.
+LSTEAMCLIENT_REPO=https://github.com/ValveSoftware/Proton.git
+LSTEAMCLIENT_COMMIT=db9e6ffbf24a95b104fb699dd62532c70a2f9a51

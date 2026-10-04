@@ -1,16 +1,25 @@
 /* steamprobe.exe: checks the Steam bridge end to end through a game's own steam_api64.dll.
  * Run it with bridge/probe.sh, which prepares a prefix like the launcher does (SteamAppId=480).
- *   steamprobe.exe <Windows path of steam_api64.dll>
+ *   steamprobe.exe <Windows path of steam_api64.dll> [fault]
  * Uses only the DLL's flat C exports, so no Steamworks headers are needed.
- * Exits 0 only when init, the SteamID, the persona name and an auth-ticket callback all work. */
+ * Exits 0 only when init, the SteamID, the persona name and an auth-ticket callback all work. With "fault", it then
+ * raises an access violation and catches it with SEH (ship-base spec §7): Steam's own crash handler, set up by
+ * SteamAPI_Init, must leave the process's faults to Wine. Build with -fms-extensions (__try). */
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef struct { int32_t user; int32_t id; uint8_t *param; int32_t size; } CallbackMsg;  /* CallbackMsg_t */
 enum { GET_AUTH_SESSION_TICKET_RESPONSE = 163 };                                          /* k_iSteamUserCallbacks + 63 */
 
 static HMODULE api;
+
+/* NULL, read at run time: the compiler can't turn the store below into a trap of its own. */
+static volatile int *volatile nowhere;
+
+/* Clang's __try only covers faults at call sites, so the store sits in its own function. */
+static __declspec(noinline) void store_through_null(void) { *nowhere = 1; }
 
 static void *find(const char *name) { return (void *)GetProcAddress(api, name); }
 
@@ -107,5 +116,20 @@ int main(int argc, char **argv)
         Sleep(100);
     }
     if (!got_ticket) printf("auth ticket: no callback within 10 s\n");
+
+    if (argc > 2 && !strcmp(argv[2], "fault"))
+    {
+        fflush(stdout);  /* the rows above survive if the fault isn't caught */
+        __try
+        {
+            store_through_null();
+            printf("fault: none raised\n");
+            return 1;
+        }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            printf("fault: caught\n");
+        }
+    }
     return steam_id && name && *name && got_ticket ? 0 : 1;
 }

@@ -69,12 +69,29 @@ what it needs: runtime-v4.7.3 installed with its tarball cached in `~/Library/Ca
 from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`) don't
 run.
 
+### The Steam bridge
+
+`wine.app` carries the Steam bridge on arm64 (ship-base spec §7): Proton's `lsteamclient` (pinned in `deps.pins`, with
+`patches/lsteamclient/`), built by Wine's own build as an ARM64X `lsteamclient.dll` and an arm64 `lsteamclient.so`
+that loads the arm64 slice of Mac Steam's universal `steamclient.dylib`. `make bridge` also builds an aarch64
+`steam.exe` and its test helper into `build/bridge/arm64/` (one `steam.exe` per runtime, as spec §7 has it). Copying
+the DLL into game prefixes is the launcher's, later (sub-project 5).
+
+The `steam-bridge` step (before `dxmt`) runs `bridge/check.sh` in arm64 mode (no Steam needed), then
+`bridge/probe.sh` in arm64 mode: the x64 `steamprobe.exe` under FEX loads SMITE 2's `steam_api64.dll` in place, with
+the bundle's `lsteamclient.dll` as `steamclient64.dll`. It needs **Steam running and logged in** and **SMITE 2
+installed** in Steam's default library; without either it fails naming what is missing. It passes on `init: ok`,
+`steamid ok`, `persona ok`, an auth ticket of more than 0 bytes with its callback, and `fault: caught` (an access
+violation after `SteamAPI_Init` still reaches SEH). The probe runs with `PROBE_REDACT=1`, so the log never holds the
+SteamID or the persona name; run it by hand the same way. The x18 hits in Valve's arm64 code are reported, not gated.
+
 ## Layout
 
 | Path | What |
 |---|---|
 | `pins` | Wine tag and commit, FEX commit, and the source of FEX's macOS unixlib |
-| `patches/wine/`, `patches/fex/`, `patches/dxmt/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
+| `deps.pins` | The FreeType and gnutls tarballs, and lsteamclient's repository and commit |
+| `patches/wine/`, `patches/fex/`, `patches/dxmt/`, `patches/lsteamclient/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
 | `build.sh`, `bundle.sh` | Build, then assemble and sign `wine.app`, and check the result |
 | `wine.entitlements`, `Info.plist` | The loader's entitlements and the bundle's identity |
 | `check.sh`, `tests/`, `tools/` | The checks, the test programs (`x64-*`, `arm64*`), and the helpers behind G3, G4 and D2 (`winshot`) |
@@ -103,6 +120,12 @@ this Wine's build tree, with an arm64 LLVM 15 built once into `build/wine-arm64-
 writes the commits to `patches/dxmt/`. A DXMT patch's message names the arm64 failure it fixes. Folding the patches
 into the fork (and moving the pin) is a separate maintainer step.
 
+lsteamclient works the same way. Its tree, `build/wine-arm64-src/lsteamclient`, is a sparse, blob-filtered checkout of
+Proton's `lsteamclient/` folder at `deps.pins`' `LSTEAMCLIENT_COMMIT` (without the Steamworks SDK folders), linked
+into the Wine tree as `dlls/lsteamclient` (ignored there, so the Wine tree stays applied; Wine patch 0016 registers
+it). Its series is `deps.pins`' `LSTEAMCLIENT_` lines and `patches/lsteamclient/`: a tarball pin doesn't re-fetch it.
+Its source is never committed here, only the patches.
+
 Changing the pins or a patch file makes a tree with no work of its own (no change, commit, stash, other branch or
 worktree) start over from the series: it is deleted and fetched again.
 
@@ -120,7 +143,12 @@ worktree) start over from the series: it is deleted and fetched again.
     `dappermint/winecx` branch `cx/wine1117` at `e0aa380780`, with millia ampora's msync commits there (`8df1826853`,
     `9be392b3b4`, `3a7a712d66`, `307f90fdb1`, `620d8c542f`, `a7ef7b3b01`, `ef72fdb55b`, `6d316146c2`), merged onto
     Wine 11.19. The patch's message lists our changes to it.
-  - The other Wine patches are ours.
+  - 0016 (registering `dlls/lsteamclient` in configure) and the other Wine patches are ours.
+- **lsteamclient** is Steamworks-SDK-derived: Valve's Steamworks SDK licence (its `LICENSE`), except `cxx.h`, which is
+  LGPL-2.1+ (CodeWeavers, from Wine); the bundle carries both in `licenses/lsteamclient/` (`LICENSE`, `NOTE`). Its
+  patches are dappermint/winecx's three Mac fixes by millia ampora (`8d188ec0db`, `dada36ebab`, `6cfbd169a5`), each
+  naming its source commit, author kept. Whether a release bundle may include it is decided in sub-project 5; until
+  then MacNeutron doesn't redistribute it (local builds only). This is not legal advice.
 - **FEX** is MIT, and so are our patches to it.
   - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`. MIT: the file it patches,
     `Source/Windows/UnixLib/FEXUnixLib.cpp`, keeps its `SPDX-License-Identifier: MIT` header, and the fork carries

@@ -1,9 +1,10 @@
 #!/bin/sh
 # Builds MacNeutron's arm64 Wine (11.19 + wine-arm64/patches/wine) into build/wine-arm64-src/wine-build, against
 # FreeType and gnutls built from wine-arm64/deps.pins' tarballs into deps, FEX (+ wine-arm64/patches/fex) into fex-ec
-# and fex-unixlib, and DXMT (dxmt/pins' commit + wine-arm64/patches/dxmt) for ARM64X into dxmt-install, then stages the
-# signed build/wine-arm64/wine.app (native arm64 spec §5.4, §6.3; arm64 DXMT spec §4; ship-base spec §5). Never
-# installs tools. Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE.
+# and fex-unixlib, DXMT (dxmt/pins' commit + wine-arm64/patches/dxmt) for ARM64X into dxmt-install, and Proton's
+# lsteamclient (deps.pins' commit + wine-arm64/patches/lsteamclient) as one of Wine's DLLs, then stages the signed
+# build/wine-arm64/wine.app (native arm64 spec §5.4, §6.3; arm64 DXMT spec §4; ship-base spec §5, §7). Never installs
+# tools. Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE.
 # BUILD_DIR replaces build/ (tests).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,6 +21,7 @@ OUT="$B/wine-arm64"
 W="$SRC/wine"
 F="$SRC/fex"
 D="$SRC/dxmt"
+LSC="$SRC/lsteamclient"
 DEPS="$SRC/deps"
 # What each tree was patched to, kept outside it so they never count as changes: <repo>.applied, HEAD after the
 # patches went on, and <repo>.series, the hash of the series (pins and patches) that went on. A tree at that HEAD with
@@ -27,6 +29,7 @@ DEPS="$SRC/deps"
 PATCHES="$ROOT/wine-arm64/patches/wine"
 FEX_PATCHES="$ROOT/wine-arm64/patches/fex"
 DXMT_PATCHES="$ROOT/wine-arm64/patches/dxmt"
+LSC_PATCHES="$ROOT/wine-arm64/patches/lsteamclient"
 
 # 1. Tools, all named at once. bison and flex are keg-only: Homebrew's go first on PATH. The build doesn't run autoconf;
 #    the development loop does, for a patch that changes configure.ac (README).
@@ -83,20 +86,37 @@ fetch_dxmt() {
   git -C "$D.tmp" submodule update -q --init --depth 1 || die "can't fetch DXMT's submodules"
   patch_tree "$D.tmp" dxmt "$DXMT_PATCHES" "$dxmt_series" "$DXMT_COMMIT"
 }
+# Proton's lsteamclient/ alone (ship-base spec §7): the one commit, blob-filtered, checked out sparse without the
+# Steamworks SDK folders and the generator. Git fetches the blobs it checks out from Proton, so lazy fetching is on.
+fetch_lsteamclient() {
+  echo "wine-arm64: fetching lsteamclient $LSTEAMCLIENT_COMMIT" >&2
+  unset GIT_NO_LAZY_FETCH
+  rm -rf "$LSC.tmp"
+  git init -q "$LSC.tmp"
+  git -C "$LSC.tmp" remote add origin "$LSTEAMCLIENT_REPO"
+  git -C "$LSC.tmp" fetch -q --depth 1 --filter=blob:none origin "$LSTEAMCLIENT_COMMIT" \
+    || die "can't fetch $LSTEAMCLIENT_COMMIT from $LSTEAMCLIENT_REPO"
+  git -C "$LSC.tmp" sparse-checkout set --no-cone '/lsteamclient/' '!/lsteamclient/steamworks_sdk_*/' \
+    '!/lsteamclient/gen_wrapper.py' || die "can't set lsteamclient's sparse checkout"
+  git -C "$LSC.tmp" checkout -q -b macneutron FETCH_HEAD || die "can't check out lsteamclient/ from $LSTEAMCLIENT_REPO"
+  patch_tree "$LSC.tmp" lsteamclient "$LSC_PATCHES" "$lsteamclient_series" "$LSTEAMCLIENT_COMMIT"
+}
 wine_series=$(series_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch)
 fex_series=$(series_of "$ROOT/wine-arm64/pins" "$FEX_PATCHES"/*.patch)
 dxmt_series=$(series_of "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch)
+lsteamclient_series=$(lsteamclient_series "$ROOT/wine-arm64/deps.pins" "$LSC_PATCHES"/*.patch)
 # Every build input, once: the up-to-date check and the stamp written at the end must agree.
 stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" \
   "$ROOT/wine-arm64/lib.sh" "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" \
   "$ROOT/wine-arm64/Info.plist" "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch "$ROOT/dxmt/llvm.sh" \
   "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
   "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh" "$ROOT/wine-arm64/deps.pins" \
-  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh")
+  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch)
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
 dxmt_mode=$(build_mode "$D" "$SRC/dxmt.applied" "$SRC/dxmt.series" "$dxmt_series")
+lsteamclient_mode=$(build_mode "$LSC" "$SRC/lsteamclient.applied" "$SRC/lsteamclient.series" "$lsteamclient_series")
 # prepare <repo> <mode>: a tree that isn't there yet, or was patched with another series, is fetched and patched.
 prepare() {
   case "$2" in
@@ -110,8 +130,16 @@ prepare() {
 prepare wine "$wine_mode"
 prepare fex "$fex_mode"
 prepare dxmt "$dxmt_mode"
+prepare lsteamclient "$lsteamclient_mode"
+# lsteamclient builds as one of Wine's DLLs (Wine patch 0016 registers it): its folder is linked in as
+# dlls/lsteamclient, which the Wine tree ignores, so that tree stays applied and lsteamclient's source never enters a
+# Wine patch. Every build: a fetched Wine tree has neither. The ignore goes first, so the link never shows as a change.
+LC_ALL=C /usr/bin/grep -qx /dlls/lsteamclient "$W/.git/info/exclude" 2> /dev/null \
+  || echo /dlls/lsteamclient >> "$W/.git/info/exclude"
+ln -sfn ../../lsteamclient/lsteamclient "$W/dlls/lsteamclient"
 # The build is a development build if any tree is.
-if [ "$wine_mode" = development ] || [ "$fex_mode" = development ] || [ "$dxmt_mode" = development ]; then
+if [ "$wine_mode" = development ] || [ "$fex_mode" = development ] || [ "$dxmt_mode" = development ] \
+  || [ "$lsteamclient_mode" = development ]; then
   echo "wine-arm64: development build" >&2
   rm -f "$OUT/version"  # what gets built is not what the stamp describes; the next applied build redoes it
   dev=1
@@ -201,7 +229,7 @@ fi
 #    folder (a full Wine build) when the options or the deps change: both are recorded in wine-build/.configure-inputs.
 set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --without-x --without-wayland \
   --without-oss --without-alsa --without-pulse --without-sane --without-usb --without-v4l2 --without-pcap \
-  --without-capi --without-opencl --without-cups --with-freetype --with-gnutls CC=/usr/bin/clang \
+  --without-capi --without-opencl --without-cups --with-freetype --with-gnutls CC=/usr/bin/clang CXX=/usr/bin/clang++ \
   PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" FREETYPE_CFLAGS="-I$DEPS/include/freetype2" \
   FREETYPE_LIBS="-L$DEPS/lib -lfreetype -Wl,-rpath,$DEPS/lib" GNUTLS_CFLAGS="-I$DEPS/include" \
   GNUTLS_LIBS="-L$DEPS/lib -lgnutls"
@@ -302,6 +330,8 @@ mac=$(git -C "$ROOT" rev-parse HEAD)
   echo "DXMT_SERIES=$(series "$dxmt_mode" "$dxmt_series")"
   echo "LLVM_TAG=$LLVM_TAG"
   echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
+  echo "LSTEAMCLIENT_COMMIT=$LSTEAMCLIENT_COMMIT"
+  echo "LSTEAMCLIENT_SERIES=$(series "$lsteamclient_mode" "$lsteamclient_series")"
   deps_pins  # the tarballs' <NAME>_URL and <NAME>_SHA256
 } > "$SRC/SOURCE"
 echo "wine-arm64: bundling (log: $OUT/install.log)" >&2
