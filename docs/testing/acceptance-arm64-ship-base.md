@@ -410,7 +410,34 @@ Patches added or changed by this sub-project:
   in as `dlls/lsteamclient` and never enters a Wine patch).
 - Wine **0017** `ntdll: Recognise the x18 toggle's trap by its address, not dladdr().` (a follow-up to 0004, added as
   its own patch because the in-place history rewrite was refused by the session's permission rules).
+- Wine **0018** `ntdll: Quiet the x18 self-test and tighten the toggle trap check.` (after the acceptance run; 18+, 8-;
+  see below).
 - lsteamclient **0001-0003**, `dappermint/winecx`'s three Mac fixes by millia ampora (`8d188ec0db` NOMINMAX and an X11
   keysym guard, `dada36ebab` `-lc++`, `6cfbd169a5` the two Proton-only client exports made optional), authors kept.
 
 Wine 0001-0003 and 0005-0014, FEX 0001-0005 and DXMT 0001 are unchanged.
+
+### After the acceptance run: patch 0018
+
+The maintainer saw the crash reports and dialogs that T3's deliberate `brk #1` death left on every `x18` run (seven
+`wine-*.ips` in `~/Library/Logs/DiagnosticReports` on 2026-10-04) and chose a quiet exit. Patch 0018 (Wine `8c0fd46`):
+- with `WINE_X18_SELFTEST=double_on`, read once in `signal_init_process`, the recognised toggle trap writes
+  `x18: toggle trap passed through (self-test)` with `write(2)` and calls `_exit(133)`; without it, the `SIG_DFL`
+  re-raise is unchanged, and T3 no longer exercises it;
+- patch 0017's review: the PC is compared against `os_set_custom_x18_abi_enabled`'s address directly (a GOT read), over
+  0x80 bytes (the routine is 0x7c bytes on macOS 27, its `brk`s at +0x58 and +0x78); the init-time static is gone.
+
+`check.sh x18` now also gates that T3's log has the self-test line, and that no new `wine-*.ips` appears (the listing
+before T3 against one taken 2 s after the step's other checks; ReportCrash wrote the red run's report 0.51 s after T3
+returned), printing `info x18 crash reports: <n>`.
+
+- **Red** (the gates on the 0017 bundle): T1, T2 and T4 passed, `T3: WINE_X18_SELFTEST=double_on: exit 133`,
+  `info x18 crash reports: 1` (`wine-2026-10-04-155330.ips`), then
+  `FAIL x18: T3's log lacks 'x18: toggle trap passed through (self-test)'` (the log held only the shell's
+  `Trace/BPT trap: 5`).
+- **Green** (`make wine-arm64` development, `make wine-arm64-export` adding only `0018-…`, `make wine-arm64` applied),
+  `sh wine-arm64/check.sh x18` in 24 s: `PASS boot`, `PASS fex`, `PASS x18`, `PASS orphans`. T1 36.1 × 10^9 checks,
+  0 zero, 0 bad; T2 every path `ok` in both lanes, 0 mismatches; T3 `exit 133` with the log
+  `x18: toggle trap passed through (self-test)` and no `err:seh`; T4 307 × 10^6 calls and 77,984 suspends, 0
+  mismatches; the static check unchanged (9 uses in the same routines); `info x18 crash reports: 0`. The
+  `DiagnosticReports` listing of `wine-*` files was the same before the run and 5 s after it.
