@@ -1,10 +1,29 @@
 import Foundation
 @testable import MacNeutronCore
 
+/// This test process's folder, removed when it exits. A run that didn't exit (crash, Ctrl-C) leaves its
+/// folder behind; the next run sweeps it once it's a day old. Only "run …" folders are swept.
+private func runDir() -> URL {
+    FileManager.default.temporaryDirectory.appending(path: "macneutron tests/run \(getpid())", directoryHint: .isDirectory)
+}
+
+private let sweptAndCleanedAtExit: Void = {
+    let fm = FileManager.default
+    let parent = runDir().deletingLastPathComponent()
+    let dayAgo = Date(timeIntervalSinceNow: -86_400)
+    for name in (try? fm.contentsOfDirectory(atPath: parent.path(percentEncoded: false))) ?? [] where name.hasPrefix("run ") {
+        let old = parent.appending(path: name, directoryHint: .isDirectory)
+        if let modified = try? old.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, modified < dayAgo {
+            try? fm.removeItem(at: old)
+        }
+    }
+    atexit { try? FileManager.default.removeItem(at: runDir()) }
+}()
+
 /// A fresh temp directory whose path contains a space, like Steam's "Application Support".
 func makeTempDir() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory
-        .appending(path: "macneutron tests/\(UUID().uuidString)", directoryHint: .isDirectory)
+    _ = sweptAndCleanedAtExit
+    let dir = runDir().appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
