@@ -124,6 +124,10 @@ Copyright (C) 2018 Zebediah Figura
 Copyright (C) 2023 Marc-Aurel Zent
 ```
 
+Its inline `mach_msg2()` and `mach_msg2_internal()` helpers (in `dlls/ntdll/unix/msync.c` and `server/msync.c`) are, in
+the patch's words, "taken and slightly adapted from xnu/libsyscall/mach/mach_msg.c": Apple's xnu, Copyright Apple
+Inc., under the Apple Public Source License 2.0 (https://opensource.apple.com/apsl/).
+
 ## DXBCParser (in DXMT's Direct3D DLLs and `winemetal.so`)
 
 From DXMT's `libs/DXBCParser/ShaderBinary.h` (and the other files in `libs/DXBCParser`), under the MIT licence below:
