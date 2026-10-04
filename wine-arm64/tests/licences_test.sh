@@ -47,6 +47,7 @@ check() {  # check <wine.app> <build dir>
   if has 'libfreetype*'; then
     for f in LICENSE.TXT FTL.TXT bdf-README pcf-README; do [ -s "$L/freetype/$f" ] || miss "freetype/$f"; done
     g -qF "The FreeType Project" "$L/README" 2> /dev/null || miss "FreeType credit line in README"
+    g -qF "Zappa Nardelli" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for FreeType's ft_hash"
   fi
   if has 'libgnutls*'; then
     for f in gnutls/COPYING.LESSERv2 gnutls/COPYING.LESSERv3 gnutls/COPYINGv3 nettle/COPYING.LESSERv3 nettle/COPYINGv3 \
