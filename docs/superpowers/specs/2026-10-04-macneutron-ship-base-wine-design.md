@@ -1,18 +1,18 @@
 # MacNeutron — Native arm64 stack, sub-project 3: Ship-base Wine
 
-- **Date:** 2026-10-04
+- **Date:** 2026-10-04 (revised the same day after an adversarial review: three lenses, each re-checked by a sceptic)
 - **Status:** Written for the maintainer's review. The design was approved in conversation on 2026-10-04 ("Go"), with four decisions taken by the maintainer (§1, Decisions). The implementation plan comes after the maintainer approves this file.
 - **Builds on:**
   - `2026-10-02-macneutron-native-arm64-design.md` (sub-project 1 and the roadmap; this spec amends its §2, §3.4, §5.3 and §11, see §13)
   - `2026-10-03-macneutron-arm64-dxmt-design.md` (sub-project 2: DXMT in `wine.app`, the check steps this spec extends)
-- **Evidence:** `docs/research/2026-10-04-ship-base/` (the decision brief with its skeptic verification, the probes, the msync trial merge, the scratch licence check).
+- **Evidence:** `docs/research/2026-10-04-ship-base/` (the decision brief with its skeptic verification, the spec review, the probes, the msync trial merge, the scratch licence check).
 - **Scope:**
   - **In:**
     - licence and notice files for every component `wine.app` ships;
     - FreeType and gnutls built from pinned source and bundled;
     - msync, ported from CrossOver `cx/wine1117`, on by default;
     - a check proving x64 JITs under FEX cause no W^X flips;
-    - strict x18 toggling, replacing patch 0004.
+    - strict x18 toggling, rewriting patch 0004.
   - **Out:**
     - lsteamclient and the whole Steam path, including the Steamworks licence decision (sub-project 4, which now depends only on sub-project 1);
     - media playback: FFmpeg for `winedmo`, GStreamer for `winegstreamer` (a new roadmap row, §13);
@@ -20,6 +20,7 @@
     - FEX's 32-bit WoW64 JIT dual view (sub-project 8);
     - notarization, release source archives, and refusing development inputs in release bundles (sub-project 5);
     - the Rosetta app's missing LLVM and mingw-w64 notices (a separate small change);
+    - verifying the tarballs' upstream signatures (it needs `.sig` files and keys that aren't approved downloads; §5);
     - pushing anything anywhere.
 
 ## 1. Goal
@@ -35,64 +36,72 @@
 | lsteamclient | **Moved to sub-project 4** with the Steamworks licence question (lsteamclient is under Valve's Steamworks SDK licence, not BSD) (maintainer, 2026-10-04) |
 | `MAP_JIT` for RWX memory other than FEX's | **Dropped.** Replaced by the `wxflip-x64` check; native ARM64 JITs stay on patch 0006's flip as an accepted cost (maintainer) |
 | Downloads | **Approved:** freetype 2.14.3, gnutls 3.8.13, nettle 4.0, gmp 6.3.0 from their canonical hosts, SHA-256 pinned (maintainer). Nothing else is downloaded |
-| msync default | **On**, matching the Rosetta runtime (maintainer). `WINEMSYNC=1` is set by whatever starts the runtime: `check.sh` here, the launcher in sub-project 5; `WINEMSYNC=0` per game stays the off switch |
-| msync source | CrossOver `cx/wine1117` (26.3) with dappermint `winecx`'s 2026-08-21 race and tuning commits: the code the Rosetta runtime runs. Plus a one-time `shm_addrs` allocation that removes a realloc race |
+| msync default | **On**, matching the Rosetta runtime (maintainer). The patch keeps CrossOver's semantics (on only with `WINEMSYNC=1`); whatever starts the runtime sets it: `check.sh` here, the launcher in sub-project 5. `WINEMSYNC=0` per game stays the off switch |
+| msync source | CrossOver 26.3's msync as carried on `cx/wine1117` (at `e0aa380780`), with dappermint `winecx`'s 8 msync commits of 2026-08-21 (`8df1826853`, `9be392b3b4`, `3a7a712d66`, `307f90fdb1`, `620d8c542f`, `a7ef7b3b01`, `ef72fdb55b`, `6d316146c2`): the code the Rosetta runtime runs. Plus a one-time `shm_addrs` allocation that removes a realloc race |
+| Patch numbering | Patch 0004 is rewritten in place as the strict x18 patch (only 0004 touches `signal_arm64.c`, so 0005–0014 export unchanged); msync is 0015 |
+| Tarball pins | A new `wine-arm64/deps.pins`, in the build stamp but not in the Wine or FEX patch series (editing `wine-arm64/pins` would make both trees re-clone) |
 | Where the libraries live | `Contents/Resources/lib/wine/aarch64-unix/`, beside the unix `.so` files that load them: Wine loads them by bare name and every caller carries `LC_RPATH @loader_path/`, so no Wine or loader change |
-| Library packaging | nettle, hogweed and gmp linked statically into `libgnutls.30.dylib`: 2 dylibs. Fallback if libtool won't fold them: 5 dylibs with `@rpath` names |
+| Library packaging | nettle, hogweed and gmp linked statically into `libgnutls.30.dylib`: 2 dylibs (shown to work in a scratch build) |
 | FreeType options | No libpng, harfbuzz or brotli (colour-emoji glyphs aren't worth a fifth download) |
 | Licence elections | FreeType under the FTL; nettle, gmp and gnutls's included libunistring under LGPL-3+; gnutls and its included libtasn1 under LGPL-2.1+ |
-| Wine configure | Against our deps only (`PKG_CONFIG_LIBDIR`), with `--with-freetype --with-gnutls` so a missing header fails configure |
+| Wine configure | Against our deps only (`PKG_CONFIG_LIBDIR`, explicit `FREETYPE_*`/`GNUTLS_*` flags), with `--with-freetype --with-gnutls` so a missing library fails configure |
+| The x18 scan of bundled code | Comments stripped; a committed allowlist names the only accepted hits (gnutls's data words after `ret`, §5); `ntdll.so` is checked by §8's routine-level check instead |
 | x18 dispatch code | Registers parked in the dispatchers (about 3 ns per round trip); register-preserving helpers are the fallback |
-| A toggle imbalance | Kills the process (`SIGTRAP` passed through with Apple's annotation), never becomes a Windows exception |
-| "PE stack implies x18 ON" invariant | Always checked in the signal wrapper (one comparison per signal); a violation logs and aborts |
-| Patch authorship | The maintainer as author; the commit message credits the sources (msync: Marc-Aurel Zent, CodeWeavers CrossOver 26.3, dappermint `winecx` `e0aa380780`) |
+| A toggle imbalance | Kills the process (`SIGTRAP` passed through), never becomes a Windows exception |
+| "PE stack implies x18 ON" invariant | Always checked in the signal wrapper on threads that have a TEB; a violation writes a message with `write(2)` and aborts |
+| Patch authorship | The maintainer as author, as for patches 0009 and 0013; the commit message and `wine-arm64/README.md` credit the sources (msync: Zebediah Figura, Marc-Aurel Zent, CodeWeavers CrossOver 26.3, millia ampora's `winecx` commits) |
 | Wine conformance tests | Not built; `x64-sync.c` gates msync |
 | Time box | Three weeks from the start of implementation (estimate 8–9 working days) |
 
-## 2. Evidence (verified 2026-10-03/04 on the M5 Pro, macOS 27.0.1, unless marked)
+## 2. Evidence (2026-10-03/04, M5 Pro, macOS 27.0.1)
 
-- **No FreeType, no gnutls today.** Wine 11.19 was configured against Homebrew's headers (`config.h`: `SONAME_LIBFREETYPE "libfreetype.6.dylib"`, `SONAME_LIBGNUTLS "libgnutls.30.dylib"`), but `wine.app` ships neither. Wine `dlopen`s them by bare name from `win32u/freetype.c:1457`, `dwrite/freetype.c:118`, `secur32/schannel_gnutls.c:1474` and `crypt32/unixlib.c:111`, so all four loads fail: dialog base units are 0,0, and `AcquireCredentialsHandleW(UNISP_NAME_W)` returns `0x80090305`. bcrypt runs on PE-side SymCrypt and root certificates come from Security.framework, so p11-kit, libidn2 and a CA bundle aren't needed.
-- **Bundling works without a patch.** All four callers carry `LC_RPATH @loader_path/`; a hardened-runtime probe found a dylib beside the calling `.so`, and that dylib's own `@rpath` dependency. A hardened main ignores `DYLD_LIBRARY_PATH` and `DYLD_FALLBACK_LIBRARY_PATH`.
-- **Homebrew bottles don't fit as they are:** four have `minos 26.0`, and `libgnutls.30` names 8 dependencies by absolute `/opt/homebrew` paths, with Homebrew paths compiled in for its trust store and modules. A pinned source build also makes the LGPL source obligations simple.
-- **gmp 6.2.1's arm64 assembly used x18** as a loop counter (fixed after 6.2.1, gmplib changeset `5f32dbc41afc`). Under strict toggling, unix code runs with the mode OFF and the kernel zeroes x18 at exception return, so a library that uses it breaks. gmp ≥ 6.3.0, and a scan of every bundled dylib, are required from §8 on.
-- **Licences:** `wine.app` ships only DXMT's 3 files. The scratch check (`licences_check.sh`) prints 37 MISSING lines: 19 are copies of texts already in `build/` (Wine, FEX and its 8 compiled externals, LLVM, llvm-mingw); 18 must be written (README, SOURCE, a NOTICES file for notices that live only in source headers). Wine's own `NOTICES.md` covers its vendored code except GSM and FAudio, which both ship.
-- **msync:** in CrossOver it is 4 new files (2,202 lines) and about 270 lines of hooks in 11 files, LGPL-2.1+. It fills upstream Wine's in-process sync framework on macOS (upstream only has Linux ntsync, so every wait on our runtime is a wineserver round trip). A trial merge onto 11.19 + patches 0001-0014 had one conflict (`loader.c`), and the 7 touched files compile with `-Wall` and no warnings. Every private API it uses works across two hardened-runtime processes on Darwin 27 arm64. Client and wineserver must agree on `WINEMSYNC`, or the client exits. Whether msync has ever run natively on arm64 is not known.
-- **msync is for speed.** Cross-process wake latency is about the same either way (about 6.3 µs with `__ulock` against 5.2 µs for a pipe round trip). The gain is in uncontended operations and in keeping the single-threaded wineserver off the hot path (inferred; §9's M1 measures it). Known correctness gaps: PulseEvent can miss a waiter; wait-all isn't atomic.
-- **x18:** one toggle costs 1.41–1.54 ns (userspace path, the same entitled or not), so about 3 ns per syscall or unix-call round trip, against 82.6 ns for a `getppid()` syscall. FEX never allocates x18, reads it only as the TEB, and reaches unix code only through Wine's two dispatchers, so ARM64EC and FEX add no boundary. Three sites `x18-boundaries.md` lacks: `__wine_syscall_dispatcher_return` reads x18 while OFF; Wine's trap handler would turn the toggle's `brk #1` into a Windows exception; and an invariant check makes a missed ON site loud.
-- **MAP_JIT doesn't fit Windows memory:** `MAP_JIT|MAP_FIXED` fails (EINVAL); once a MAP_JIT range is RWX, every `mprotect` on it fails (EACCES); a switch to execute inside the fault handler is undone on return. At best a trampoline design costs 5.6 µs per write-then-run cycle against patch 0006's 12.8 µs.
-- **x64 JITs under FEX probably never flip (inferred).** FEX reads guest code as data; patch 0006 keeps guest RWX without the EC_CODE flag as host RW. Gate G5 doesn't prove it (x64-bench allocates only RW memory); §7's check does.
+Marked **[V]** verified or **[I]** inferred; "unentitled" or "ad hoc" says how a probe ran.
+
+- **[V] No FreeType, no gnutls today.** Wine 11.19 was configured against Homebrew's headers (`config.h`: `SONAME_LIBFREETYPE "libfreetype.6.dylib"`, `SONAME_LIBGNUTLS "libgnutls.30.dylib"`), but `wine.app` ships no dylib. Wine `dlopen`s them by bare name from `win32u/freetype.c:1457`, `dwrite/freetype.c:118`, `secur32/schannel_gnutls.c:1474` and `crypt32/unixlib.c:111`, so all four loads fail: dialog base units are 0,0, and `AcquireCredentialsHandleW(UNISP_NAME_W)` returns `0x80090305`. bcrypt runs on PE-side SymCrypt and root certificates come from Security.framework, so p11-kit, libidn2 and a CA bundle aren't needed.
+- **Bundling works without a patch.** [V] All four callers carry `LC_RPATH @loader_path/` (28 of the 29 unix `.so` files do; FEX's unixlib, which loads neither library, doesn't). [V, ad hoc + hardened runtime + library validation off] a probe found a dylib beside the calling `.so`, and that dylib's own `@rpath` dependency; a hardened main ignores `DYLD_LIBRARY_PATH` and `DYLD_FALLBACK_LIBRARY_PATH`. [I] The same holds under Developer ID signing.
+- **[V] The library stack builds** (a scratch build during the spec review): gmp 6.3.0 and nettle 4.0 static, gnutls 3.8.13 shared with them folded in, FreeType 2.14.3. `libgnutls.30.dylib` links only Security, CoreFoundation and libSystem, has `minos 27.0`, exports no nettle or gmp symbols and exports all 70 symbols Wine resolves; FreeType exports all 46 and links only `/usr/lib` zlib and bzip2. gnutls's configure requires nettle ≥ 3.10 and its NEWS says it supports nettle 4.0. The four tarballs' SHA-256 values match two sources: Homebrew's API cache and a fetch from the canonical hosts. gnutls compiles in its `sysconfdir` path (the build machine's, unless set).
+- **[V] Homebrew can leak into the deps build too, not only into Wine's configure:** without `PKG_CONFIG_LIBDIR`, gnutls's configure picked Homebrew's shared nettle 4.0, and FreeType's would record Homebrew's `zlib`/`bzip2` in `freetype2.pc`.
+- **[V] gnutls's ARMv8 assembly keeps data in `__text`:** its CRYPTOGAMS routines `gcm_ghash_v8_4x`, `sha256_block_data_order` and `sha512_block_data_order` end with constant tables and an ID string, which `otool -tV` decodes as 7 instructions naming x18 (in our build and in Homebrew's). Elsewhere in today's bundle the x18 regex matches only `ntdll.so` (its 4 dispatch routines, plus one otool comment) and two otool comments in `wineserver`.
+- **gmp 6.2.1's arm64 assembly used x18** as a loop counter ([V] fixed after 6.2.1, gmplib changeset `5f32dbc41afc`). [V] With the mode OFF the kernel zeroes x18 at exception return. Under today's once-per-thread mode such a library would be harmless on PE threads; under strict toggling unix code runs OFF and it would break [I]. So gmp ≥ 6.3.0, and the scan, are required from §8 on.
+- **[V] Licences:** `wine.app` ships only DXMT's 3 files. The scratch check (`licences_check.sh`) prints 37 MISSING lines: 19 are copies of texts already in `build/` (Wine, FEX and its compiled externals, LLVM, llvm-mingw); 18 must be written (README, SOURCE keys, NOTICES holders). Wine's own `NOTICES.md` covers its vendored code except GSM and FAudio, which both ship. `fex-ec/External` holds SoftFloat-3e, cephes, fmt, range-v3, rpmalloc, tiny-json, unordered_dense and xxhash; cpp-optparse is built from `Source/Common/`; only fmt, range-v3, rpmalloc, unordered_dense, xxhash and cpp-optparse are submodules.
+- **msync:** [V] in CrossOver it is 4 new files (2,202 lines) and about 270 lines of hooks; the trial diff touches 15 files. It is LGPL-2.1+ (Zebediah Figura 2018, Marc-Aurel Zent 2023). It fills upstream Wine's in-process sync framework on macOS; upstream only has Linux ntsync, so every wait on our runtime is a wineserver round trip. [V] A trial merge onto 11.19 + patches 0001–0014 had one conflict (`loader.c`), and the 7 touched `.c` files pass `-Wall -fsyntax-only` with no warnings. [V, ad hoc 16K process and a 4K Rosetta client] every private API it uses works across two hardened-runtime processes; [I] the same holds for the entitled 4K `wine.app` (its workers run at 4K, `wineserver` at 16K; both size shared memory with the system-wide `vm_kernel_page_size`). [V] Client and wineserver must agree on `WINEMSYNC`: a `WINEMSYNC=0` client facing an msync server prints "Server is running with WINEMSYNC but this process is not" and exits; a `WINEMSYNC=1` client facing a plain server prints "Failed bootstrap_look_up" and exits; both are `ERR` lines, hidden under `WINEDEBUG=-all`. [V] `msync: up and running.` and msync's error lines are written by `wineserver` to the stderr of the client that started it. [I] Whether msync has run natively on arm64 is unknown.
+- **msync is for speed.** [V] Cross-process wake latency is about the same either way (about 6.3 µs with `__ulock` against 5.2 µs for a pipe round trip). [I] The gain is in uncontended operations and in keeping the single-threaded wineserver off the hot path; §9's M1 measures it. [V] Known correctness gaps: PulseEvent can miss a waiter; wait-all isn't atomic.
+- **x18:** [V, unentitled; the userspace path is the same entitled] one toggle costs 1.41–1.54 ns, so about 3 ns per syscall or unix-call round trip, against 82.6 ns for a `getppid()` syscall. [V] FEX never allocates x18, reads it only as the TEB, and reaches unix code only through Wine's dispatchers, so ARM64EC and FEX add no boundary. [V] `x18-boundaries.md` (whose line numbers are pristine Wine 11.19's) already covers `__wine_syscall_dispatcher_return`; it lacks two things: passing the toggle's `brk #1` through Wine's trap handler (which turns every `brk` into a Windows exception, `signal_arm64.c:1215-1250`), and a check that makes a missed ON site loud [I: untested proposal]. [V] A native double enable dies by `SIGTRAP` (exit status 133); Apple's annotation appears only in the crash report.
+- **MAP_JIT doesn't fit Windows memory** [V, unentitled, 16K pages]: `MAP_JIT|MAP_FIXED` fails (EINVAL); once a MAP_JIT range is RWX, every `mprotect` on it fails (EACCES); a switch to execute inside the fault handler is undone on return. A trampoline design costs 5.6 µs per write-then-run cycle against 12.8 µs for patch 0006's flip, measured in the same run (earlier figures in the brief are superseded).
+- **[I] x64 JITs under FEX never flip.** FEX reads guest code as data; patch 0006 keeps guest RWX without the EC_CODE flag as host RW. Gate G5 doesn't prove it (x64-bench allocates only RW memory); §7's check does.
 
 ## 3. What changes in the bundle
 
 ```
 wine.app/Contents/Resources/
-  lib/wine/aarch64-unix/libfreetype.6.dylib     (new: FreeType 2.14.3, arm64, minos 27.0, @rpath id)
-  lib/wine/aarch64-unix/libgnutls.30.dylib      (new: gnutls 3.8.13 + nettle 4.0 + gmp 6.3.0, same)
-  lib/wine/aarch64-unix/ntdll.so, wineserver    (msync; strict x18)
+  lib/wine/aarch64-unix/libfreetype.6.dylib   (new: FreeType 2.14.3, arm64, minos 27.0, @rpath id)
+  lib/wine/aarch64-unix/libgnutls.30.dylib    (new: gnutls 3.8.13 + nettle 4.0 + gmp 6.3.0, same)
+  lib/wine/aarch64-unix/ntdll.so              (msync; strict x18)
+  bin/wineserver                              (msync)
   licenses/README  licenses/NOTICES.md  licenses/SOURCE
   licenses/{wine,fex,llvm,llvm-mingw,freetype,gnutls,nettle,gmp}/…
-  DXMT/…                                        (unchanged)
+  DXMT/…                                      (unchanged; its licence files stay here, and licenses/README points to them)
 ```
 
-Wine patches after this sub-project: 0001–0003 and 0005–0014 unchanged; 0004 replaced by the strict x18 patch; one new patch for msync. Numbers follow landing order.
+Wine patches after this sub-project: 0001–0003 and 0005–0014 unchanged; 0004 rewritten in place as the strict x18 patch; 0015 msync.
 
 ## 4. Licences (no downloads)
 
 - **One tree:** `Resources/licenses/<component>/`, filled by `bundle.sh` with its `put` helper:
   - `wine/`: `LICENSE`, `COPYING.LIB`, `AUTHORS`, `NOTICES.md`, `gsm-COPYRIGHT`, `faudio-LICENSE`;
-  - `fex/`: `LICENSE` and one `<external>-LICENSE` per compiled external (fmt, xxhash, tiny-json, cpp-optparse, unordered_dense, rpmalloc, range-v3, cephes);
+  - `fex/`: `LICENSE`, and the licence file of each compiled external that has one: the 6 submodules (fmt, range-v3, rpmalloc, unordered_dense, xxhash, cpp-optparse) and the in-tree tiny-json and cephes. SoftFloat-3e has no licence file; `NOTICES.md` carries its notice;
   - `llvm/`: `LICENSE.TXT`, `COPYRIGHT.regex` (LLVM 15 is linked statically into `winemetal.so`);
   - `llvm-mingw/`: `LICENSE.TXT`, `COPYING.MinGW-w64-runtime.txt` (in DXMT's DLLs and `winemetal.dll`);
-  - `freetype/`, `gnutls/`, `nettle/`, `gmp/` once §5 lands, from the source tarballs (FreeType's `LICENSE.TXT` and `FTL.TXT`; the LGPL and GPL texts the elections name).
-- **Committed** `wine-arm64/licenses/NOTICES.md`: the notices that exist only in source headers (SoftFloat's Regents of the University of California, VIXL, musl, Arm, Will Faust (Madeira's MIT grant), Microsoft's DXBCParser, and the others the brief lists). **Committed** `wine-arm64/licenses/README`: component → licence → where its source is (this repository's pins and patch files, and the upstream URLs), plus the FreeType credit sentence. MacNeutron's own code gets a line once the repository has a licence (to be decided before sub-project 5's first release).
-- **Generated** `licenses/SOURCE` by `build.sh`: each pin (Wine, FEX with the 8 externals' submodule commits, DXMT, LLVM, llvm-mingw, the four tarballs with URL and SHA-256) and each tree's patch-series hash.
-- **`bundle.sh` asserts:** every listed file exists and is non-empty; `NOTICES.md` names each expected holder; `fex-ec/External` holds only the 8 allowlisted externals (a new one fails the build until its licence is added); each bundled third-party dylib has its folder; `SOURCE` has every key.
-- **Test:** `licences_check.sh` becomes `wine-arm64/tests/licences_test.sh`, run by `make wine-arm64-check` before `check.sh` (like `mode_test.sh`): red today (37 MISSING), green after.
+  - `freetype/`: `LICENSE.TXT`, `FTL.TXT`; `gnutls/`: `COPYING.LESSERv2`, and the LGPLv3 and GPLv3 texts for its included libunistring; `nettle/` and `gmp/`: `COPYING.LESSERv3`, `COPYINGv3` (all from the tarballs). These are required whenever `libgnutls.30.dylib` is present: nettle and gmp have no dylib of their own once folded in.
+- **Committed** `wine-arm64/licenses/NOTICES.md`: the notices that exist only in source headers (SoftFloat-3e's Regents of the University of California, VIXL, musl, Arm, Will Faust (Madeira's MIT grant), Microsoft's DXBCParser, and the others in the brief) and msync's authors. **Committed** `wine-arm64/licenses/README`: component → licence → where its source is (this repository's pins and patch files, the upstream URLs, and `Resources/DXMT/` for DXMT's texts), plus the FreeType credit sentence. MacNeutron's own code gets a line once the repository has a licence (to be decided before sub-project 5's first release). Both files are build inputs (in the stamp).
+- **Generated** `licenses/SOURCE` by `build.sh`, one `KEY=value` line each: `MACNEUTRON_COMMIT` (the repository commit the bundle was built from; an up-to-date build keeps it, since its inputs haven't changed since), `WINE_COMMIT`, `FEX_COMMIT` and the 6 submodule commits (the in-tree externals are covered by `FEX_COMMIT`), `DXMT_COMMIT`, `LLVM_TAG`, `LLVM_MINGW`, the four tarballs' URL and SHA-256, and each tree's patch-series hash (`dev` for a development tree).
+- **One check, one list:** `licences_check.sh` becomes `wine-arm64/tests/licences_test.sh <bundle>`; `bundle.sh` runs it against `wine.app.tmp` before staging, and `make wine-arm64-check` runs it against the staged bundle. It checks: every file above exists and is non-empty; `NOTICES.md` names each expected holder; `fex-ec/External` holds exactly the 8 directories listed in §2 (a new one fails until its licence is added); every `SOURCE` key is present. It also proves itself red: it must fail on a copy with one licence file deleted, and on a copy of the External list with an extra directory.
+- **Signing asserts** in `bundle.sh`: every Mach-O carries a secure timestamp (`codesign -dvv` shows `Timestamp=`), and the loader has no `get-task-allow`.
 - The repository README gets the FreeType credit line.
 
 ## 5. FreeType and gnutls
 
-- **Pins** in `wine-arm64/pins`: URL and SHA-256 for each tarball:
+- **Pins** in the new `wine-arm64/deps.pins` (URL and SHA-256):
 
   | Pin | URL | SHA-256 |
   |---|---|---|
@@ -101,99 +110,113 @@ Wine patches after this sub-project: 0001–0003 and 0005–0014 unchanged; 0004
   | nettle 4.0 | `https://ftp.gnu.org/gnu/nettle/nettle-4.0.tar.gz` | `3addbc00da01846b232fb3bc453538ea5468da43033f21bb345cb1e9073f5094` |
   | gmp 6.3.0 | `https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz` | `a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898` |
 
-  The SHA-256 values come from Homebrew's API cache on this Mac; the first fetch also checks each tarball against its upstream signature, and the plan records how. Fallback if nettle 4.0 won't build with gnutls 3.8.13: nettle 3.10.2 (a fifth pin, approved only if needed).
-- **Fetch:** the download-and-checksum helper `fetch` moves from `dxmt/lib.sh` into a sourced file both build scripts use (it calls the caller's `die`), as `dxmt/llvm.sh` did for LLVM. Tarballs go to `build/wine-arm64-src/`.
-- **Build** (a new `build.sh` step before Wine's configure; `/usr/bin/clang`, `MACOSX_DEPLOYMENT_TARGET=27.0`, prefix `build/wine-arm64-src/deps`; redone only when these pins change, recorded in `deps/.complete`):
+  Checked by SHA-256 only. The values match two independent sources (§2); checking upstream signatures would need `.sig` files and signing keys, which aren't approved downloads.
+- **Fetch:** the download-and-checksum helper `fetch` moves from `dxmt/lib.sh` into a sourced file, `dxmt/fetch.sh`, that calls the caller's `die` and prints the caller's message prefix. `dxmt/lib.sh` sources it (so `dxmt/build.sh` and `dxmt/toolchain.sh` keep working) and `wine-arm64/build.sh` sources it directly. The file joins `wine-arm64/build.sh`'s stamp. Tarballs go to `build/wine-arm64-src/`.
+- **Build** (a new `build.sh` step before Wine's configure). The whole step runs with `CC=/usr/bin/clang`, `MACOSX_DEPLOYMENT_TARGET=27.0`, `PKG_CONFIG_LIBDIR=<deps>/lib/pkgconfig`, `PKG_CONFIG_PATH` unset, `CPPFLAGS=-I<deps>/include` and `LDFLAGS=-L<deps>/lib`, prefix `build/wine-arm64-src/deps`. It is redone when `deps.pins` or the step's configure lines change (their hash is recorded in `deps/.complete`):
   - gmp and nettle: static, PIC;
-  - gnutls: shared, `--with-included-libtasn1 --with-included-unistring --without-p11-kit --without-idn --without-tpm --without-tpm2 --without-zlib --without-brotli --without-zstd --without-leancrypto --disable-nls --disable-tools --disable-cxx --disable-doc --disable-tests --disable-libdane`, nettle, hogweed and gmp folded in;
-  - freetype: shared, system zlib and bzip2, `--without-png --without-harfbuzz --without-brotli`;
-  - `install_name_tool -id @rpath/<name>` on both dylibs.
-- **Wine's configure** runs with `PKG_CONFIG_LIBDIR=<deps>/lib/pkgconfig` and `--with-freetype --with-gnutls`. `build.sh` records the configure inputs (the line, the deps' `.complete`) in `wine-build/` and reconfigures when they change (this forces one full Wine rebuild).
+  - gnutls: shared, `--sysconfdir=/etc --with-included-libtasn1 --with-included-unistring --without-p11-kit --without-idn --without-tpm --without-tpm2 --without-zlib --without-brotli --without-zstd --without-leancrypto --disable-nls --disable-tools --disable-cxx --disable-doc --disable-tests --disable-libdane`, with nettle, hogweed and gmp folded in;
+  - freetype: shared, `--without-png --without-harfbuzz --without-brotli`, zlib and bzip2 from `/usr/lib`;
+  - `install_name_tool -id @rpath/<name>` on both dylibs;
+  - right after building: `otool -L libgnutls.30.dylib` names no nettle, hogweed or gmp, and both dylibs depend only on `/usr/lib` and `/System`; `freetype2.pc` has no `Requires.private`.
+- **Wine's configure** runs with `PKG_CONFIG_LIBDIR=<deps>/lib/pkgconfig`, `FREETYPE_CFLAGS`/`FREETYPE_LIBS` and `GNUTLS_CFLAGS`/`GNUTLS_LIBS` pointing at the deps, and `--with-freetype --with-gnutls`. The build fails if a `cflags:` or `libs:` line in Wine's `config.log` contains `/opt/homebrew`. `build.sh` records the configure inputs (the line, the deps' `.complete`) in `wine-build/` and reconfigures when they change (one full Wine rebuild).
 - **`bundle.sh`** copies both dylibs to `lib/wine/aarch64-unix/` before signing, and asserts:
   - `otool -D` is `@rpath/libfreetype.6.dylib` and `@rpath/libgnutls.30.dylib`;
-  - every `otool -L` entry of every Mach-O in the bundle starts with `/usr/lib/`, `/System/`, `@rpath/`, `@loader_path/` or `@executable_path/` (also catches a Homebrew leak anywhere);
-  - no x18 use in either dylib (the regex of `docs/research/2026-10-02-native-arm64/probes/x18-cache-scan.sh` over `otool -tV`);
-  - every symbol Wine resolves from them (70 for gnutls, 46 for FreeType) is exported (`nm -gU`);
+  - every `otool -L` entry of every Mach-O in the bundle starts with `/usr/lib/`, `/System/`, `@rpath/`, `@loader_path/` or `@executable_path/`;
+  - **the x18 scan:** for every arm64 Mach-O in the bundle except `ntdll.so`, `otool -tV` with comments stripped (`sed 's/;.*//'`), matched with `LC_ALL=C grep -E` against the regex of `docs/research/2026-10-02-native-arm64/probes/x18-cache-scan.sh`, gives only the hits listed in the committed `wine-arm64/x18-allow.txt` (file, routine, count; today: `libgnutls.30.dylib` — 1 in `gcm_ghash_v8_4x`, 3 in `sha256_block_data_order`, 3 in `sha512_block_data_order`, each the data words after the routine's last `ret`). Any other hit, or a changed count, fails;
+  - every symbol Wine resolves from the two libraries (70 for gnutls, 46 for FreeType) is exported (`nm -gU`);
+  - no shipped dylib contains the build folder's path (`strings`);
   - `minos 27.0` (the existing loop already covers them).
-- **Check step `fonts-tls`:** `wine-arm64/tests/arm64-fonts-tls.c` (aarch64 PE) creates `Tahoma`, prints `GetTextMetricsW`'s height, `GetTextExtentPoint32W(L"Hello")` and `GetDialogBaseUnits()`, all > 0, and `schannel: 0x00000000` from `AcquireCredentialsHandleW(UNISP_NAME_W, SECPKG_CRED_OUTBOUND)`; it ends `PASS arm64-fonts-tls`. The step also fails if the run's output holds `cannot find the FreeType` or `Failed to load libgnutls`. Before §5 lands, the same program shows dialog base units 0,0 and `0x80090305` (the red run, recorded).
+- **Check step `fonts-tls`:** `wine-arm64/tests/arm64-fonts-tls.c` (aarch64 PE; `WA_FLAGS_arm64-fonts-tls = -lgdi32 -lsecur32 -ldwrite -lcrypt32`) prints and requires:
+  - `CreateFontW(L"Tahoma")`: `GetTextMetricsW` height, `GetTextExtentPoint32W(L"Hello")` and `GetDialogBaseUnits()`, all > 0 (win32u's FreeType load);
+  - `DWriteCreateFactory` and the system font collection's family count > 0 (dwrite's FreeType load);
+  - `schannel: 0x00000000` from `AcquireCredentialsHandleW(UNISP_NAME_W, SECPKG_CRED_OUTBOUND)` (secur32's gnutls load);
+  - `PFXImportCertStore` of a small committed test PFX (no secret material: a throwaway self-signed certificate made for the test) returns a store with one certificate (crypt32's gnutls load);
+  - the last line `PASS arm64-fonts-tls`.
+  The step also fails if the run's output contains, ignoring case, `cannot find the FreeType` or `failed to load libgnutls`. Before §5 lands the same program shows dialog base units 0,0 and `0x80090305` (the red run, recorded).
 - **Patch 0014 stays** as a safety net: a missing font library then degrades to no text, not a crash.
 
-## 6. msync
+## 6. msync (patch 0015)
 
 - **One Wine patch**, server and ntdll together (they share a protocol change):
   - the 4 msync files verbatim from `cx/wine1117`;
   - the msync hunks of the trial merge (`msync-on-11.19-trial.diff`), with `msync_init()` after `server_init_process( data )` in `loader.c`;
   - `linux_wait_objs` takes the wait type and passes `type != WaitAll` (it works today only by accident);
-  - the one-time `shm_addrs` allocation (a 2 MB table, no realloc) on both sides;
-  - `tools/make_requests` regenerated, with the `SERVER_PROTOCOL_VERSION` bump (a reply grows from 16 to 24 bytes).
-- **Enabling:** `WINEMSYNC=1`, as on the Rosetta runtime; the patch keeps CrossOver's semantics (off when unset). `check.sh` sets `WINEMSYNC=1` for every run (`wine_run`, the DXMT lanes through `dxmt/check.sh`'s arm64 runner, every direct `wine` call), so the server and every client agree; the `msync` step switches modes with `wineserver -k` between them.
-- **Check step `msync`:** `wine-arm64/tests/x64-sync.c`, built as x64 (under FEX) and, by an extra Makefile rule, as ARM64EC (`arm64ec-sync.exe`); each runs with `WINEMSYNC=1` and with `WINEMSYNC=0`:
-  - gated rows: event ping-pong; semaphore counts and `ERROR_TOO_MANY_POSTS`; mutex `ERROR_NOT_OWNER` and `WAIT_ABANDONED`; wait-any returns the lowest signalled index; wait-all exclusivity; a mixed wait with a process handle; timeouts; an alertable APC; cross-process named objects and `DuplicateHandle`; more than 3,000 events (several shared-memory chunks) across processes; 200,000 create/close cycles with no `msync: error` line;
-  - mode rows: `msync: up and running.` appears only with `WINEMSYNC=1`; a client started with the other mode against a running server exits non-zero with msync's own message;
+  - the `shm_addrs` table allocated once at its full size, computed from `vm_kernel_page_size` at init (2 MiB at 16K pages), on both sides: no realloc;
+  - `tools/make_requests` regenerated, with its `SERVER_PROTOCOL_VERSION` bump (a reply grows from 16 to 24 bytes).
+- **`check.sh` exports `WINEMSYNC=1`** at the top, so every run in every step (`wine_run`, the direct `wine` calls, `wineboot`, the DXMT lanes through `dxmt/check.sh`'s arm64 runner, which passes the environment on) agrees with the server.
+- **Check step `msync`:** `wine-arm64/tests/x64-sync.c`, built as x64 (under FEX) and, by an extra Makefile rule, as ARM64EC (`arm64ec-sync.exe`). The step:
+  - starts and ends with `wineserver -k`, so no server outlives it in either mode;
+  - for each mode (`WINEMSYNC=1`, then `WINEMSYNC=0`): starts the server itself (`WINEMSYNC=<m> wineserver -p`, its stderr to the step's own log), runs both programs, then `wineserver -k`;
+  - gated rows: event ping-pong; semaphore counts and `ERROR_TOO_MANY_POSTS`; mutex `ERROR_NOT_OWNER` and `WAIT_ABANDONED`; wait-any returns the lowest signalled index; wait-all exclusivity; a mixed wait with a process handle; timeouts; an alertable APC; cross-process named objects and `DuplicateHandle`; more than 3,000 events (several shared-memory chunks) across processes; 200,000 create/close cycles;
+  - mode rows (from the server's log): `msync: up and running.` only in mode 1, and no `msync: ` error line; both mismatch directions exit non-zero with their own `ERR` message (run without `WINEDEBUG=-all`);
   - reported, not gated: PulseEvent, and the timing rows (§9, M1).
-- **Rebuild cost:** the protocol bump and the reconfigure of §5 each force a full Wine rebuild; the plan may take both in one rebuild.
 
 ## 7. JIT memory: the zero-flip check
 
-- **Check step `wxflip-x64`** (in `NEEDS_FEX`): `WINEDEBUG=+wxflip` `x64-smc.exe` under FEX prints `PASS x64-smc`, with 0 `trace:wxflip` lines. `x64-smc` allocates `PAGE_EXECUTE_READWRITE` memory and makes its own `.text` RWX, then rewrites and runs code in both. `arm64-wxflip`'s 19 flips remain the positive control.
-- **If the check shows flips,** the inference in §2 is wrong and the plan stops to re-scope this item with the maintainer (the dropped `MAP_JIT` work would come back, as a new decision).
-- **Accepted and documented:** native ARM64/ARM64EC JITs (rare in games today) stay on patch 0006's flip; and patch 0006 loops forever on native ARM64 code that stores into its own RWX page (verified natively; inferred inside Wine; no target game does this).
+- **Check step `wxflip-x64`:** `WINEDEBUG=+wxflip` `x64-smc.exe` under FEX prints `PASS x64-smc`, with 0 `trace:wxflip` lines. `x64-smc` allocates `PAGE_EXECUTE_READWRITE` memory and makes its own `.text` RWX, then rewrites and runs code in both. It pulls in `wxflip` (whose 19 flips in `arm64-wxflip` prove the trace works), as `g5-jit` does.
+- **If the check shows flips,** the inference in §2 is wrong and the plan stops to re-scope this item with the maintainer (the dropped `MAP_JIT` work would come back as a new decision).
+- **Accepted and documented:** native ARM64/ARM64EC JITs (rare in games today) stay on patch 0006's flip; and patch 0006 loops forever on native ARM64 code that stores into its own RWX page ([V] natively; [I] inside Wine; no target game does this).
 
-## 8. Strict x18 (replaces patch 0004)
+## 8. Strict x18 (patch 0004, rewritten)
 
-One patch to `dlls/ntdll/unix/signal_arm64.c`, following `docs/research/2026-10-02-native-arm64/x18-boundaries.md` (whose line numbers predate patches 0001–0014: add 3 for its lines 58–1621 and 8 after them):
-- **OFF** on syscall and unix-call entry, at the dispatchers' kernel-stack labels; **ON** before the x18 reloads on return to PE code, and before user-callback entry.
-- The x18 reads that would run while OFF move earlier; `__wine_syscall_dispatcher_return` reads the TEB from the frame (`[sp,#0x90]`), not x18.
-- Registers are parked in the dispatchers around each toggle.
-- **A wrapper on the nine signal handlers:** it turns the mode ON when the interrupted code ran PE (and back for the handler's own unix work as the doc defines); it passes the toggle's `brk #1` through (`SIGTRAP` back to `SIG_DFL`, then return) so an imbalance kills the process with Apple's annotation; and it checks "PE stack implies ON" on every signal (`ERR` and `abort` on a violation). The wrapper lands in the same patch as the dispatcher toggles, because handlers that run OFF redirect into PE code.
-- About 110–140 lines (the earlier 80–100 missed the three additions).
+One patch to `dlls/ntdll/unix/signal_arm64.c`, following `docs/research/2026-10-02-native-arm64/x18-boundaries.md` (its line numbers are pristine Wine 11.19's and apply directly: only patch 0004 touches this file):
+- **OFF** on syscall and unix-call entry, at the dispatchers' kernel-stack labels; **ON** before the x18 reloads on return to PE code, and before user-callback entry. The x18 reads that would run while OFF move earlier, and `__wine_syscall_dispatcher_return` reads the TEB from `[sp,#0x90]`. Registers are parked in the dispatchers around each toggle.
+- **A wrapper on the nine signal handlers**, with the doc's rule: at entry, if the mode is ON, turn it OFF; at exit, turn it ON only when the PC the handler returns to is PE code (the handlers for `SIGUSR1` and `SIGINT` keep the entry mode, as the doc says). Threads without a TEB (Cocoa, Metal, GCD) are left alone.
+- **The toggle's own trap passes through:** a `SIGTRAP` whose ESR immediate is 1 and whose PC lies inside the toggle routine (in the commpage) goes back to `SIG_DFL` and is re-raised, so an imbalance kills the process instead of becoming a Windows exception.
+- **The invariant:** on threads with a TEB, PE code must be running with the mode ON; a violation writes `x18: PE stack running OFF` with `write(2)` (visible under `WINEDEBUG=-all`) and aborts.
+- **A test hook:** with `WINE_X18_SELFTEST=double_on`, ntdll enables the mode twice at process start (for T3).
+- About 110–140 lines: the doc's 80–100 plus the trap pass-through, the invariant, and the test hook.
 - **Check step `x18`:**
-  - T1: `arm64-x18v.exe`, 72 threads for 3 s each, 0 x18 mismatches;
-  - T2: `x18path`, built aarch64 and x86_64 (under FEX), one line `ok <path>` per path: SEH access violation, `__debugbreak`, SIGILL, Suspend/Get/SetThreadContext, a SendMessage callback, `NtReadFile` into an unmapped buffer, an APC, 1,000 thread create/exit cycles, a raw `syscall`, a FEX-suspended thread; 0 mismatches and no `PE stack running OFF` lines;
-  - T3: a negative program that enables the mode twice must die by `SIGTRAP` with Apple's annotation (exit 133 or a signal status), not as a Windows exception;
-  - a static check: `otool -tV ntdll.so` shows x18 used only inside the dispatcher, callback and dispatcher-return routines, each within an ON window.
-- **Measured, not gated (M2):** the round-trip cost against patch 0004 (an A/B on two builds, once, during development), expected ≤ 4 ns per syscall round trip.
+  - T1: `wine-arm64/tests/arm64-x18v.c` (committed from the sub-project 1 trial's `x18v.c`): 72 threads for 3 s each, 0 x18 mismatches;
+  - T2: `wine-arm64/tests/arm64-x18path.c`, also built as `x64-x18path.exe` (under FEX) by an extra Makefile rule; one line `ok <path>` per path: SEH access violation, `__debugbreak`, SIGILL, Suspend/Get/SetThreadContext, a SendMessage callback, `NtReadFile` into an unmapped buffer, an APC, 1,000 thread create/exit cycles, a raw `syscall`, a FEX-suspended thread; 0 mismatches and no `x18:` line;
+  - T3: `wine` run directly (not through `exe_cmd`) on `arm64-hello.exe` with `WINE_X18_SELFTEST=double_on` must exit with status 133 (`SIGTRAP`), with no `err:seh` line; Apple's annotation is reported from the crash report if one appears, not gated;
+  - T4 (stress): `arm64-x18path.exe stress`: 8 threads loop `NtQuerySystemTime` and a no-op unix call for 10 s while another thread hammers `SuspendThread`/`GetThreadContext`/`ResumeThread` and a timer signal fires every millisecond; 0 mismatches, no trap;
+  - a static check: in `otool -tV ntdll.so` with comments stripped, x18 appears only in `__wine_syscall_dispatcher`, `__wine_unix_call_dispatcher`, `call_user_mode_callback` and `__wine_syscall_dispatcher_return`, each inside an ON window.
+- **Measured, not gated (M2):** the round-trip cost against today's patch 0004 (an A/B on two builds, once, during development), expected ≤ 4 ns per syscall round trip. DXMT frame time isn't used: it is paced by the display (sub-project 2's acceptance).
 - `probes/x18-cache-scan.sh` keeps running on every macOS beta (it still guards `_sigtramp`).
 
 ## 9. Gates
 
+New steps go before `dxmt` in `STEPS` (so they run on a Mac without SMITE 2 or the Rosetta runtime): `fonts-tls`, `msync`, `wxflip-x64`, `x18`. All four join `NEEDS_PREFIX`; `msync`, `wxflip-x64` and `x18` join `NEEDS_FEX`.
+
 | Gate | Pass |
 |---|---|
-| **S1 Licences** | `licences_test.sh` passes; `bundle.sh`'s licence asserts pass |
-| **S2 Text and TLS** | `fonts-tls` passes; `bundle.sh`'s library asserts (install names, dependency paths, x18 scan, symbols) pass |
+| **S1 Licences** | `licences_test.sh` passes on the staged bundle and proves itself red; `bundle.sh`'s licence and signing asserts pass |
+| **S2 Text and TLS** | `fonts-tls` passes; `bundle.sh`'s library asserts (install names, dependency paths, x18 scan with the allowlist, symbols, no build paths) pass |
 | **S3 msync** | `msync` passes in both lanes and both modes |
 | **S4 No flips** | `wxflip-x64` shows 0 flips and `PASS x64-smc` |
-| **S5 Strict x18** | `x18` passes (T1–T3 and the static check); patch 0004 is gone |
-| **S6 No regressions** | Every sub-project 1 and 2 step passes under `WINEMSYNC=1`, including both DXMT lanes and `dxmt-present`; `make test` and `make dxmt-check` pass; `PASS orphans` |
+| **S5 Strict x18** | `x18` passes (T1–T4 and the static check); the once-per-thread hunk is gone |
+| **S6 No regressions** | Every sub-project 1 and 2 step passes under `WINEMSYNC=1`, including both DXMT lanes and `dxmt-present`; `make test`, `sh dxmt/tests/build_test.sh` (which covers the moved `fetch`'s checksum refusal) and `make dxmt-check` pass; `PASS orphans` |
 | **M1 msync** (measured) | `x64-sync`'s timing rows in both modes: uncontended wait and signal, a cross-process wake, create/close |
 | **M2 x18** (measured) | The round-trip A/B of §8 |
 
-**Order of work:** licences (no downloads) → FreeType and gnutls (the first change a user can see) → msync → `wxflip-x64` → strict x18 (last, with everything else green).
+**Order of work:** licences (no downloads) → FreeType and gnutls (the first change a user can see) → msync → `wxflip-x64` → strict x18 (last, with everything else green). §5's reconfigure and §6's protocol bump each force a full Wine rebuild; the plan may take both in one.
 
 ## 10. Errors
 
 | Condition | Behaviour |
 |---|---|
 | A tarball's checksum doesn't match its pin | The build stops, names the file and moves it aside (the `fetch` helper's behaviour) |
-| A dependency fails to build | The build stops and names the library and its log |
-| Wine's configure can't find FreeType or gnutls headers | configure fails (`--with-…`), naming the library |
+| A dependency fails to build, or links something outside `/usr/lib` and `/System` | The build stops and names the library and its log |
+| Wine's configure can't find FreeType or gnutls, or Homebrew shows up in its flags | configure fails (`--with-…`) or the build stops, naming the library |
 | A bundled Mach-O depends on a path outside `/usr/lib`, `/System` and `@…` | `bundle.sh` stops, naming the file and the path; nothing is staged |
-| x18 instructions in a bundled dylib | `bundle.sh` stops, naming the library and the first instruction |
+| An x18 hit not in `x18-allow.txt`, or a changed count | `bundle.sh` stops, naming the file, the routine and the instruction |
 | A licence file missing, or a new FEX external | `bundle.sh` stops, naming it |
-| Client and wineserver disagree on `WINEMSYNC` | The client exits with msync's message (CrossOver's behaviour); `check.sh` never mixes modes in one prefix without `wineserver -k` |
-| An x18 toggle imbalance | The process dies by `SIGTRAP` with Apple's annotation |
-| PE code found running with x18 OFF in a signal | `ERR` line, then `abort` |
+| Client and wineserver disagree on `WINEMSYNC` | The client exits (CrossOver's behaviour); its message is an `ERR` line, silent under `WINEDEBUG=-all`. `check.sh` never mixes modes in one prefix without `wineserver -k` |
+| An x18 toggle imbalance | The process dies by `SIGTRAP` (status 133) |
+| PE code found running with x18 OFF in a signal | `x18: PE stack running OFF` on stderr, then `abort` |
 
 ## 11. Acceptance
 
-Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with its time (including the deps), every check step, S1–S6, M1's timing rows in both modes, M2's A/B, the red runs before each change (37 MISSING; dbu 0,0 and `0x80090305`), the bundle's new layout and its licence tree, and the pins and patch list.
+Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with its time (including the deps), every check step, S1–S6, M1's timing rows in both modes, M2's A/B, the red runs before each change (37 MISSING; dbu 0,0 and `0x80090305`), the bundle's new layout and its licence tree, and the pins and patch list. `wine-arm64/README.md` gains the new steps, the deps, the msync and x18 credits in its licence section, and the check's new run time.
 
 ## 12. Risks
 
-- **The gnutls build:** folding static nettle and gmp into the shared gnutls is untested (fallback: 5 dylibs); nettle 4.0 is about 8 months old with a soname change (fallback: 3.10.2, a fifth pin).
 - **msync** has not been seen running natively on arm64; its known correctness gaps (PulseEvent, wait-all) stay; a wineserver left in the other mode kills new clients; the protocol bump makes old servers and new clients refuse each other.
-- **x18:** subtle assembly; a signal can land between a toggle and its neighbour (T1–T2 stress it); every Wine rebase touches `signal_arm64.c`.
+- **x18:** subtle assembly; a signal can land between a toggle and its neighbour (T4 stresses it); every Wine rebase touches `signal_arm64.c`.
+- **The x18 allowlist** names gnutls's CRYPTOGAMS data words by routine and count; a gnutls update that changes them fails the build until the allowlist is re-checked (by reading the routine, not by raising the count).
 - **The zero-flip inference** (§7) is untested until the check runs; if it fails, the scope comes back to the maintainer.
+- **Library updates:** a newer nettle, gnutls or FreeType may need configure changes; the deps step's asserts catch a leak or a new dependency.
 - **Notarization** with the restricted entitlement stays unknown until sub-project 5.
 - **Licence completeness:** the asserts catch missing files and new FEX externals, not a wrong licence choice; the elections and the README are reviewed by the maintainer. Not legal advice.
 
@@ -201,8 +224,8 @@ Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with i
 
 1. §2 row 3: "Strict x18 toggling (§5.3); msync from CrossOver wine1117; FreeType and gnutls built from pinned source and bundled; licence and notice files for every shipped component."
 2. §2 row 4: depends on 1, not 3; owns lsteamclient end to end, including the Steamworks licence decision.
-3. §2: a new row, "Media: FFmpeg for `winedmo` and/or GStreamer for `winegstreamer`" (today `winedmo` builds as a stub and `winegstreamer` isn't built; game intro movies and cutscenes are the impact).
+3. §2: a new row 10, "Media: FFmpeg for `winedmo` and/or GStreamer for `winegstreamer`" (today `winedmo` builds as a stub and `winegstreamer` isn't built; game intro movies and cutscenes are the impact).
 4. §2 row 8: adds FEX's WoW64 JIT dual view.
 5. §3.4: the 23 ns `MAP_JIT` figure is for JITs that switch modes themselves; Windows RWX memory can't use `MAP_JIT` (§2 above).
-6. §5.3: about 110–140 lines, the three additions, and the line-number offset.
+6. §5.3: about 110–140 lines: the trap pass-through, the invariant and a test hook added to the doc's design.
 7. §11: "Games with their own JIT" rewritten (x64 JITs go through FEX, checked by `wxflip-x64`; native ARM64 JITs keep patch 0006's flip and its same-page livelock); new risks: a Homebrew leak through configure (closed by §5), and the `WINEMSYNC` agreement rule.
