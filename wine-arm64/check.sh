@@ -31,11 +31,12 @@ RWINE="$RTOOL/Libraries/Wine/bin"
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 # NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit fonts-tls dxmt"
-STEPS="$STEPS dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 g5-jit"
+STEPS="$STEPS fonts-tls dxmt dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
 NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit fonts-tls dxmt $NEEDS_DXMT g4-bench"
-NEEDS_FEX="$G1 g2-litmus g5-jit $NEEDS_DXMT g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 g5-jit fonts-tls dxmt $NEEDS_DXMT"
+NEEDS_PREFIX="$NEEDS_PREFIX g4-bench"
+NEEDS_FEX="$G1 g2-litmus wxflip-x64 g5-jit $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
@@ -252,6 +253,18 @@ wxflip_cmd() {
   [ "$n" -ge 10 ] || { echo "FAIL wxflip: $n trace lines, wanted at least 10"; return 1; }
 }
 
+# Gate S4 (ship-base spec §8): x64 code that rewrites its own RWX memory under FEX never flips W^X. x64-smc allocates
+# PAGE_EXECUTE_READWRITE memory and makes its own .text RWX, then rewrites and runs code in both; every trace line
+# would be a flip. wxflip, run first, shows the trace counts flips.
+wxflip_x64_cmd() {
+  out=$(WINEDEBUG=+wxflip wine_run "$TESTS/x64-smc.exe" 2>&1 | tr -d '\r') || true
+  echo "$out"
+  n=$(echo "$out" | LC_ALL=C /usr/bin/grep -c 'trace:wxflip' || true)
+  echo "info wxflip-x64: $n flips"
+  echo "$out" | LC_ALL=C /usr/bin/grep -qx 'PASS x64-smc' || { echo "FAIL wxflip-x64: no PASS line"; return 1; }
+  [ "$n" = 0 ] || { echo "FAIL wxflip-x64: $n flips"; return 1; }
+}
+
 # x64-bench's rows (gates G5 and G4). bench_rows <file>: fails, saying so, unless the run printed every one.
 BENCH_ROWS=36
 bench_rows() {
@@ -438,6 +451,7 @@ run_step() {
     g2-litmus) step g2-litmus 1800 g2_litmus_cmd; grep '^info ' "$WORK/g2-litmus.log" ;;
     viewec) step viewec 60 exe_cmd arm64ec-viewec ;;
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
+    wxflip-x64) step wxflip-x64 60 wxflip_x64_cmd; grep '^info ' "$WORK/wxflip-x64.log" ;;
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     fonts-tls) step fonts-tls 60 fonts_tls_cmd ;;
@@ -459,8 +473,9 @@ done
 for s in $want; do
   case " $NEEDS_FEX " in *" $s "*) want="fex $want" ;; esac
 done
-# g5-jit's zero flips mean something only once wxflip has shown the trace counts flips: its positive control.
-case " $want " in *" g5-jit "*) want="wxflip $want" ;; esac
+# g5-jit's and wxflip-x64's zero flips mean something only once wxflip has shown the trace counts flips: their
+# positive control.
+case " $want " in *" g5-jit "* | *" wxflip-x64 "*) want="wxflip $want" ;; esac
 for s in $want; do
   case " $NEEDS_DXMT " in *" $s "*) want="dxmt $want" ;; esac
 done
