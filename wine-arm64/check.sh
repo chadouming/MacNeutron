@@ -3,7 +3,8 @@
 # Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`, and the
 # dxmt steps `make dxmt dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench also needs MacNeutron's runtime-v4.7.3
 # installed (MACNEUTRON_TOOL names another tool folder), and the dxmt-* steps, for their D3DMetal reference, the same
-# with GPTK imported and its tarball cached.
+# with GPTK imported and its tarball cached. dxmt-x64's FSR 3 check needs SMITE 2 installed (Steam): its
+# amd_fidelityfx_dx12.dll, read from the game's install, never copied.
 # Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
 # Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
 # Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
@@ -389,7 +390,7 @@ dxmt_present_cmd() {
 # on Rosetta. dxmt_lane_cmd <lane> <machine> <tests folder> <present_loop.exe> [line it must print]: passes when every
 # program is built for <machine> (ARM64EC or AMD64, as llvm-readobj reads the hybrid metadata: both lanes' headers say
 # 0x8664), the check ran in arm64 mode and all passed; else its last line gives the number of FAIL lines and the first
-# (none: the check's own).
+# (none: the check's own), or, for a missing line, dxmt/check.sh's skip line for it (FSR 3: SMITE 2 isn't installed).
 dxmt_lane_cmd() {
   l="$WORK/dxmt-$1.log" t0=$(date +%s) ro="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-readobj"
   for e in "$3"/*.exe "$4"; do
@@ -402,7 +403,7 @@ dxmt_lane_cmd() {
   n=$(grep -c '^FAIL' "$l" || true)
   [ "$n" = 0 ] || { echo "$n FAIL lines; first: $(grep -m 1 '^FAIL' "$l")"; return 1; }
   grep -qx 'dxmt-check: all passed' "$l" || { grep -v '^info dxmt-' "$l" | tail -n 1; return 1; }
-  [ -z "${5:-}" ] || grep -qxF "$5" "$l" || { echo "no '$5' line"; return 1; }
+  [ -z "${5:-}" ] || grep -qxF "$5" "$l" || { echo "$(grep -m 1 '^skip the FSR 3' "$l" || echo "no '$5' line")"; return 1; }
 }
 
 run_step() {

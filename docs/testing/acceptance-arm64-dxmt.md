@@ -6,6 +6,8 @@ maintainer's Mac, with:
 - MacNeutron's runtime-v4.7.3 installed, with its tarball cached in `~/Library/Caches/MacNeutron/` (G4's baseline and
   the D3DMetal reference);
 - GPTK imported (the D3DMetal reference of `dxmt/check.sh`, in both arm64 lanes and in `make dxmt-check`);
+- SMITE 2 installed (Steam), for `dxmt-x64`'s FSR 3 swap chain check (its `amd_fidelityfx_dx12.dll`, read from the
+  game's install); without it `dxmt-x64` fails naming the skip, and the later steps (`g4-bench`) don't run;
 - Screen Recording granted to the app that runs the check (System Settings › Privacy & Security › Screen Recording),
   for `winshot` in `dxmt-present`. Windows appear on the display during the check.
 
