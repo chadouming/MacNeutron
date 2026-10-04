@@ -2,8 +2,8 @@
 
 - **Date:** 2026-10-04 (revised the same day after an adversarial review: three lenses, each re-checked by a sceptic;
   `docs/research/2026-10-04-arm64-release/spec-review.md`)
-- **Status:** Draft, awaiting the maintainer's review. The design was approved in conversation section by section on
-  2026-10-04, with the maintainer's decisions in §1.
+- **Status:** Approved by the maintainer on 2026-10-04 ("yes, go ahead"), after the design was approved in conversation
+  section by section the same day, with the maintainer's decisions in §1.
 - **Builds on:**
   - `2026-10-02-macneutron-native-arm64-design.md` (the roadmap; this spec amends its §1, §2 and §11, see §13)
   - `2026-10-03-macneutron-arm64-dxmt-design.md` (DXMT in `wine.app`; its §6 says how a prefix gets DXMT)
