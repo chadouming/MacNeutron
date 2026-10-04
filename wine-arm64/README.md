@@ -4,7 +4,7 @@
 with our patches, FEX, which runs x64 Windows code inside it, and our DXMT built for arm64 (Direct3D 11/12; D3D10's front end bundled, untested),
 staged as one signed, entitled `build/wine-arm64/wine.app`. Every Windows process runs natively on arm64 with 4K
 pages; only the game's x86-64 code is translated. It also carries FreeType and gnutls built from pinned source
-(Windows text, dialogs and TLS), msync (on by default), the Steam bridge (Proton's `lsteamclient`, built for arm64),
+(Windows text, dialogs and TLS), msync (on wherever `WINEMSYNC=1` is set: `check.sh`, later the launcher), the Steam bridge (Proton's `lsteamclient`, built for arm64),
 strict x18 toggling, and every component's licence in `Contents/Resources/licenses`.
 
 Design, gates and risks: [`docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md`](../docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md)
@@ -49,11 +49,12 @@ make wine-arm64        # fetch Wine, FEX and DXMT at the pins, patch, build, sig
                        # a cold first build includes the arm64 LLVM (about 2 min here) and the deps (about 3 min)
 make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, D2-D4 and S1-S7 (about 16 min)
 
-make build wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec  # what check.sh needs besides the runtime
+make build bridge wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec  # what check.sh needs besides the runtime
 sh wine-arm64/check.sh g2-litmus   # named steps only (and the steps they need); see STEPS in check.sh
 ```
 
-`make wine-arm64-check` builds the launcher (`make build`), the test programs (`make wine-arm64-tests`) and what the
+`make wine-arm64-check` builds the launcher (`make build`), the Steam bridge (`make bridge`: `steam-bridge` needs
+`build/bridge/arm64/steam.exe` and `build/bridge/steamprobe.exe`), the test programs (`make wine-arm64-tests`) and what the
 DXMT steps run (`make dxmt dxmt-tests presenter dxmt-tests-arm64ec`: our Rosetta DXMT, the x64 and ARM64EC D3D test
 programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
 runs the launcher). Gate G4's Rosetta baseline runs MacNeutron's installed runtime-v4.7.3 (`MACNEUTRON_TOOL` names
@@ -69,15 +70,15 @@ The full check needs, besides the build:
 - **Screen Recording** for the app that runs the check, and nothing in native full screen on the main display
   (`dxmt-present`, below). Windows appear on the display during the check.
 
-`make wine-arm64-check` first runs `licences_test.sh` on the staged bundle and its `--self-test`, which must go red on a
-copy with a licence file deleted and on one with an extra FEX external (gate S1), then `check.sh`. The ship-base steps
-(ship-base spec §10), before the DXMT steps:
+`make wine-arm64-check` runs `licences_test.sh` (after `mode_test` and `profile_test`) before `check.sh`: on the
+staged bundle, and its `--self-test`, which must go red on a copy with a licence file deleted and on one with an extra
+FEX external (gate S1). The ship-base steps (ship-base spec §10), before the DXMT steps:
 
 | Step | What |
 |---|---|
 | `wxflip-x64` | Gate S4: `x64-smc` under FEX rewrites and runs code in RWX memory and its own `.text`, with 0 `trace:wxflip` lines |
 | `msync` | Gate S3: `x64-sync` under FEX with `WINEMSYNC=1`, then `0`, each against a server the step starts; 14 gated rows, both mismatch directions, and the timing rows (M1) |
-| `x18` | Gate S5: 16 threads checking x18 (T1), every path to unix code and back in both lanes (T2), a double enable that must die by `SIGTRAP`, status 133 (T3), a suspend stress (T4), and where `ntdll.so` names x18 |
+| `x18` | Gate S5: 16 threads checking x18 (T1), every path to unix code and back in both lanes (T2), a double enable that must reach the toggle's trap, which exits 133 in self-test mode without a crash report (T3), a suspend stress (T4), and where `ntdll.so` names x18 |
 | `fonts-tls` | Gate S2: Tahoma's metrics and dialog base units (win32u's FreeType), DirectWrite's font families, schannel credentials and a PFX import (gnutls) |
 | `steam-bridge` | Gate S7: the arm64 Steam bridge, below |
 

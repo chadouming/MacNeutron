@@ -294,8 +294,8 @@ S1-S7 passed against these tests, which are lighter than the design as first wri
   an ON window is proven at run time by T1-T4 and the invariant, not statically.
 - **Amended after the plan review** (spec §5): the build-path assert covers only the two new dylibs,
   `libfreetype.6.dylib` and `libgnutls.30.dylib`, after `strip -S` (it was every shipped dylib; DXMT's `winemetal.so`
-  names build paths by design), although §10's S2 row says "no build paths". Spec §7: Steam's x18 scan reports the
-  arm64 slice's hit count; the hits are not classified one by one.
+  names build paths by design), although §10's S2 row says "no build paths".
+- **(spec §7)** Steam's x18 scan reports the arm64 slice's hit count; the hits are not classified one by one.
 - **Patch 0017** carries a follow-up to 0004 instead of rewriting 0004 in place (spec §3; see Pins and patches).
 
 The DXMT lanes' frame-time lines (4.7 / 4.0 ms ARM64EC lane, 5.0 / 4.0 ms x64 lane, arm64 / Rosetta) are not
@@ -320,8 +320,8 @@ woke 4 of 4 waiters in every run here (3 of 4 once in Task 4, msync's known gap)
 The in-process rows moved since Task 4: uncontended wait 102-143 ns here against 64-67 ns in Task 4's five runs, and
 signal 77-101 against 45 and 46; the mode 0 rows and create/close are where they were. Between Task 4's bundle and this
 one, patches 0004 (rewritten), 0016 and 0017 landed. Strict x18 adds two toggles to each syscall, which M2 measures
-at 1.6 ns per round trip in the aarch64 lane, too little to explain 40-80 ns; the cause was not established (M1 is
-measured, not gated).
+at 1.6 ns per round trip in the aarch64 lane, too little to explain 40-80 ns (M1 is measured, not gated). The A/B
+after patch 0018, at the end, traces it to the machine's state.
 
 ### 5. M2 x18 (measured)
 
@@ -441,3 +441,14 @@ returned), printing `info x18 crash reports: <n>`.
   `x18: toggle trap passed through (self-test)` and no `err:seh`; T4 307 × 10^6 calls and 77,984 suspends, 0
   mismatches; the static check unchanged (9 uses in the same routines); `info x18 crash reports: 0`. The
   `DiagnosticReports` listing of `wine-*` files was the same before the run and 5 s after it.
+
+M1's A/B, run by the controller after the acceptance (the `msync` step alone, at idle, `WINEMSYNC=1` / `0`, ns):
+
+| Bundle | Uncontended wait | Uncontended signal | Cross-process wake |
+|---|---|---|---|
+| Current (0004 strict, 0017), three runs | 141-142 / 8,300-8,500 | 99-100 / 7,100-7,400 | 4,290-4,320 / 9,500-9,700 |
+| Task 4's saved bundle (old 0004, same msync), two runs | 137-139 | 96-97 | 4,180-4,290 |
+
+The same Task 4 bundle measured 64-67 ns (wait) during Task 4, so the shift in §4 is the machine's state (during Task 4
+a game held the CPU cores at high clocks), not strict x18 or a later patch. msync's gain over server sync holds either
+way: about 60 times for an uncontended wait at idle.
