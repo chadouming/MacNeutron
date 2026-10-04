@@ -386,18 +386,23 @@ dxmt_present_cmd() {
 }
 
 # dxmt/check.sh in arm64 mode (arm64 DXMT spec §7): our DXMT on this runtime, in clones of the prefix, against D3DMetal
-# on Rosetta. dxmt_lane_cmd <lane> <tests folder> <present_loop.exe> [line it must print]: passes when the check ran in
-# arm64 mode and all passed; else its last line gives the number of FAIL lines and the first (none: the check's own).
+# on Rosetta. dxmt_lane_cmd <lane> <machine> <tests folder> <present_loop.exe> [line it must print]: passes when every
+# program is built for <machine> (ARM64EC or AMD64, as llvm-readobj reads the hybrid metadata: both lanes' headers say
+# 0x8664), the check ran in arm64 mode and all passed; else its last line gives the number of FAIL lines and the first
+# (none: the check's own).
 dxmt_lane_cmd() {
-  l="$WORK/dxmt-$1.log" t0=$(date +%s)
-  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_PREFIX="$PFX" MACNEUTRON_ARM64_TESTS="$2" \
-    MACNEUTRON_ARM64_LOOP="$3" MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
+  l="$WORK/dxmt-$1.log" t0=$(date +%s) ro="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-readobj"
+  for e in "$3"/*.exe "$4"; do
+    "$ro" --file-headers "$e" | grep -q "Machine: IMAGE_FILE_MACHINE_$2 " || { echo "${e##*/} is not built for $2"; return 1; }
+  done
+  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_PREFIX="$PFX" MACNEUTRON_ARM64_TESTS="$3" \
+    MACNEUTRON_ARM64_LOOP="$4" MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
   echo "info dxmt-$1: $(($(date +%s) - t0)) s"
   grep -q '^info arm64 mode: ' "$l" || { echo "dxmt/check.sh did not run in arm64 mode"; return 1; }
   n=$(grep -c '^FAIL' "$l" || true)
   [ "$n" = 0 ] || { echo "$n FAIL lines; first: $(grep -m 1 '^FAIL' "$l")"; return 1; }
   grep -qx 'dxmt-check: all passed' "$l" || { grep -v '^info dxmt-' "$l" | tail -n 1; return 1; }
-  [ -z "${4:-}" ] || grep -qxF "$4" "$l" || { echo "no '$4' line"; return 1; }
+  [ -z "${5:-}" ] || grep -qxF "$5" "$l" || { echo "no '$5' line"; return 1; }
 }
 
 run_step() {
@@ -424,9 +429,9 @@ run_step() {
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     dxmt) step dxmt 120 dxmt_cmd ;;
     dxmt-present) step dxmt-present 600 dxmt_present_cmd; grep '^info ' "$WORK/dxmt-present.log" ;;
-    dxmt-arm64ec) step dxmt-arm64ec 3600 dxmt_lane_cmd arm64ec "$B/dxmt-tests-arm64ec" \
+    dxmt-arm64ec) step dxmt-arm64ec 3600 dxmt_lane_cmd arm64ec ARM64EC "$B/dxmt-tests-arm64ec" \
       "$B/dxmt-tests-arm64ec/present_loop.exe"; grep '^info ' "$WORK/dxmt-arm64ec.log" ;;
-    dxmt-x64) step dxmt-x64 3600 dxmt_lane_cmd x64 "$B/dxmt-tests" "$B/presenter/present_loop.exe" \
+    dxmt-x64) step dxmt-x64 3600 dxmt_lane_cmd x64 AMD64 "$B/dxmt-tests" "$B/presenter/present_loop.exe" \
       'ok   the FSR 3 swapchain proxy presents on our DXMT'; grep '^info ' "$WORK/dxmt-x64.log" ;;
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     *) die "no runner for $1" ;;
