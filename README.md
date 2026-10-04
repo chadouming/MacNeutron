@@ -19,6 +19,9 @@ make wine-arm64        # native arm64 Wine + FEX in a signed wine.app (needs the
 make wine-arm64-check  # its gates under real Wine
 ```
 
+The arm64 runtime now runs Direct3D 10/11/12 through our DXMT built for arm64, ARM64EC programs natively and x64
+ones under FEX (`docs/testing/acceptance-arm64-dxmt.md`).
+
 `make dxmt` and `make app` need `brew install cmake ninja meson` and Xcode's Metal Toolchain
 (`xcodebuild -downloadComponent MetalToolchain`). Windows-side binaries are built with Clang from the pinned llvm-mingw,
 which the build fetches once (118 MB).

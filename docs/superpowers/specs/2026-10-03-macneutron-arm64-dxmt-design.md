@@ -1,7 +1,7 @@
 # MacNeutron — Native arm64 stack, sub-project 2: DXMT for arm64
 
 - **Date:** 2026-10-03 (revised the same day after an adversarial review)
-- **Status:** Written for autonomous execution. The maintainer asked to carry this sub-project through design, plan and implementation without approval stops ("keep going until it's working"); every decision taken on their behalf is in the decisions table and the execution ledger.
+- **Status:** Implemented 2026-10-03; gates D1–D5 pass and D6 is measured: `docs/testing/acceptance-arm64-dxmt.md`. Written for autonomous execution: the maintainer asked to carry this sub-project through design, plan and implementation without approval stops ("keep going until it's working"); every decision taken on their behalf is in the decisions table and the execution ledger.
 - **Builds on:**
   - `2026-10-02-macneutron-native-arm64-design.md` (sub-project 1: the entitled, 4K-page `wine.app`, FEX, `wine-arm64/`)
   - `2026-09-28-macneutron-dxmt-fork-design.md` (our DXMT fork, `dxmt/` build, `dxmt/check.sh`)

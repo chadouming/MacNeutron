@@ -1,14 +1,17 @@
 # wine-arm64: native arm64 Wine and FEX
 
 `make wine-arm64` builds the first stage of MacNeutron's native arm64 stack: upstream Wine 11.19 (ARM64EC and arm64),
-with our patches, and FEX, which runs x64 Windows code inside it, staged as one signed, entitled
-`build/wine-arm64/wine.app`. Every Windows process runs natively on arm64 with 4K pages; only the game's x86-64 code
-is translated.
+with our patches, FEX, which runs x64 Windows code inside it, and our DXMT built for arm64 (Direct3D 10/11/12),
+staged as one signed, entitled `build/wine-arm64/wine.app`. Every Windows process runs natively on arm64 with 4K
+pages; only the game's x86-64 code is translated.
 
-Design, gates and risks: [`docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md`](../docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md).
-Results on the maintainer's Mac: [`docs/testing/acceptance-arm64-wine.md`](../docs/testing/acceptance-arm64-wine.md).
+Design, gates and risks: [`docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md`](../docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md)
+(Wine and FEX) and [`docs/superpowers/specs/2026-10-03-macneutron-arm64-dxmt-design.md`](../docs/superpowers/specs/2026-10-03-macneutron-arm64-dxmt-design.md) (DXMT).
+Results on the maintainer's Mac: [`docs/testing/acceptance-arm64-wine.md`](../docs/testing/acceptance-arm64-wine.md) and
+[`docs/testing/acceptance-arm64-dxmt.md`](../docs/testing/acceptance-arm64-dxmt.md).
 
-This is a development build for sub-project 1. The shipped runtime is still the Rosetta one (`make dxmt`, the app).
+This is a development build for sub-projects 1 and 2. The shipped runtime is still the Rosetta one (`make dxmt`, the
+app).
 
 ## Requirements
 
@@ -34,17 +37,33 @@ profile.
 ## Build and check
 
 ```sh
-make wine-arm64        # fetch Wine and FEX at the pins, patch, build, sign; build/wine-arm64/wine.app (a few minutes the first time)
-make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5 (about 8 min)
+make wine-arm64        # fetch Wine, FEX and DXMT at the pins, patch, build, sign; build/wine-arm64/wine.app (a few minutes the first time)
+make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, DXMT gates D2-D4 (about 15 min)
 
-make build wine-arm64-tests        # what check.sh needs besides the runtime: the launcher and the test programs
+make build wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec  # what check.sh needs besides the runtime
 sh wine-arm64/check.sh g2-litmus   # named steps only (and the steps they need); see STEPS in check.sh
 ```
 
-`make wine-arm64-check` builds the launcher (`make build`) and the test programs (`make wine-arm64-tests`) itself, but
-`make wine-arm64` does not, and `check.sh` run on its own needs both (G4 runs the launcher). Gate G4's Rosetta
-baseline runs MacNeutron's installed runtime-v4.7.3 (`MACNEUTRON_TOOL` names another tool folder). Each run starts from
-a clean prefix under `build/wine-arm64 check/`, and ends by checking that no process of either runtime is left.
+`make wine-arm64-check` builds the launcher (`make build`), the test programs (`make wine-arm64-tests`) and what the
+DXMT steps run (`make dxmt dxmt-tests presenter dxmt-tests-arm64ec`: our Rosetta DXMT, the x64 and ARM64EC D3D test
+programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
+runs the launcher). Gate G4's Rosetta baseline runs MacNeutron's installed runtime-v4.7.3 (`MACNEUTRON_TOOL` names
+another tool folder). Each run starts from a clean prefix under `build/wine-arm64 check/`, and ends by checking that
+no process of either runtime is left.
+
+The DXMT steps, after `g5-jit`:
+
+| Step | What |
+|---|---|
+| `dxmt` | Copies the bundle's front ends into the prefix's system32, turns the crash dialog off, checks the builtin markers and `DXMT/version` |
+| `dxmt-present` | Gate D2: `present_loop` (D3D11) and `d3d12_clear` (D3D12) windows on screen in both lanes, each read by `winshot`; then 20 window cycles (ARM64EC) |
+| `dxmt-arm64ec` | Gate D3: `dxmt/check.sh` in arm64 mode with the ARM64EC test programs |
+| `dxmt-x64` | Gate D4: the same with the x64 test programs under FEX, the FSR 3 check included |
+
+`winshot` (`tools/winshot.c`) captures a window, so the app that runs the check (Terminal, or whatever starts `make`)
+needs System Settings › Privacy & Security › Screen Recording; without it `dxmt-present` fails and names that setting.
+The lanes compare our DXMT with D3DMetal on the installed Rosetta runtime, as `make dxmt-check` does, so they need
+what it needs: runtime-v4.7.3 installed with its tarball cached in `~/Library/Caches/MacNeutron/`, and GPTK imported.
 
 ## Layout
 
