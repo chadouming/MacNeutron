@@ -454,3 +454,39 @@ M1's A/B, run by the controller after the acceptance (the `msync` step alone, at
 The same Task 4 bundle measured 64-67 ns (wait) during Task 4, so the shift in §4 is the machine's state (during Task 4
 a game held the CPU cores at high clocks), not strict x18 or a later patch. msync's gain over server sync holds either
 way: about 60 times for an uncontended wait at idle.
+
+### The final review's fix pass: patch 0019
+
+The final whole-branch review found one Important licence gap and several Minor items; Task 9 fixed them in one pass
+(repository `e3fe519`, Wine `dd92a4b`):
+- **Licences:** `libgnutls.30.dylib` holds the aarch64 CRYPTOGAMS routines, inih and randomart, and
+  `libfreetype.6.dylib` the BDF and PCF drivers and `ft_hash`, whose notices the bundle lacked. It now carries
+  `gnutls/cryptogams-license.txt`, `gnutls/inih-LICENSE.txt`, `freetype/bdf-README` and `freetype/pcf-README`;
+  `NOTICES.md` quotes randomart's (Markus Friedl, Alexander von Gernler) and fthash's notices, and its intro lists every
+  licence folder. **Red:** the extended `licences_test.sh` on the old bundle printed `MISSING freetype/bdf-README`,
+  `MISSING freetype/pcf-README`, `MISSING gnutls/cryptogams-license.txt`, `MISSING gnutls/inih-LICENSE.txt`,
+  `MISSING NOTICES.md entry for Markus Friedl`, `FAIL licences_test`. **Green:** `PASS licences_test` and
+  `PASS licences_test self-test` on the new bundle.
+- **Wine 0019** `ntdll: Toggle x18 on above the new callback frame, and check the toggle's layout.`: 0004 moved `sp` to
+  the new syscall frame before the ON toggle on every callback, so a suspend in that window read a frame holding only
+  `prev_frame` and `syscall_cfa` (stale pc, sp and x[] for the suspender; a lost SetThreadContext). `sp` now moves
+  there only in the trace branch, as upstream does, and the toggle runs on the old `sp`. `signal_init_process` checks
+  that `os_set_custom_x18_abi_enabled` has `brk #1` at +0x58 and +0x78 (it does on macOS 27.0.1: a probe read
+  `d4200020` at both) and prints one `ERR` line otherwise. No new test: a suspend in the old window reads the previous
+  callback's frame at the same address, so a test cannot tell the two orders apart. `sh wine-arm64/check.sh x18` on the
+  development build: `PASS boot`, `PASS fex`, `PASS x18`, `PASS orphans` (T1 35.8 × 10^9 checks, 0 bad; T4 381 × 10^6
+  calls and 77,312 suspends; 9 x18 uses in the same routines; `info x18 crash reports: 0`).
+- **build.sh:** the bundle's SOURCE names a clean commit after a dirty build is committed (the first `make wine-arm64`
+  after the commit said `bundling`, SOURCE went from `1736695…+dirty` to `e3fe519…`, the second said `up to date`);
+  `CPATH`, `LIBRARY_PATH`, `CFLAGS` and `CXXFLAGS` are unset for the deps and Wine's configure; the `config.log` scan
+  covers `/usr/local` and `/opt/local`; `config.h`'s `SONAME_` lines must be exactly FreeType's, gnutls's and libodbc's;
+  the deps re-unpack goes through `<name>.tmp`; `msgfmt` (gettext) is a required tool.
+
+Results on the applied bundle (`e3fe519`):
+- `make wine-arm64-check` (full) in 972 s, every step PASS: `mode_test`, `profile_test`, `licences_test` (+ self-test),
+  `macos`, `signature`, `boot`, `pages`, `unentitled`, `arm64`, `isec`, `g3-cpu`, `fex`, `g1-hello`, `g1-seh`,
+  `g1-threads`, `g1-kuser`, `g1-smc`, `g1-tsc`, `g1-unaligned`, `g2-litmus`, `viewec`, `wxflip`, `wxflip-x64`, `msync`,
+  `x18`, `g5-jit`, `fonts-tls`, `steam-bridge`, `dxmt`, `dxmt-present`, `dxmt-arm64ec`, `dxmt-x64`, `g4-bench`,
+  `PASS orphans`. M1 (ns, `WINEMSYNC=1` / `0`): uncontended wait 127 / 8,249, signal 93 / 6,998, cross-process wake
+  4,388 / 11,139. x18: T1 33.3 × 10^9 checks, 0 bad; T4 403 × 10^6 calls and 72,444 suspends; crash reports 0.
+- `make test` (197 tests), `sh dxmt/tests/build_test.sh`, `make bridge-check` and `make dxmt-check` all pass.
