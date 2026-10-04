@@ -83,9 +83,9 @@ if [ -n "$ARM64" ]; then
   mkdir "$WORK/arm64"
   for p in ours ours-A ours-B ours-C ours-D ours-E; do cp -cR "$APFX" "$WORK/arm64/$p"; done
 fi
-# At any exit, and on TERM (wine-arm64/check.sh stops a step so): the lanes and what they run (a snapshot, taken first:
-# once a lane is gone its children belong to launchd), then, in arm64 mode, the arm64 prefixes' Wine. The lanes are
-# background subshells, which neither run these traps nor take SIGINT.
+# At any exit, on TERM (wine-arm64/check.sh stops a step so) and on INT (Ctrl-C): the lanes and what they run (a
+# snapshot, taken first: once a lane is gone its children belong to launchd), then, in arm64 mode, the arm64 prefixes'
+# Wine. The lanes are background subshells, which neither run these traps nor take SIGINT.
 pA= pB= pC= pD= pE=
 stop_lanes() {
   for p in $pA $pB $pC $pD $pE; do
@@ -99,6 +99,7 @@ stop_lanes() {
 }
 trap stop_lanes EXIT
 trap 'exit 143' TERM
+trap 'exit 130' INT
 # Helpers the lanes share. invalid <run>: the Metal API validation errors (MTL_DEBUG_LAYER=1, logging instead of
 # aborting) a run logged; each has "Validation" in its first line, as does the line saying it's on (once a process),
 # which doesn't count. "off" when no such line says so: a run validation never switched on for can't count as clean.

@@ -42,7 +42,7 @@ presenter-check: presenter
 	sh presenter/check.sh
 
 # MacNeutron's DXMT fork with Direct3D 12 (docs/superpowers/specs/2026-09-28-macneutron-dxmt-fork-design.md).
-# First run: about 500 MB of downloads and a 30-60 minute LLVM build; see dxmt/build.sh.
+# First run: about 500 MB of downloads and a few minutes of LLVM build; see dxmt/build.sh.
 dxmt:
 	sh dxmt/build.sh
 

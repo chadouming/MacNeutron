@@ -38,6 +38,7 @@ profile.
 
 ```sh
 make wine-arm64        # fetch Wine, FEX and DXMT at the pins, patch, build, sign; build/wine-arm64/wine.app (a few minutes the first time)
+                       # a cold first build includes the arm64 LLVM (about 2 min here)
 make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, DXMT gates D2-D4 (about 15 min)
 
 make build wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec  # what check.sh needs besides the runtime
@@ -76,7 +77,7 @@ run.
 | `patches/wine/`, `patches/fex/`, `patches/dxmt/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
 | `build.sh`, `bundle.sh` | Build, then assemble and sign `wine.app`, and check the result |
 | `wine.entitlements`, `Info.plist` | The loader's entitlements and the bundle's identity |
-| `check.sh`, `tests/`, `tools/` | The checks, the test programs (`x64-*`, `arm64*`) and the helpers behind G3 and G4 |
+| `check.sh`, `tests/`, `tools/` | The checks, the test programs (`x64-*`, `arm64*`), and the helpers behind G3, G4 and D2 (`winshot`) |
 | `export.sh` | Writes commits made in the source trees back to `patches/` |
 
 ## Development loop

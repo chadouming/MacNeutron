@@ -151,7 +151,7 @@ The draft in the research folder is the starting point. Known limits it shares w
 | `dxmt-arm64ec` | `dxmt/check.sh` in arm64 mode with the ARM64EC programs: `dxmt-check: all passed` |
 | `dxmt-x64` | `dxmt/check.sh` in arm64 mode with the x64 programs under FEX: `dxmt-check: all passed`, and its FSR 3 check ran (`ok   the FSR 3 swapchain proxy presents on our DXMT`, not the skip line), which needs SMITE 2 installed (its `amd_fidelityfx_dx12.dll`, read from the game's install) |
 
-- **Dependencies:** the three `dxmt-*` steps pull in `dxmt` (a new `NEEDS_DXMT` list); all four join `NEEDS_PREFIX` and `NEEDS_FEX`. With FEX registered in every lane, as in a game's prefix, partial and full runs run the same way.
+- **Dependencies:** the three `dxmt-*` steps pull in `dxmt` (a new `NEEDS_DXMT` list) and join `NEEDS_FEX`; all four join `NEEDS_PREFIX` (`dxmt` itself needs no FEX). With FEX registered in every lane, as in a game's prefix, partial and full runs run the same way.
 - **Clean-up:** `runtime_pids` also lists the Rosetta tool clones `dxmt/check.sh` makes, whose work folders live under `check.sh`'s own (`$WORK/dxmt-arm64ec`, `$WORK/dxmt-x64`), so the orphan line covers them.
 - **Failure output:** a failing `dxmt-arm64ec`/`dxmt-x64` step's FAIL line gives the number of `FAIL` lines and the first one. A failing step stops the run, as for sub-project 1's steps; `check.sh <step>` runs one alone.
 - **One target:** `wine-arm64-check` gains the prerequisites `dxmt dxmt-tests presenter dxmt-tests-arm64ec` (`dxmt` builds the x86_64 LLVM if it's missing).

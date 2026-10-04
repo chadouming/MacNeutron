@@ -56,9 +56,9 @@ its prerequisites took seconds, as they were built).
 ### 1. Clean build (D1)
 
 Step 1's `make wine-arm64` took **2 min 52 s** (`time`: 2:51.64). It fetched DXMT at the pin, applied the DXMT patch,
-re-ran Wine's and FEX's builds, which were up to date (5 s together), and built the arm64 LLVM 15.0.7 (128 s), DXMT
-for ARM64X (27 s) and the arm64 `dxil-probe` and `dxil-translate` (2 s), then bundled (3 s) and signed (5 s); stage
-times are from the logs' timestamps.
+re-ran Wine's and FEX's builds, which were up to date (5 s together, the DXMT fetch included), and built the arm64 LLVM
+15.0.7 (128 s), DXMT for ARM64X (27 s) and the arm64 `dxil-probe` and `dxil-translate` (2 s), then bundled (3 s) and
+signed (5 s); stage times are from the logs' timestamps.
 It ended with `wine-arm64: built …/build/wine-arm64/wine.app`, so `bundle.sh`'s assertions held (builtin markers,
 `winemetal.so` present, `DXMT/version` matching the tree).
 `codesign --verify --strict --deep build/wine-arm64/wine.app`: exit 0.
@@ -196,21 +196,23 @@ DXMT on the arm64 runtime against our DXMT under Rosetta, in milliseconds per fr
 | This acceptance, `make wine-arm64-check` | 8.320 / 8.330 | 8.321 / 8.329 |
 | This acceptance, `check.sh dxmt-arm64ec`, `check.sh dxmt-x64` | 8.319 / 8.329 | 8.321 / 8.327 |
 
-**These numbers look display-paced, not CPU-bound:** apart from Task 7's first ARM64EC run, every value is 8.31-8.33 ms,
-that is 120 frames per second, on both stacks and in both lanes, although the program asks for no vsync. The Rosetta
-stack's own `make dxmt-check` in §5 also read 8.29-8.34 ms for both our DXMT and DXMT 0.80 (its check's comment records
-4.7 and 5.7 ms in an earlier setup). The window sat on the 1x main display, which reports 144 Hz (the built-in panel is
-120 Hz, and a third display 75 Hz); what holds presentation at 120 Hz was not established. So D6 says that both lanes
-keep up with that rate as the Rosetta stack does; it is not a comparison of the stacks' CPU cost. Frame-time parity is
-sub-project 6's (SMITE 2).
+**These numbers look display-paced, not CPU-bound:** apart from Task 7's first ARM64EC run, every value is about 8.3 ms,
+that is 120 frames per second, on both stacks and in both lanes, although the program asks for no vsync. That first run
+(7.425 against Rosetta's 4.877 ms) was not reproduced in the four later ARM64EC runs (the three above, and
+8.320 / 8.332 ms in the final fix pass's `check.sh dxmt-arm64ec`); it is the only evidence that the stacks differ. The
+Rosetta stack's own `make dxmt-check` in §5 also read 8.29-8.34 ms for both our DXMT and DXMT 0.80 (its check's comment
+records 4.7 and 5.7 ms in an earlier setup). The window sat on the 1x main display, which reports 144 Hz (the built-in
+panel is 120 Hz, and a third display 75 Hz); what holds presentation at 120 Hz was not established. So D6 says that both
+lanes keep up with that rate as the Rosetta stack does; it is not a comparison of the stacks' CPU cost. Frame-time
+parity is sub-project 6's (SMITE 2).
 
 ### 5. The Rosetta stack unchanged (D5)
 
 - `make test`: `Test run with 197 tests in 0 suites passed after 32.389 seconds.`
 - `make dxmt-check`: `dxmt-check: all passed` in 5 min 43 s, 214 `ok` lines (170 checks, 31 probe lines and 13
   `build_test.sh` lines), 0 `FAIL`. Against the Rosetta run recorded before Task 7 (sorted `ok` lines), one line differs
-  only in its measured numbers: `compressed targets clear at least 3x cheaper (47.9 against 217.3 us)` against
-  `(49.2 against 217.6 us)`. With digits normalised the two sets are identical.
+  only in its measured numbers: this run's `compressed targets clear at least 3x cheaper (47.9 against 217.3 us)`
+  against the baseline's `(49.2 against 217.6 us)`. With digits normalised the two sets are identical.
 - `rm build/dxmt/version && make dxmt`: `dxmt: building DXMT 1fba8d25…` then `dxmt: built …/build/dxmt (1fba8d25…)`
   in 33 s, with no LLVM build line (the x86_64 LLVM is reused through `dxmt/llvm.sh`); `dxil-probe` and
   `dxil-translate` were rebuilt (new timestamps).

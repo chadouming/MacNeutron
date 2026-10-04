@@ -7,7 +7,9 @@
  * vsync_at= switches the Present sync interval to V at frame F; format_at= switches the swap chain to 10-bit at frame F.
  * cycles= runs N rounds of window, device, swap chain and frames in one process (arm64 DXMT spec §7): odd rounds release
  * the device objects, then destroy the window; even rounds destroy the window while the swap chain still holds the view,
- * then release. Each round then empties the message queue; the last line is "cycles N ok". */
+ * then release. Each round then empties the message queue; the last line is "cycles N ok". Every round, the default
+ * single one too, ends by releasing the device objects and destroying the window (the program used to exit with them
+ * alive); the output lines are unchanged. */
 #include <windows.h>
 #include <d3d11_1.h>
 #include <stdio.h>
