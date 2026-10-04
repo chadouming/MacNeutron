@@ -60,13 +60,14 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 |---|---|---|---|
 | 1 | **arm64 Wine + FEX for x64:** this spec | — | Durable build, signing, FEX bring-up, gates |
 | 2 | **DXMT for arm64:** ARM64X PE side, aarch64 `winemetal.so`, arm64 LLVM 15 | Wine build tree from 1 | Runs alongside 1. Testable with ARM64EC-built test programs, no FEX needed. Known blockers:<br>• `__rdtsc` in `src/d3d12/d3d12_stats.cpp`, the only compile error;<br>• Wine 11.19's `winemac.so` has no `macdrv_functions` and exports only two symbols, so both of DXMT's lookups (`winemetal_unix.c:1713-1722`) fail and nothing presents. Fix: a `macdrv_functions` shim table with default visibility in a winemac patch |
-| 3 | **Ship-base Wine** | 1 | Strict x18 toggling (§5.3); msync ported from CrossOver `wine1117`; freetype and gnutls bundled in `wine.app`; lsteamclient; `MAP_JIT` (or a dual view) for RWX memory other than FEX's |
-| 4 | **Steam path** | 3 | aarch64 `steam.exe`; ARM64X lsteamclient against Steam's arm64 `steamclient.dylib` |
+| 3 | **Ship-base Wine** | 1 | Strict x18 toggling (§5.3); msync from CrossOver `wine1117`; FreeType and gnutls built from pinned source and bundled; licence and notice files for every shipped component. Spec: `2026-10-04-macneutron-ship-base-wine-design.md` (amended 2026-10-04: lsteamclient moved to 4; `MAP_JIT` dropped, see §3.4) |
+| 4 | **Steam path** | 1 | lsteamclient end to end (ARM64X, against Steam's universal `steamclient.dylib`), including the Steamworks licence decision (lsteamclient is under Valve's Steamworks SDK licence); aarch64 `steam.exe`. Can run alongside 3 |
 | 5 | **Launcher: a second runtime** | 3 | Per-game runtime choice, separate prefixes, preflight split, notarization of the entitled bundle, the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`) |
 | 6 | **SMITE 2 parity and measurements** | 2, 4, 5 | Frame time vs the Rosetta stack; the cost of x64↔ARM64EC crossings; per-game CPU cost; a CPU-bound title |
 | 7 | **Direct3D 9** (optional, can start now on Rosetta) | — | Import dacevedo12/dxmt `v0.4-d3d9` (LGPL) into our fork; Wine's wined3d stays the fallback |
-| 8 | **32-bit games** | 3, 7 | Standard WoW64: i386 in `--enable-archs` and FEX's `libwow64fex.dll`. The entitlement makes the low 4 GB usable, so Madeira's guest-window redesign isn't needed |
+| 8 | **32-bit games** | 3, 7 | Standard WoW64: i386 in `--enable-archs` and FEX's `libwow64fex.dll`. The entitlement makes the low 4 GB usable, so Madeira's guest-window redesign isn't needed. FEX's WoW64 JIT still allocates RWX, so its dual-view port belongs here |
 | 9 | **Per-game cutover** | 6 (+7 for D3D9, +8 for 32-bit) | A game moves when its own measurements clear the bar in §1's decisions; then delete GPTK, DXVK, the AVX switch and the Rosetta preflight |
+| 10 | **Media** (added 2026-10-04) | 3 | FFmpeg for `winedmo` and/or GStreamer for `winegstreamer`: today `winedmo` builds as a stub and `winegstreamer` isn't built, so game intro movies and cutscenes don't play |
 
 ## 3. Evidence (verified 2026-10-02 on an M5 Pro, macOS 27.0.1, unless marked)
 
@@ -150,7 +151,7 @@ The dual view works with no Wine change for plain ARM64 code. FEX's generated co
 Also measured natively (`probes/jit-memory-probe.c`):
 - `mach_vm_remap` gives an RW buffer an RX alias in an entitled hardened-runtime process.
 - A `MAP_JIT` region can't be remapped.
-- A `pthread_jit_write_protect_np` on/off pair costs 23 ns.
+- A `pthread_jit_write_protect_np` on/off pair costs 23 ns, for a JIT that switches modes itself. Windows RWX memory can't use `MAP_JIT` (amended 2026-10-04): `MAP_JIT|MAP_FIXED` fails, a MAP_JIT range made RWX refuses every later `mprotect`, and a switch to execute inside a fault handler is undone on return; see the sub-project 3 spec §2.
 
 ### 3.5 FEX's speed
 
@@ -251,7 +252,7 @@ Not ported, and why:
 
 Patch 4 turns the mode on once per thread, which behaves like Apple's legacy path for old SDKs. That breaks the header's rule against calling macOS code with the mode on. Today it does no harm: a disassembly scan of all 4,088 shared-cache images on macOS 27.0.1 (1,021 matches, all classified in `x18-boundaries.md`) found no code that depends on x18's value. The scan is `probes/x18-cache-scan.sh` (about 2.5 minutes), to be rerun on every macOS beta.
 
-Sub-project 3 replaces it with toggling at every transition. That is about 80–100 lines in `signal_arm64.c`:
+Sub-project 3 replaces it with toggling at every transition. That is about 110–140 lines in `signal_arm64.c` (amended 2026-10-04: the earlier 80–100 missed three sites, `__wine_syscall_dispatcher_return`'s x18 read, passing the toggle's `brk #1` through Wine's trap handler, and a "PE stack implies ON" check; `x18-boundaries.md`'s line numbers predate patches 0001–0014, see the sub-project 3 spec §8):
 - off on syscall and unix-call entry, and on again on return;
 - on before user-callback entry;
 - a wrapper on the nine signal handlers;
@@ -466,7 +467,9 @@ Recorded in `docs/testing/acceptance-arm64-wine.md`:
 
 - **x18 under the once-per-thread mode** breaks Apple's documented rule until sub-project 3 makes it strict. If Apple gives x18 a meaning for system code, it fails silently. `probes/x18-cache-scan.sh` is rerun on every macOS beta.
 - **Software TSO** is FEX's only option, because the entitlement grants no hardware TSO. G2 measures correctness for scalar accesses only, since vector and memcpy TSO are off by default. G4 and sub-project 6 measure the cost.
-- **Games with their own JIT** (Mono, .NET, LuaJIT) write and run RWX pages, which go through patch 6's flip at about 8.5 µs per switch. Sub-project 3 moves RWX allocations to `MAP_JIT` (23 ns toggles), or to a dual view.
+- **Games with their own JIT** (Mono, .NET, LuaJIT): x64 JIT code runs under FEX, which reads guest code as data, so its RWX pages don't need host execute (inferred; sub-project 3's `wxflip-x64` check proves it). Native ARM64/ARM64EC JITs (rare) go through patch 6's flip at about 8.5 µs per switch, and patch 6 loops forever on native code that stores into its own RWX page; both are accepted and documented (amended 2026-10-04).
+- **A Homebrew leak through configure:** Wine's configure reads whatever `.pc` files Homebrew has, so a library could be linked from `/opt/homebrew` without notice. Sub-project 3 configures against its own deps only and asserts every bundled dependency path.
+- **msync mode agreement:** the client and wineserver must agree on `WINEMSYNC`, or the client exits; everything that starts the runtime sets it the same way, and switching needs `wineserver -k`.
 - **The dual-view port** touches FEX's emitter, linker and the SIGBUS backpatcher. Madeira's changes are iOS-shaped, so expect adaptation, not a cherry-pick. Wine's handling of section views (commit on demand, patch 11's EC marking) is new territory.
 - **Restricted entitlement:**
   - It ties working builds to the maintainer's team.
