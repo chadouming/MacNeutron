@@ -55,6 +55,26 @@ for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
 done
 for f in COPYING.LIB LICENSE LICENSE.OLD; do put "$DXMT_TREE" "$f" "$R/DXMT/"; done
 put "$DXMT_IN" version "$R/DXMT/"
+# Licences (ship-base spec §4): the components' own texts, the committed README and NOTICES.md, and build.sh's SOURCE.
+# DXMT's stay in DXMT/.
+L="$R/licenses"
+S="$B/wine-arm64-src"
+mkdir -p "$L/wine" "$L/fex" "$L/llvm" "$L/llvm-mingw"
+for f in README NOTICES.md; do put "$ROOT/wine-arm64/licenses" "$f" "$L/"; done
+put "$S" SOURCE "$L/"
+for f in LICENSE COPYING.LIB AUTHORS NOTICES.md; do put "$S/wine" "$f" "$L/wine/"; done
+put "$S/wine" libs/gsm/COPYRIGHT "$L/wine/gsm-COPYRIGHT"
+put "$S/wine" libs/faudio/LICENSE "$L/wine/faudio-LICENSE"
+put "$S/fex" LICENSE "$L/fex/"
+for e in fmt xxhash tiny-json unordered_dense rpmalloc cephes; do
+  put "$S/fex" "External/$e/LICENSE" "$L/fex/$e-LICENSE"
+done
+put "$S/fex" External/range-v3/LICENSE.txt "$L/fex/range-v3-LICENSE.txt"
+put "$S/fex" Source/Common/cpp-optparse/LICENSE "$L/fex/cpp-optparse-LICENSE"
+put "$B/dxmt-src/llvm-project/llvm" LICENSE.TXT "$L/llvm/"
+put "$B/dxmt-src/llvm-project/llvm" lib/Support/COPYRIGHT.regex "$L/llvm/"
+put "$B/dxmt-src/llvm-mingw" LICENSE.TXT "$L/llvm-mingw/"
+put "$B/dxmt-src/llvm-mingw" aarch64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt "$L/llvm-mingw/"
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 
@@ -73,10 +93,15 @@ codesign -f -s "$MACNEUTRON_SIGN_IDENTITY" --options runtime --entitlements "$RO
 out=$(codesign --verify --strict --deep "$APP" 2>&1) || die "codesign --verify --strict --deep: $out"
 codesign -d --entitlements - "$LOADER" 2>&1 | grep -q cross-architecture-support \
   || die "the loader lacks com.apple.developer.cross-architecture-support"
+if codesign -d --entitlements - "$LOADER" 2>&1 | LC_ALL=C /usr/bin/grep -q get-task-allow; then
+  die "the loader has get-task-allow"
+fi
+out=$(BUILD_DIR="$B" sh "$ROOT/wine-arm64/tests/licences_test.sh" "$APP") || die "$out"
 macho > "$OUT/macho.list"
 while IFS= read -r f; do
   minos=$(otool -l "$f" | awk '/LC_BUILD_VERSION/ { b = 1 } b && /minos/ { print $2; exit }')
   [ "$minos" = 27.0 ] || die "minos of ${f#"$APP"/} is ${minos:-missing}, not 27.0"
+  codesign -dvv "$f" 2>&1 | LC_ALL=C /usr/bin/grep -q '^Timestamp=' || die "${f#"$APP"/} has no secure timestamp"
 done < "$OUT/macho.list"
 rm "$OUT/macho.list"
 [ "$(realpath "$R/lib/wine/aarch64-unix/wine")" = "$(realpath "$APP")/Contents/MacOS/wine" ] \

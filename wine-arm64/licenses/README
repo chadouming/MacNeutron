@@ -1,0 +1,42 @@
+Licences of the components in wine.app
+
+Each component, its licence, where its licence texts are in this bundle, and where its source is. SOURCE (beside this
+file) names the exact inputs this bundle was built from: upstream commits, and the hash of the MacNeutron patch series
+applied to each tree ("dev" for a tree built with unexported work). The patches and pins are in the MacNeutron
+repository (https://github.com/chadouming/MacNeutron), at the commit SOURCE's MACNEUTRON_COMMIT names. NOTICES.md
+quotes the notices that live only in source headers. Not legal advice.
+
+Wine 11.19 (the loader, wineserver, Wine's libraries and programs)
+  Licence: LGPL-2.1-or-later. Texts: wine/LICENSE, wine/COPYING.LIB, wine/AUTHORS; Wine's vendored libraries are
+  listed in wine/NOTICES.md, and GSM (wine/gsm-COPYRIGHT) and FAudio (zlib licence, wine/faudio-LICENSE) carry their
+  own texts.
+  Source: https://gitlab.winehq.org/wine/wine.git at WINE_COMMIT (tag wine-11.19), with the patches in the
+  repository's wine-arm64/patches/wine (pinned in wine-arm64/pins).
+
+FEX (libarm64ecfex.dll and libarm64ecfex.so: runs x86_64 code)
+  Licence: MIT, fex/LICENSE; MacNeutron's patches to it are MIT too. Compiled-in externals, each with its text in
+  fex/: fmt (MIT), xxhash (BSD-2-Clause), tiny-json (MIT), unordered_dense (MIT), rpmalloc (0BSD), cephes (BSD),
+  range-v3 (Boost Software Licence 1.0), cpp-optparse (MIT). SoftFloat-3e (BSD-3-Clause), the VIXL utilities
+  (BSD-3-Clause), musl and Arm's routines (MIT) and Madeira's patches (MIT grant): NOTICES.md.
+  Source: https://github.com/FEX-Emu/FEX.git at FEX_COMMIT with its submodules at the FEX_SUBMODULE_* commits, and
+  the patches in the repository's wine-arm64/patches/fex (pinned in wine-arm64/pins).
+
+DXMT (the Direct3D to Metal DLLs in ../DXMT/aarch64-windows, winemetal.dll and winemetal.so)
+  Licence: LGPL-2.1-or-later. Texts: ../DXMT/LICENSE, ../DXMT/COPYING.LIB, ../DXMT/LICENSE.OLD (MIT, for releases up
+  to v0.80). DXBCParser (MIT, Microsoft) and the constexpr GUID parser (MIT): NOTICES.md.
+  Source: https://github.com/chadouming/dxmt.git at DXMT_COMMIT (../DXMT/version names it too), with the patches
+  in the repository's wine-arm64/patches/dxmt (pinned in dxmt/pins).
+
+LLVM 15.0.7 (linked statically into winemetal.so)
+  Licence: Apache-2.0 WITH LLVM-exception, llvm/LICENSE.TXT; its regular-expression code, llvm/COPYRIGHT.regex;
+  ConvertUTF (Unicode, Inc.) and the regex notice: NOTICES.md.
+  Source: https://github.com/llvm/llvm-project.git at LLVM_TAG (llvmorg-15.0.7), unmodified.
+
+llvm-mingw 20260908 (the Windows-side toolchain: DXMT's DLLs, winemetal.dll and libarm64ecfex.dll link its runtime)
+  Licence: Apache-2.0 WITH LLVM-exception, llvm-mingw/LICENSE.TXT; the mingw-w64 runtime,
+  llvm-mingw/COPYING.MinGW-w64-runtime.txt.
+  Source: https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-macos-universal.tar.xz
+  (SHA-256 LLVM_MINGW_SHA256, pinned in dxmt/pins); the sources it is built from are listed at
+  https://github.com/mstorsjo/llvm-mingw.
+
+FreeType: Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.

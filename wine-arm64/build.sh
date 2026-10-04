@@ -85,7 +85,8 @@ dxmt_series=$(series_of "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch)
 stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" \
   "$ROOT/wine-arm64/lib.sh" "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" \
   "$ROOT/wine-arm64/Info.plist" "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch "$ROOT/dxmt/llvm.sh" \
-  "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm")
+  "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
+  "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh")
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
@@ -186,7 +187,25 @@ mkdir -p "$OUT"
 build_probe arm64 "$SRC/llvm-arm64" "$OUT" "$SRC"
 build_translate arm64 "$SRC/llvm-arm64" "$D" "$SRC/dxmt-build" "$OUT" "$SRC"
 
-# 7. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result).
+# 7. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
+#    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.
+series() { if [ "$1" = development ]; then echo dev; else echo "$2"; fi; }  # series <mode> <series hash>
+mac=$(git -C "$ROOT" rev-parse HEAD)
+[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || mac="$mac+dirty"
+{
+  echo "MACNEUTRON_COMMIT=$mac"
+  echo "WINE_COMMIT=$WINE_COMMIT"
+  echo "WINE_SERIES=$(series "$wine_mode" "$wine_series")"
+  echo "FEX_COMMIT=$FEX_COMMIT"
+  echo "FEX_SERIES=$(series "$fex_mode" "$fex_series")"
+  # " <sha> <path> (<describe>)", the first character "+" or "-" when the checkout differs from FEX's record.
+  git -C "$F" submodule status | awk '{ c = $1; sub(/^[-+U]/, "", c); n = $2; sub(/.*\//, "", n) }
+    n ~ /^(fmt|range-v3|rpmalloc|unordered_dense|xxhash|cpp-optparse)$/ { print "FEX_SUBMODULE_" n "=" c }'
+  echo "DXMT_COMMIT=$DXMT_COMMIT"
+  echo "DXMT_SERIES=$(series "$dxmt_mode" "$dxmt_series")"
+  echo "LLVM_TAG=$LLVM_TAG"
+  echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
+} > "$SRC/SOURCE"
 echo "wine-arm64: bundling (log: $OUT/install.log)" >&2
 sh "$ROOT/wine-arm64/bundle.sh"
 
