@@ -51,6 +51,9 @@ Record results at the bottom.
 | **M1 msync** (measured) | `x64-sync`'s timing rows in both modes: uncontended wait and signal, a cross-process wake, create/close |
 | **M2 x18** (measured) | The round-trip A/B of §9 |
 
+The table quotes spec §10. The tests behind S2, S3, S5 and S7 are the lighter ones listed under §3's "Lighter tests and
+deviations".
+
 ## Results
 
 | Date | Mac | macOS | Wine | FEX | DXMT | Deps | lsteamclient | Patches |
@@ -246,7 +249,7 @@ steps among them (`wxflip-x64` about 1 s, `msync` 10 s, `x18` 7 s, `fonts-tls` 1
   `schannel: 0x00000000`, `pfx certs 1`, `PASS arm64-fonts-tls`, and no `cannot find the FreeType` or
   `failed to load libgnutls` in its stderr. `bundle.sh`'s library asserts held: install names, dependency paths and
   rpaths, the x18 scan equal to `x18-allow.txt` (gnutls's `gcm_ghash_v8_4x` 1, `_sha256_block_data_order` 3,
-  `_sha512_block_data_order` 3), the 46 FreeType and 70 gnutls symbols, no build path.
+  `_sha512_block_data_order` 3), the 46 FreeType and 70 gnutls symbols, and neither new dylib holds a build path.
 - **S3 msync: PASS.** All 14 gated rows `ok` in each mode (28 `ok` lines). The server's log in mode 1 is
   `msync: bootstrapped mach port on wine-…-msync.` and `msync: up and running.`, in mode 0 empty; both mismatch
   directions exit 1 with their own `ERR` line (`Server is running with WINEMSYNC but this process is not, …` and
@@ -278,6 +281,22 @@ steps among them (`wxflip-x64` about 1 s, `msync` 10 s, `x18` 7 s, `fonts-tls` 1
   held (ARM64X metadata and the builtin marker, `lsteamclient.so` arm64 and exporting `__wine_unix_call_funcs`, its
   `Nt*` and `__wine_*` imports all exported by `ntdll.so`, `licenses/lsteamclient/`, and
   `disable-library-validation` on the loader).
+
+#### Lighter tests and deviations
+
+S1-S7 passed against these tests, which are lighter than the design as first written:
+- **Lightened at approval** (spec §1, "Tests" row, maintainer 2026-10-04): `msync` (S3) runs in the x64 lane only (it
+  was both lanes); the bridge's end-to-end probe (S7) runs in the x64 lane only; x18's runs are shorter: T1 16 threads
+  for 1 s (was 72 for 3 s), T2 200 thread create/exit cycles (was 1,000), T4 4 threads for 3 s (was 8 for 10 s).
+- **Amended after approval** (spec §9, under the same lighter tests): T4's asynchronous signal is the suspend `SIGUSR1`
+  only, without the 1 ms timer signal; T3 gates exit 133 and no `err:seh`, and does not read Apple's crash-report
+  annotation back; the static x18 check is routine-level only (which routines name x18), and that each use sits inside
+  an ON window is proven at run time by T1-T4 and the invariant, not statically.
+- **Amended after the plan review** (spec §5): the build-path assert covers only the two new dylibs,
+  `libfreetype.6.dylib` and `libgnutls.30.dylib`, after `strip -S` (it was every shipped dylib; DXMT's `winemetal.so`
+  names build paths by design), although §10's S2 row says "no build paths". Spec §7: Steam's x18 scan reports the
+  arm64 slice's hit count; the hits are not classified one by one.
+- **Patch 0017** carries a follow-up to 0004 instead of rewriting 0004 in place (spec §3; see Pins and patches).
 
 The DXMT lanes' frame-time lines (4.7 / 4.0 ms ARM64EC lane, 5.0 / 4.0 ms x64 lane, arm64 / Rosetta) are not
 display-paced this time; they are sub-project 2's D6 measure, not a gate here.
