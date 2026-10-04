@@ -26,17 +26,21 @@ RSRC="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibil
 RTOOL="$WORK/rosetta tool"
 RPFX="$WORK/prefix rosetta"
 RWINE="$RTOOL/Libraries/Wine/bin"
+# msync (ship-base spec §6) is on, as on the Rosetta runtime: a client and its wineserver have to agree, so every run
+# sees WINEMSYNC=1, and the wineserver a run starts gets it too. Only the msync step, which starts its own, differs.
+export WINEMSYNC=1
 
 # Steps, in order; each task appends its own. NEEDS_PREFIX: the steps that run in the prefix `boot` creates.
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 # NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 g5-jit"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync"
+STEPS="$STEPS g5-jit"
 STEPS="$STEPS fonts-tls dxmt dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
 NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 g5-jit fonts-tls dxmt $NEEDS_DXMT"
-NEEDS_PREFIX="$NEEDS_PREFIX g4-bench"
-NEEDS_FEX="$G1 g2-litmus wxflip-x64 g5-jit $NEEDS_DXMT g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync g5-jit fonts-tls dxmt"
+NEEDS_PREFIX="$NEEDS_PREFIX $NEEDS_DXMT g4-bench"
+NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync g5-jit $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
@@ -244,15 +248,15 @@ g2_litmus_cmd() {
 # directions, and every trace line has the one format.
 wxflip_cmd() {
   out=$(WINEDEBUG=+wxflip wine_run "$TESTS/arm64-wxflip.exe" 2>&1 | tr -d '\r') || true
-  echo "$out" | grep -v 'trace:wxflip' || true
-  n=$(echo "$out" | grep -c 'trace:wxflip' || true)
+  echo "$out" | LC_ALL=C /usr/bin/grep -v 'trace:wxflip' || true
+  n=$(echo "$out" | LC_ALL=C /usr/bin/grep -c 'trace:wxflip' || true)
   [ "$n" -gt 0 ] || { echo "FAIL wxflip: 0 trace lines"; return 1; }
-  bad=$(echo "$out" | grep 'trace:wxflip' | grep -Ev 'trace:wxflip:virtual_handle_fault 0x[0-9a-f]+ -> r[wx]$' || true)
+  bad=$(echo "$out" | LC_ALL=C /usr/bin/grep 'trace:wxflip' | LC_ALL=C /usr/bin/grep -Ev 'trace:wxflip:virtual_handle_fault 0x[0-9a-f]+ -> r[wx]$' || true)
   [ -z "$bad" ] || { echo "FAIL wxflip: odd trace line: $(echo "$bad" | head -n 1)"; return 1; }
   for to in rx rw; do
-    echo "$out" | grep -q "trace:wxflip:virtual_handle_fault 0x[0-9a-f]* -> $to\$" || { echo "FAIL wxflip: no flip to $to"; return 1; }
+    echo "$out" | LC_ALL=C /usr/bin/grep -q "trace:wxflip:virtual_handle_fault 0x[0-9a-f]* -> $to\$" || { echo "FAIL wxflip: no flip to $to"; return 1; }
   done
-  echo "$out" | grep -qx 'PASS arm64-wxflip' || { echo "FAIL wxflip: the program did not pass"; return 1; }
+  echo "$out" | LC_ALL=C /usr/bin/grep -qx 'PASS arm64-wxflip' || { echo "FAIL wxflip: the program did not pass"; return 1; }
   echo "info $n trace lines"
   [ "$n" -ge 10 ] || { echo "FAIL wxflip: $n trace lines, wanted at least 10"; return 1; }
 }
@@ -267,6 +271,35 @@ wxflip_x64_cmd() {
   echo "info wxflip-x64: $n flips"
   echo "$out" | LC_ALL=C /usr/bin/grep -qx 'PASS x64-smc' || { echo "FAIL wxflip-x64: no PASS line"; return 1; }
   [ "$n" = 0 ] || { echo "FAIL wxflip-x64: $n flips"; return 1; }
+}
+
+# Gate S3 (ship-base spec §6): msync, in both modes. The step owns the prefix's wineserver: it kills the running one,
+# then per mode starts one by hand (its stderr, where msync says it is up and what failed, in msync-server-<mode>.log),
+# runs x64-sync, runs a client of the other mode, which has to exit non-zero with its own message (Wine's err class on,
+# whatever the caller's WINEDEBUG), and kills the server. The time rows are reported, not gated.
+msync_cmd() {
+  S="$TOOL/Contents/Resources/bin/wineserver"
+  WINEPREFIX="$PFX" "$S" -k || true  # exits 1 when no server was running
+  for m in 1 0; do
+    o=$((1 - m)) slog="$WORK/msync-server-$m.log"
+    WINEMSYNC=$m WINEPREFIX="$PFX" "$S" -p 2> "$slog" || { echo "FAIL msync: wineserver -p, WINEMSYNC=$m: exit $?"; return 1; }
+    out=$(WINEMSYNC=$m exe_cmd x64-sync) && rc=0 || rc=$?
+    echo "$out" | sed -E "s/^(time|info) /info msync $m /"
+    cp "$WORK/x64-sync.err" "$WORK/x64-sync-$m.err"
+    [ "$rc" = 0 ] || { echo "FAIL msync: WINEMSYNC=$m: $(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' || echo "$out" | tail -n 1)"; return 1; }
+    # The server has answered x64-sync, so it is past msync's start: the line is there in mode 1, absent in mode 0.
+    n=$(LC_ALL=C /usr/bin/grep -c '^msync: up and running\.$' "$slog" || true)
+    [ "$n" = "$m" ] || { echo "FAIL msync: WINEMSYNC=$m: 'msync: up and running.' $n times in ${slog#"$ROOT"/}"; return 1; }
+    if [ $m = 1 ]; then want="Server is running with WINEMSYNC but this process is not"; else want="Failed bootstrap_look_up"; fi
+    err=$(WINEMSYNC=$o WINEDEBUG=err+all wine_run "$TESTS/x64-sync.exe" 2>&1 > /dev/null) && rc=0 || rc=$?
+    hit=$(printf '%s\n' "$err" | LC_ALL=C /usr/bin/grep -m 1 -F "$want" || true)
+    echo "a WINEMSYNC=$o client: exit $rc: ${hit:-$(printf '%s\n' "$err" | tail -n 1)}"
+    [ "$rc" != 0 ] || { echo "FAIL msync: a WINEMSYNC=$o client ran on the WINEMSYNC=$m server"; return 1; }
+    [ -n "$hit" ] || { echo "FAIL msync: a WINEMSYNC=$o client on the WINEMSYNC=$m server didn't say '$want'"; return 1; }
+    WINEPREFIX="$PFX" "$S" -k || { echo "FAIL msync: the WINEMSYNC=$m server was gone before -k"; return 1; }
+    bad=$(LC_ALL=C /usr/bin/grep -E "msync: (error|failed|couldn't)" "$slog" || true)
+    [ -z "$bad" ] || { echo "$bad"; echo "FAIL msync: WINEMSYNC=$m: msync errors in ${slog#"$ROOT"/}"; return 1; }
+  done
 }
 
 # x64-bench's rows (gates G5 and G4). bench_rows <file>: fails, saying so, unless the run printed every one.
@@ -456,6 +489,7 @@ run_step() {
     viewec) step viewec 60 exe_cmd arm64ec-viewec ;;
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
     wxflip-x64) step wxflip-x64 60 wxflip_x64_cmd; grep '^info ' "$WORK/wxflip-x64.log" ;;
+    msync) step msync 300 msync_cmd; grep '^info ' "$WORK/msync.log" ;;
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     fonts-tls) step fonts-tls 60 fonts_tls_cmd ;;

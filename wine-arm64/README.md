@@ -116,6 +116,10 @@ worktree) start over from the series: it is deleted and fetched again.
   - 0013: adapted from CodeWeavers' `dlls/winemac.drv/d3dmetal.c` (Brendan Shanks, LGPL-2.1+) and `d3dmetal_objc.m`,
     as published in `athei/wine` branch `cx-26-patched`, and `dappermint/winecx` `713015fa9f`, `13e6a88a02`,
     `565f6386b7` (LGPL).
+  - 0015: msync, by Zebediah Figura and Marc-Aurel Zent (LGPL-2.1+): CodeWeavers' CrossOver 26.3 msync as carried on
+    `dappermint/winecx` branch `cx/wine1117` at `e0aa380780`, with millia ampora's msync commits there (`8df1826853`,
+    `9be392b3b4`, `3a7a712d66`, `307f90fdb1`, `620d8c542f`, `a7ef7b3b01`, `ef72fdb55b`, `6d316146c2`), merged onto
+    Wine 11.19. The patch's message lists our changes to it.
   - The other Wine patches are ours.
 - **FEX** is MIT, and so are our patches to it.
   - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`. MIT: the file it patches,

@@ -31,7 +31,8 @@ check() {  # check <wine.app> <build dir>
 
   # 2. Notices that live only in source headers: the committed NOTICES.md names each holder.
   for h in "Regents of the University of California" "VIXL authors" "Rich Felker" "Arm Limited" "Will Faust" \
-           "Microsoft Corporation" "Alexander Bessonov" "Unicode, Inc." "Henry Spencer"
+           "Microsoft Corporation" "Alexander Bessonov" "Unicode, Inc." "Henry Spencer" "Zebediah Figura" \
+           "Marc-Aurel Zent"
   do g -qF "$h" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for $h"; done
 
   # 3. Drift: every FEX external the build compiled has a licence above (vixl, zydis, tracy... must stay out).

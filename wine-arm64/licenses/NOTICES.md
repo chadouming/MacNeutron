@@ -112,6 +112,17 @@ below. From
 Wine patch 0009 is adapted from Madeira's Wine commits on its LGPL branch `madeira-lgpl`; it is LGPL-2.1+ like the rest
 of Wine (`wine/LICENSE`).
 
+## msync (in Wine: `ntdll.so`, `wineserver`)
+
+Wine patch 0015 is CodeWeavers' CrossOver 26.3 msync, as carried on `dappermint/winecx` branch `cx/wine1117` with
+millia ampora's msync commits there; it is LGPL-2.1+ like the rest of Wine (`wine/LICENSE`). From the patch's
+`dlls/ntdll/unix/msync.c` (and its `msync.h`, `server/msync.c` and `server/msync.h`):
+
+```
+Copyright (C) 2018 Zebediah Figura
+Copyright (C) 2023 Marc-Aurel Zent
+```
+
 ## DXBCParser (in DXMT's Direct3D DLLs and `winemetal.so`)
 
 From DXMT's `libs/DXBCParser/ShaderBinary.h` (and the other files in `libs/DXBCParser`), under the MIT licence below:
