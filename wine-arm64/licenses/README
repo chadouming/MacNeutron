@@ -1,10 +1,10 @@
 Licences of the components in wine.app
 
 Each component, its licence, where its licence texts are in this bundle, and where its source is. SOURCE (beside this
-file) names the exact inputs this bundle was built from: upstream commits, and the hash of the MacNeutron patch series
-applied to each tree ("dev" for a tree built with unexported work). The patches and pins are in the MacNeutron
-repository (https://github.com/chadouming/MacNeutron), at the commit SOURCE's MACNEUTRON_COMMIT names. NOTICES.md
-quotes the notices that live only in source headers. Not legal advice.
+file) names the exact inputs this bundle was built from: upstream commits, the hash of the MacNeutron patch series
+applied to each tree ("dev" for a tree built with unexported work), and the source tarballs' URLs and SHA-256. The
+patches and pins are in the MacNeutron repository (https://github.com/chadouming/MacNeutron), at the commit SOURCE's
+MACNEUTRON_COMMIT names. NOTICES.md quotes the notices that live only in source headers. Not legal advice.
 
 Wine 11.19 (the loader, wineserver, Wine's libraries and programs)
   Licence: LGPL-2.1-or-later. Texts: wine/LICENSE, wine/COPYING.LIB, wine/AUTHORS; Wine's vendored libraries are
@@ -38,5 +38,29 @@ llvm-mingw 20260908 (the Windows-side toolchain: DXMT's DLLs, winemetal.dll and 
   Source: https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-macos-universal.tar.xz
   (SHA-256 LLVM_MINGW_SHA256, pinned in dxmt/pins); the sources it is built from are listed at
   https://github.com/mstorsjo/llvm-mingw.
+
+FreeType 2.14.3 (libfreetype.6.dylib: text rendering in win32u and dwrite)
+  Licence: the FreeType License (FTL), elected from FreeType's FTL-or-GPL-2.0 choice. Texts: freetype/LICENSE.TXT,
+  freetype/FTL.TXT. Built without PNG, HarfBuzz or Brotli; it links the system's zlib and bzip2.
+  Source: https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz (SHA-256 FREETYPE_SHA256),
+  unmodified, pinned in the repository's wine-arm64/deps.pins and built by wine-arm64/build.sh.
+
+gnutls 3.8.13 (libgnutls.30.dylib: TLS for secur32's schannel, PFX import and export for crypt32)
+  Licence: LGPL-2.1-or-later, gnutls/COPYING.LESSERv2, as is the libtasn1 it includes. The libunistring it includes is
+  LGPL-3.0-or-later: gnutls/COPYING.LESSERv3 and gnutls/COPYINGv3 (the GPL-3.0 text the LGPL-3.0 builds on).
+  Source: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.13.tar.xz (SHA-256 GNUTLS_SHA256), unmodified,
+  pinned and built as FreeType is, with nettle and GMP linked in statically.
+
+nettle 4.0 (linked statically into libgnutls.30.dylib)
+  Licence: LGPL-3.0-or-later, elected from nettle's LGPL-3.0-or-later or GPL-2.0-or-later choice. Texts:
+  nettle/COPYING.LESSERv3, nettle/COPYINGv3.
+  Source: https://ftp.gnu.org/gnu/nettle/nettle-4.0.tar.gz (SHA-256 NETTLE_SHA256), unmodified, pinned and built as
+  FreeType is.
+
+GMP 6.3.0 (linked statically into libgnutls.30.dylib)
+  Licence: LGPL-3.0-or-later, elected from GMP's LGPL-3.0-or-later or GPL-2.0-or-later choice. Texts:
+  gmp/COPYING.LESSERv3, gmp/COPYINGv3.
+  Source: https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz (SHA-256 GMP_SHA256), unmodified, pinned and built as FreeType
+  is.
 
 FreeType: Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.

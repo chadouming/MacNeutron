@@ -13,6 +13,7 @@ FEX_DLL="$B/wine-arm64-src/fex-ec/Bin/libarm64ecfex.dll"
 FEX_SO="$B/wine-arm64-src/fex-unixlib/libarm64ecfex.so"
 DXMT_IN="$B/wine-arm64-src/dxmt-install"
 DXMT_TREE="$B/wine-arm64-src/dxmt"
+DEPS="$B/wine-arm64-src/deps"
 APP="$OUT/wine.app.tmp"
 R="$APP/Contents/Resources"
 INSTALL="$OUT/install.tmp"
@@ -22,6 +23,7 @@ check_signing
 [ -x "$BUILD/loader/wine" ] || die "no Wine build at $BUILD: run make wine-arm64"
 [ -f "$FEX_DLL" ] && [ -f "$FEX_SO" ] || die "no FEX build in $B/wine-arm64-src: run make wine-arm64"
 [ -d "$DXMT_IN" ] || die "no DXMT build at $DXMT_IN: run make wine-arm64"
+[ -f "$DEPS/.complete" ] || die "no FreeType and gnutls build at $DEPS: run make wine-arm64"
 mkdir -p "$OUT"
 rm -rf "$APP" "$INSTALL"
 trap 'rm -rf "$INSTALL"' EXIT
@@ -55,6 +57,10 @@ for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
 done
 for f in COPYING.LIB LICENSE LICENSE.OLD; do put "$DXMT_TREE" "$f" "$R/DXMT/"; done
 put "$DXMT_IN" version "$R/DXMT/"
+# FreeType and gnutls (ship-base spec §5): beside the unix libraries that dlopen them by name, which find them through
+# their LC_RPATH @loader_path/.
+U="$R/lib/wine/aarch64-unix"
+for l in libfreetype.6.dylib libgnutls.30.dylib; do put "$DEPS/lib" "$l" "$U/"; done
 # Licences (ship-base spec §4): the components' own texts, the committed README and NOTICES.md, and build.sh's SOURCE.
 # DXMT's stay in DXMT/.
 L="$R/licenses"
@@ -75,6 +81,16 @@ put "$B/dxmt-src/llvm-project/llvm" LICENSE.TXT "$L/llvm/"
 put "$B/dxmt-src/llvm-project/llvm" lib/Support/COPYRIGHT.regex "$L/llvm/"
 put "$B/dxmt-src/llvm-mingw" LICENSE.TXT "$L/llvm-mingw/"
 put "$B/dxmt-src/llvm-mingw" aarch64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt "$L/llvm-mingw/"
+# From the unpacked tarballs. libgnutls.30.dylib holds nettle, gmp and gnutls's own copy of libunistring (LGPL-3+):
+# gnutls's tarball has no LGPLv3 text, so its folder gets nettle's (the same GNU texts).
+DS="$S/deps-src"
+mkdir -p "$L/freetype" "$L/gnutls" "$L/nettle" "$L/gmp"
+put "$DS/freetype" LICENSE.TXT "$L/freetype/"
+put "$DS/freetype" docs/FTL.TXT "$L/freetype/"
+put "$DS/gnutls" COPYING.LESSERv2 "$L/gnutls/"
+for f in COPYING.LESSERv3 COPYINGv3; do
+  put "$DS/nettle" "$f" "$L/gnutls/"; put "$DS/nettle" "$f" "$L/nettle/"; put "$DS/gmp" "$f" "$L/gmp/"
+done
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 
@@ -102,7 +118,49 @@ while IFS= read -r f; do
   minos=$(otool -l "$f" | awk '/LC_BUILD_VERSION/ { b = 1 } b && /minos/ { print $2; exit }')
   [ "$minos" = 27.0 ] || die "minos of ${f#"$APP"/} is ${minos:-missing}, not 27.0"
   codesign -dvv "$f" 2>&1 | LC_ALL=C /usr/bin/grep -q '^Timestamp=' || die "${f#"$APP"/} has no secure timestamp"
+  # What it links (after otool -L's file line and, for a dylib, its own ID): the system's, or the bundle's own.
+  skip=2; [ -z "$(otool -D "$f" | tail -n +2)" ] || skip=3
+  out=$(otool -L "$f" | tail -n +$skip | awk '{ print $1 }' \
+    | LC_ALL=C /usr/bin/grep -vE '^(/usr/lib/|/System/|@rpath/|@loader_path/|@executable_path/)' || true)
+  [ -z "$out" ] || die "${f#"$APP"/} depends on $(echo "$out" | tr '\n' ' ')"
 done < "$OUT/macho.list"
+# FreeType and gnutls (ship-base spec §5): found by @rpath, free of the build folder's path (DXMT's winemetal.so names
+# its own build paths by design), and exporting every symbol Wine resolves from them, as Wine's sources name them:
+# the LOAD_FUNCPTR/MAKE_FUNCPTR lists and gnutls's optional ones, looked up by string.
+WD="$B/wine-arm64-src/wine/dlls"
+funcptrs() {  # funcptrs <prefix> <source>...: the <prefix>* names on the non-#define LOAD_FUNCPTR/MAKE_FUNCPTR lines
+  p=$1; shift
+  LC_ALL=C /usr/bin/grep -hE '(LOAD|MAKE)_FUNCPTR' "$@" | LC_ALL=C /usr/bin/grep -v '#define' \
+    | sed -nE "s/.*_FUNCPTR\\(($p[A-Za-z0-9_]*)\\).*/\\1/p"
+}
+lib_assert() {  # lib_assert <dylib> <how many symbols> <the symbols, one per line>
+  f="$U/$1"
+  id=$(otool -D "$f" | tail -n +2)
+  [ "$id" = "@rpath/$1" ] || die "$1's install name is ${id:-missing}, not @rpath/$1"
+  n=$(LC_ALL=C /usr/bin/grep -a -c -F "$B" "$f" || true)
+  [ "$n" = 0 ] || die "$1 names the build folder $B ($n lines)"
+  n=$(echo "$3" | LC_ALL=C /usr/bin/grep -c . || true)
+  [ "$n" = "$2" ] || die "Wine's sources name $n symbols from $1, not $2: read them, then update bundle.sh"
+  out=$({ nm -gU "$f" | awk '{ print "x", $3 }'; echo "$3" | sed 's/^/w _/'; } \
+    | awk '$1 == "x" { e[$2] = 1; next } !e[$2] { print substr($2, 2) }')
+  [ -z "$out" ] || die "$1 doesn't export $(echo "$out" | tr '\n' ' ')"
+}
+lib_assert libfreetype.6.dylib 46 "$(funcptrs FT_ "$WD/win32u/freetype.c" "$WD/dwrite/freetype.c" | sort -u)"
+set -- "$WD/secur32/schannel_gnutls.c" "$WD/crypt32/unixlib.c"
+lib_assert libgnutls.30.dylib 70 "$({ funcptrs gnutls_ "$@"
+  LC_ALL=C /usr/bin/grep -hoE 'dlsym\( *libgnutls_handle, *"gnutls_[A-Za-z0-9_]*"' "$@" | sed -E 's/.*"(.*)"/\1/'; } \
+  | sort -u)"
+# x18 (ship-base spec §5, §9): in every arm64 Mach-O but ntdll.so (§9's check reads its routines), the hits per file and
+# routine are exactly x18-allow.txt's: gnutls's CRYPTOGAMS routines keep constant tables after their last ret, which
+# decode as instructions naming x18. A new hit or a changed count is read in the disassembly, never just allowed.
+x18=$(LC_ALL=C /usr/bin/grep -v '/ntdll\.so$' "$OUT/macho.list" | while IFS= read -r f; do
+  if lipo -archs "$f" | LC_ALL=C /usr/bin/grep -qw arm64; then
+    sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$f" | sed "s|^|${f##*/} |"
+  fi
+done)
+got=$(echo "$x18" | awk 'NF { print $1, $2 }' | sort | uniq -c | awk '{ print $2, $3, $1 }' | LC_ALL=C sort)
+[ "$got" = "$(LC_ALL=C sort "$ROOT/wine-arm64/x18-allow.txt")" ] || die "x18 hits per file and routine differ from" \
+  "wine-arm64/x18-allow.txt: $(echo "$got" | tr '\n' ';') the hits: $(echo "$x18" | head -n 20 | tr '\n' ';')"
 rm "$OUT/macho.list"
 [ "$(realpath "$R/lib/wine/aarch64-unix/wine")" = "$(realpath "$APP")/Contents/MacOS/wine" ] \
   || die "lib/wine/aarch64-unix/wine does not resolve to Contents/MacOS/wine"

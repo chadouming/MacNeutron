@@ -1,0 +1,13 @@
+# Third-party sources wine.app is built from beside Wine, FEX and DXMT (ship-base spec §5), sourced by
+# wine-arm64/build.sh. In the build stamp, not in any tree's patch series: editing this file never re-clones Wine or
+# FEX.
+# The tarballs, checked by SHA-256 (the values match Homebrew's API cache and a fetch from these hosts, 2026-10-04):
+# FreeType (libfreetype.6.dylib) and gnutls, with nettle and gmp linked into it (libgnutls.30.dylib).
+FREETYPE_URL=https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz
+FREETYPE_SHA256=36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f
+GNUTLS_URL=https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.13.tar.xz
+GNUTLS_SHA256=ffed8ec1bf09c2426d4f14aae377de4753b53e537d685e604e99a8b16ca9c97e
+NETTLE_URL=https://ftp.gnu.org/gnu/nettle/nettle-4.0.tar.gz
+NETTLE_SHA256=3addbc00da01846b232fb3bc453538ea5468da43033f21bb345cb1e9073f5094
+GMP_URL=https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+GMP_SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898

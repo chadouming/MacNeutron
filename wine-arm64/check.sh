@@ -31,10 +31,10 @@ RWINE="$RTOOL/Libraries/Wine/bin"
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 # NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt dxmt-present"
-STEPS="$STEPS dxmt-arm64ec dxmt-x64 g4-bench"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit fonts-tls dxmt"
+STEPS="$STEPS dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
 NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt $NEEDS_DXMT g4-bench"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit fonts-tls dxmt $NEEDS_DXMT g4-bench"
 NEEDS_FEX="$G1 g2-litmus g5-jit $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
@@ -178,11 +178,13 @@ unentitled_cmd() {
     || { echo "exit $rc, without saying the entitlement is missing"; return 1; }
 }
 
-# exe_cmd <test>: runs $TESTS/<test>.exe, which passes when it prints PASS <test>.
+# exe_cmd <test> [args...]: runs $TESTS/<test>.exe with the arguments, which passes when it prints PASS <test>. Its
+# stderr (Wine's messages and traces) goes to $WORK/<test>.err.
 exe_cmd() {
-  out=$(wine_run "$TESTS/$1.exe" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
+  t=$1; shift
+  out=$(wine_run "$TESTS/$t.exe" "$@" 2> "$WORK/$t.err" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
   echo "$out"
-  echo "$out" | grep -qx "PASS $1"
+  echo "$out" | grep -qx "PASS $t"
 }
 
 # Gate G3: the CPU ID registers FEX reads (patch 10). `reg query` prints nothing for REG_QWORD; `reg export` does.
@@ -200,7 +202,7 @@ fex_cmd() {
     || { echo "the amd64 emulator is not libarm64ecfex.dll"; return 1; }
 }
 
-# Gate G1's hello: x64 code under FEX, with the exception and DLL-load traces in the step's log.
+# Gate G1's hello: x64 code under FEX, with the exception and DLL-load traces in $WORK/x64-hello.err.
 g1_hello_cmd() {
   export WINEDEBUG=+seh,+loaddll
   exe_cmd x64-hello
@@ -255,6 +257,16 @@ BENCH_ROWS=36
 bench_rows() {
   n=$(grep -c '^row ' "$1" || true)
   [ "$n" = "$BENCH_ROWS" ] || { echo "${1#"$WORK"/} has $n of $BENCH_ROWS rows; it ends: $(tail -n 1 "$1")"; return 1; }
+}
+
+# Text and TLS (ship-base spec §5): the bundled FreeType and gnutls load where Wine dlopens them. Wine says so on
+# stderr when one doesn't; those lines come before the FAIL line.
+fonts_tls_cmd() {
+  exe_cmd arm64-fonts-tls "Z:$ROOT/wine-arm64/tests/fixtures/fonts-tls.pfx" && rc=0 || rc=1
+  err="$WORK/arm64-fonts-tls.err"
+  bad=$(tr -d '\r' < "$err" | LC_ALL=C /usr/bin/grep -iE 'cannot find the FreeType|failed to load libgnutls' || true)
+  [ -z "$bad" ] || { echo "$bad"; echo "FAIL fonts-tls: a library didn't load (${err#"$ROOT"/})"; return 1; }
+  return $rc
 }
 
 # Gate G5 (spec §8): FEX's code memory never flips W^X (patch 12's trace) once a program runs, over one full x64-bench
@@ -428,6 +440,7 @@ run_step() {
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
+    fonts-tls) step fonts-tls 60 fonts_tls_cmd ;;
     dxmt) step dxmt 120 dxmt_cmd ;;
     dxmt-present) step dxmt-present 600 dxmt_present_cmd; grep '^info ' "$WORK/dxmt-present.log" ;;
     dxmt-arm64ec) step dxmt-arm64ec 3600 dxmt_lane_cmd arm64ec ARM64EC "$B/dxmt-tests-arm64ec" \

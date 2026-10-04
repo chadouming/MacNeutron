@@ -115,6 +115,7 @@ WA_TESTS = $(patsubst wine-arm64/tests/%.c,build/wine-arm64-tests/%.exe,$(wildca
 WA_FLAGS = -O1 -fms-extensions -D_WIN32_WINNT=0x0A00
 WA_FLAGS_arm64ec-viewec = -lonecore
 WA_FLAGS_x64-bench = -O2
+WA_FLAGS_arm64-fonts-tls = -lgdi32 -lsecur32 -ldwrite -lcrypt32
 wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
 	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) build/wine-arm64-tests/winshot
@@ -133,8 +134,9 @@ build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
 # MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and for gate G4's
 # Rosetta baseline an installed runtime-v4.7.3, run by the launcher `build` makes; the dxmt-* steps' D3DMetal reference
 # also needs GPTK imported into it and its tarball cached (dxmt/check.sh).
-wine-arm64-check: build wine-arm64 wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec
+wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
 	sh wine-arm64/tests/licences_test.sh build/wine-arm64/wine.app
+	sh wine-arm64/tests/licences_test.sh --self-test build/wine-arm64/wine.app
 	sh wine-arm64/check.sh

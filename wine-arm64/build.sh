@@ -1,14 +1,18 @@
 #!/bin/sh
-# Builds MacNeutron's arm64 Wine (11.19 + wine-arm64/patches/wine) into build/wine-arm64-src/wine-build, FEX
-# (+ wine-arm64/patches/fex) into fex-ec and fex-unixlib, and DXMT (dxmt/pins' commit + wine-arm64/patches/dxmt) for
-# ARM64X into dxmt-install, then stages the signed build/wine-arm64/wine.app (native arm64 spec §5.4, §6.3; arm64 DXMT
-# spec §4). Never installs tools. Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE.
+# Builds MacNeutron's arm64 Wine (11.19 + wine-arm64/patches/wine) into build/wine-arm64-src/wine-build, against
+# FreeType and gnutls built from wine-arm64/deps.pins' tarballs into deps, FEX (+ wine-arm64/patches/fex) into fex-ec
+# and fex-unixlib, and DXMT (dxmt/pins' commit + wine-arm64/patches/dxmt) for ARM64X into dxmt-install, then stages the
+# signed build/wine-arm64/wine.app (native arm64 spec §5.4, §6.3; arm64 DXMT spec §4; ship-base spec §5). Never
+# installs tools. Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE.
 # BUILD_DIR replaces build/ (tests).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/wine-arm64/pins"
 . "$ROOT/dxmt/pins"  # DXMT_REPO, DXMT_COMMIT, LLVM_TAG: the Rosetta stack's pin, shared
+. "$ROOT/wine-arm64/deps.pins"
 . "$ROOT/wine-arm64/lib.sh"
+FETCH_TAG=wine-arm64
+. "$ROOT/dxmt/fetch.sh"
 . "$ROOT/dxmt/llvm.sh"
 B="${BUILD_DIR:-$ROOT/build}"
 SRC="$B/wine-arm64-src"
@@ -16,6 +20,7 @@ OUT="$B/wine-arm64"
 W="$SRC/wine"
 F="$SRC/fex"
 D="$SRC/dxmt"
+DEPS="$SRC/deps"
 # What each tree was patched to, kept outside it so they never count as changes: <repo>.applied, HEAD after the
 # patches went on, and <repo>.series, the hash of the series (pins and patches) that went on. A tree at that HEAD with
 # another series is started over.
@@ -26,7 +31,7 @@ DXMT_PATCHES="$ROOT/wine-arm64/patches/dxmt"
 # 1. Tools, all named at once. bison and flex are keg-only: Homebrew's go first on PATH. The build doesn't run autoconf;
 #    the development loop does, for a patch that changes configure.ac (README).
 need_tool autoconf autoconf; need_tool bison bison keg; need_tool flex flex keg; need_tool cmake cmake
-need_tool ninja ninja; need_tool meson meson
+need_tool ninja ninja; need_tool meson meson; need_tool pkg-config pkg-config
 # DXMT compiles its own Metal shaders; Xcode ships the compiler as a separate component.
 xcrun metal --version > /dev/null 2>&1 || missing="$missing, Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"
 die_if_missing
@@ -86,7 +91,8 @@ stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.pat
   "$ROOT/wine-arm64/lib.sh" "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" \
   "$ROOT/wine-arm64/Info.plist" "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch "$ROOT/dxmt/llvm.sh" \
   "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
-  "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh")
+  "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh" "$ROOT/wine-arm64/deps.pins" \
+  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh")
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
@@ -117,22 +123,96 @@ else
   fi
 fi
 
-# 3. Configure, once per build folder: out of tree, with the configure the patches carry (no autoreconf, spec §5.4: it
-#    would rewrite configure with whatever autoconf is installed, and the tree would no longer be the applied one).
-if [ ! -f "$SRC/wine-build/Makefile" ]; then
-  echo "wine-arm64: configuring (log: $SRC/configure.log)" >&2
-  mkdir -p "$SRC/wine-build"
-  ( cd "$SRC/wine-build" && "$W/configure" --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests \
-      --without-x --without-wayland --without-oss --without-alsa --without-pulse --without-sane --without-usb \
-      --without-v4l2 --without-pcap --without-capi --without-opencl --without-cups CC=/usr/bin/clang ) \
-    > "$SRC/configure.log" 2>&1 || die "configure failed; see $SRC/configure.log"
+# 3. FreeType and gnutls (ship-base spec §5), which Wine dlopens, from the pinned tarballs into $DEPS: gmp and nettle
+#    static and folded into libgnutls.30.dylib, FreeType without PNG, HarfBuzz or Brotli. Nothing outside /usr/lib and
+#    /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins or the configure options change (their
+#    hash is deps/.complete); deps-src stays, bundle.sh copies the licence texts from it.
+deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"; }
+DEPS_TARS="gmp:$GMP_URL nettle:$NETTLE_URL gnutls:$GNUTLS_URL freetype:$FREETYPE_URL"  # <name>:<url>, build order
+fetch "$GMP_URL" "$SRC/${GMP_URL##*/}" "$GMP_SHA256"
+fetch "$NETTLE_URL" "$SRC/${NETTLE_URL##*/}" "$NETTLE_SHA256"
+fetch "$GNUTLS_URL" "$SRC/${GNUTLS_URL##*/}" "$GNUTLS_SHA256"
+fetch "$FREETYPE_URL" "$SRC/${FREETYPE_URL##*/}" "$FREETYPE_SHA256"
+conf_gmp="--enable-static --disable-shared --with-pic"
+conf_nettle="--enable-static --disable-shared --disable-documentation"  # PIC is nettle's default
+conf_gnutls="--enable-shared --disable-static --sysconfdir=/etc --with-included-libtasn1 --with-included-unistring
+  --without-p11-kit --without-idn --without-tpm --without-tpm2 --without-zlib --without-brotli --without-zstd
+  --without-leancrypto --disable-nls --disable-tools --disable-cxx --disable-doc --disable-tests --disable-libdane"
+conf_freetype="--enable-shared --disable-static --without-png --without-harfbuzz --without-brotli --with-zlib=yes
+  --with-bzip2=yes"
+deps_in=$({ deps_pins; echo "$conf_gmp"; echo "$conf_nettle"; echo "$conf_gnutls"; echo "$conf_freetype"; } \
+  | shasum -a 256 | cut -d ' ' -f 1)
+# build_dep <name> <configure options...>: configure, make and install one library from deps-src/<name>.
+build_dep() {
+  n=$1; shift
+  echo "wine-arm64: building $n (log: $SRC/deps-$n.log)" >&2
+  ( cd "$SRC/deps-src/$n" && ./configure --prefix="$DEPS" "$@" && make -j"$(sysctl -n hw.ncpu)" && make install ) \
+    > "$SRC/deps-$n.log" 2>&1 || die "building $n failed; see $SRC/deps-$n.log"
+}
+if [ "$(cat "$DEPS/.complete" 2> /dev/null)" = "$deps_in" ]; then
+  echo "wine-arm64: FreeType and gnutls are up to date" >&2
+else
+  rm -rf "$DEPS" "$SRC/deps-src"
+  for t in $DEPS_TARS; do
+    mkdir -p "$SRC/deps-src/${t%%:*}"
+    tar -xf "$SRC/${t##*/}" -C "$SRC/deps-src/${t%%:*}" --strip-components 1 || die "can't unpack ${t##*/}"
+  done
+  (
+    export CC=/usr/bin/clang PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" CPPFLAGS="-I$DEPS/include" LDFLAGS="-L$DEPS/lib"
+    unset PKG_CONFIG_PATH
+    # shellcheck disable=SC2086  # the options are lists
+    { build_dep gmp $conf_gmp; build_dep nettle $conf_nettle; build_dep gnutls $conf_gnutls
+      build_dep freetype $conf_freetype; }
+  )
+  # The shipped form: no debug symbols (they name the build folder), found by @rpath beside the .so files that load
+  # it. Then what it links: /usr/lib and /System only (after otool -L's file and ID lines). A failure names the log.
+  for l in freetype.6 gnutls.30; do
+    f="$DEPS/lib/lib$l.dylib" log="$SRC/deps-${l%.*}.log"
+    strip -S "$f" || die "can't strip ${f##*/}"
+    install_name_tool -id "@rpath/lib$l.dylib" "$f" || die "can't set the install name of ${f##*/}"
+    out=$(otool -L "$f" | tail -n +3 | awk '{ print $1 }' | LC_ALL=C /usr/bin/grep -vE '^(/usr/lib/|/System/)' || true)
+    [ -z "$out" ] || die "${f##*/} depends on $(echo "$out" | tr '\n' ' ')(see $log)"
+  done
+  out=$(otool -L "$DEPS/lib/libgnutls.30.dylib" | tail -n +3 | LC_ALL=C /usr/bin/grep -iE 'nettle|hogweed|gmp' || true)
+  [ -z "$out" ] || die "libgnutls.30.dylib links nettle or gmp as a library: $out (see $SRC/deps-gnutls.log)"
+  out=$(sed -n 's/^Requires.private: *//p' "$DEPS/lib/pkgconfig/freetype2.pc")
+  [ -z "$out" ] || die "libfreetype.6.dylib's freetype2.pc requires $out (see $SRC/deps-freetype.log)"
+  echo "$deps_in" > "$DEPS/.complete"
 fi
 
-# 4. Make.
+# 4. Configure: out of tree, with the configure the patches carry (no autoreconf, spec §5.4: it would rewrite configure
+#    with whatever autoconf is installed, and the tree would no longer be the applied one), against $DEPS alone for
+#    FreeType and gnutls (--with: missing is an error). FREETYPE_LIBS links only tools/sfnt2fon, which renders the
+#    bitmap fonts during the build and isn't installed: its rpath finds libfreetype's @rpath ID. Redone in a new build
+#    folder (a full Wine build) when the options or the deps change: both are recorded in wine-build/.configure-inputs.
+set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --without-x --without-wayland \
+  --without-oss --without-alsa --without-pulse --without-sane --without-usb --without-v4l2 --without-pcap \
+  --without-capi --without-opencl --without-cups --with-freetype --with-gnutls CC=/usr/bin/clang \
+  PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" FREETYPE_CFLAGS="-I$DEPS/include/freetype2" \
+  FREETYPE_LIBS="-L$DEPS/lib -lfreetype -Wl,-rpath,$DEPS/lib" GNUTLS_CFLAGS="-I$DEPS/include" \
+  GNUTLS_LIBS="-L$DEPS/lib -lgnutls"
+inputs=$(printf '%s\n' "$@"; cat "$DEPS/.complete")
+if [ -f "$SRC/wine-build/Makefile" ] && [ "$(cat "$SRC/wine-build/.configure-inputs" 2> /dev/null)" = "$inputs" ]; then
+  echo "wine-arm64: Wine's configure is up to date" >&2
+else
+  echo "wine-arm64: configuring (log: $SRC/configure.log)" >&2
+  rm -rf "$SRC/wine-build"
+  mkdir -p "$SRC/wine-build"
+  ( cd "$SRC/wine-build" && unset PKG_CONFIG_PATH && "$W/configure" "$@" ) > "$SRC/configure.log" 2>&1 \
+    || die "configure failed; see $SRC/configure.log"
+  printf '%s\n' "$inputs" > "$SRC/wine-build/.configure-inputs"
+fi
+# Every build, so a configure that took Homebrew's flags never gets built on: configure:<line>: <library> cflags: ...
+out=$(LC_ALL=C /usr/bin/grep -E '(cflags|libs):.*/opt/homebrew' "$SRC/wine-build/config.log" \
+  | sed 's/^configure:[0-9]*: //')
+[ -z "$out" ] || die "Wine's configure took flags from Homebrew: $(echo "$out" | tr '\n' ';')" \
+  "see $SRC/wine-build/config.log"
+
+# 5. Make.
 echo "wine-arm64: building (log: $SRC/make.log)" >&2
 make -C "$SRC/wine-build" -j"$(sysctl -n hw.ncpu)" > "$SRC/make.log" 2>&1 || die "make failed; see $SRC/make.log"
 
-# 5. FEX: the ARM64EC DLL with llvm-mingw's toolchain file (absolute path; TUNE_CPU=none, since the default reads
+# 6. FEX: the ARM64EC DLL with llvm-mingw's toolchain file (absolute path; TUNE_CPU=none, since the default reads
 #    /proc/cpuinfo), the unixlib with Apple clang. Each build folder is configured once.
 echo "wine-arm64: building FEX (log: $SRC/fex.log)" >&2
 : > "$SRC/fex.log"
@@ -159,7 +239,7 @@ if llvm-readobj --coff-tls-directory "$dll" | grep -q StartAddressOfRawData; the
 fi
 [ "$(grep -c 'Wine builtin DLL' "$dll")" = 1 ] || die "libarm64ecfex.dll lacks Wine's builtin marker"
 
-# 6. DXMT (arm64 DXMT spec §4): ARM64X front ends and winemetal.dll from DXMT's own cross file, linked against this
+# 7. DXMT (arm64 DXMT spec §4): ARM64X front ends and winemetal.dll from DXMT's own cross file, linked against this
 #    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). The build
 #    folder is configured once per tree (fetch_dxmt removes it): changing the options below needs
 #    rm -rf build/wine-arm64-src/dxmt-build. dxmt-install is redone every build.
@@ -187,11 +267,13 @@ mkdir -p "$OUT"
 build_probe arm64 "$SRC/llvm-arm64" "$OUT" "$SRC"
 build_translate arm64 "$SRC/llvm-arm64" "$D" "$SRC/dxmt-build" "$OUT" "$SRC"
 
-# 7. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
+# 8. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
 #    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.
 series() { if [ "$1" = development ]; then echo dev; else echo "$2"; fi; }  # series <mode> <series hash>
 mac=$(git -C "$ROOT" rev-parse HEAD)
-[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || mac="$mac+dirty"
+# Dirty when anything the build reads from the repository differs from that commit, a new file included.
+[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile)" ] \
+  || mac="$mac+dirty"
 {
   echo "MACNEUTRON_COMMIT=$mac"
   echo "WINE_COMMIT=$WINE_COMMIT"
@@ -205,11 +287,12 @@ mac=$(git -C "$ROOT" rev-parse HEAD)
   echo "DXMT_SERIES=$(series "$dxmt_mode" "$dxmt_series")"
   echo "LLVM_TAG=$LLVM_TAG"
   echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
+  deps_pins  # the tarballs' <NAME>_URL and <NAME>_SHA256
 } > "$SRC/SOURCE"
 echo "wine-arm64: bundling (log: $OUT/install.log)" >&2
 sh "$ROOT/wine-arm64/bundle.sh"
 
-# 8. Stamp, last: only a finished build of the applied patches gets one.
+# 9. Stamp, last: only a finished build of the applied patches gets one.
 if [ -z "$dev" ]; then
   echo "$stamp" > "$OUT/version"
 fi
