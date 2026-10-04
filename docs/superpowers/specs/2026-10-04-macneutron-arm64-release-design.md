@@ -573,3 +573,57 @@ be run by hand from the frozen reference.
 (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0)". The Rosetta-era
 `docs/testing/acceptance-*.md` records get "Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the
 frozen reference (`tools/freeze-rosetta-reference.sh`)".
+
+## 14. Amendments made while planning (2026-10-04)
+
+The interface digests written for the plan (`docs/research/2026-10-04-arm64-release/digest-*.md`) showed where this
+spec's text didn't match the code. Where §§1-13 say otherwise, this section wins.
+
+- **§3.1:** the Rosetta-era removal list also has `gptk.staging` and, when R0b passes, the old `proton` stub. R0b's
+  throwaway tools are named `r0b-probe` and `r0b-probe-native`: `MappingPlanner.isOurs` treats any name starting with
+  `macneutron` as ours. The runtime tool's CLI copy is `bin/macneutron`; `macneutron-native/bin/macneutron` is copied
+  from it by `SteamPlayMode`. The `passthrough` verb sets its preference with `posix_spawnattr_setarchpref_np` (type
+  and subtype, so arm64e comes before arm64).
+- **§3.3:** a target that is missing or unreadable is "not PE" and isn't checked. The macOS 27 / Apple Silicon check
+  stays (it carries §10's text and is tested), but an arm64-only binary built for macOS 27 can't even load elsewhere.
+  A failed FEX registration fails the preparation (the stamp stays `wine.app preparing`; the next launch retries).
+- **§3.7:** `MACNEUTRON_PRESENT=1` goes only to the game's processes (`run`, `waitforexitandrun`), as the presenter
+  does today.
+- **§3.9:** the install is `RuntimeInstaller.install(wineApp:layout:launcherBinary:steamExe:force:) ->
+  RuntimeInstallOutcome` (`installed`, `unchanged`, `deferred(path)`), and the CLI verb is
+  `macneutron install --tool-dir <dir> --wine-app <path> [--steam-exe <path>] [--force]`; it exits 0 when installed or
+  unchanged, 3 when deferred (printing `deferred: <path> is running`), 1 on an error. `--steam-exe` is for tool folders
+  assembled from a dev build (`.build/release/` has no `steam.exe` beside the CLI). The app's poll also reinstalls when
+  `runtime-damaged` appears.
+- **§3.11:** setup's requirements step checks Steam only: macOS refuses to open the app below macOS 27 or on Intel
+  (its minimum is 27.0 and it is arm64 only). The host build (`swift build -c release`) is already thin arm64 on Apple
+  Silicon; `release.sh` asserts `lipo -archs` is `arm64`. AVX is a per-game toggle, not a column.
+- **§5.2:** release mode also deletes the `winecpp` and `wineg++` links (to `winegcc`). Stripping goes between the
+  layout and the signing; every assertion runs after signing, as today.
+- **§5.3:** `winemetal.so` has no initialisation today; patch 0002 adds a constructor.
+- **§6.3 step 1:** `release.sh` fetches `origin` first; it checks each tree with `lib.sh`'s `build_mode` (naming any
+  tree not `applied`) and then requires `make wine-arm64` to say `up to date`; `dxmt/published.sh` runs on
+  `build/wine-arm64-src/dxmt` with `DXMT_COMMIT`.
+- **§6.3 step 2:** `bundle.sh --release` writes the bundle's `licenses/SOURCE` itself (a `lib.sh` function shared with
+  `build.sh`) with `MACNEUTRON_COMMIT` = HEAD: the staged dev `SOURCE` lags HEAD after commits that change no build
+  input.
+- **§7.2:** lsteamclient's blob-less clone can't be `git archive`d offline; the archive tars its clean sparse worktree
+  (exactly the files the build used) and records the commit. Each patched tree's tar names its applied commit
+  (`<tree>.applied`), not the pin; the archive carries `SOURCES.txt` (tree, pin, applied commit, patch count). R5 checks
+  `git rev-parse <applied>~<patch count>` = `*_COMMIT`, recomputes each `*_SERIES` from the archived pins and patches,
+  and checks the tarballs' SHA-256 and the submodules' commits.
+- **§7.3:** the README names the new `install` verb without naming `import-gptk` (a refusal string).
+- **§8.2:** only G4 uses a Rosetta baseline (M1 and M2 run on `wine.app`). In `dxmt/check.sh`, reference runs get their
+  own compat folders (`compat/ref`, `compat/ref-A`…`-E`): the two launchers would otherwise wreck each other's prefixes.
+  `dxmt/tests/run.sh` is removed. `dxmt/tests/shaders/compile.sh` runs DXC under the frozen reference's Wine and fetches
+  DXC itself (it was `dxmt/build.sh`'s); `dxmt/build.sh` and its `build_test.sh` rows go with `make dxmt`.
+- **§9:** L5's `d3d11probe.exe` creates a device and a swap chain on `wined3d` (it draws nothing). L3's "second
+  steam.exe" row stays a direct run (a second `waitforexitandrun` waits in `wineserver -w`). L6's deferral is exit code 3.
+- **§10:** row 1 becomes "macOS won't open the app (minimum macOS 27, Apple Silicon only); a launch exits non-zero
+  with the text" (the launcher row stays for tests and stray binaries). The "entitlement refused" row is visible only in
+  the game log with `MACNEUTRON_LOG=1` (Wine's message); there is no notification. Failure messages also go into the
+  game log when one is being written.
+- **§13:** every spec dated before 2026-10-04 that describes the Rosetta runtime, GPTK or `install-dxmt` gets the status
+  line (not only the six named), and the native spec's lines on the Rosetta runtime staying until sub-project 5 and on
+  per-game switching are marked superseded too. The three `acceptance-arm64-*` records get a one-line note that their
+  Rosetta baselines now come from the frozen reference.
