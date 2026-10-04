@@ -133,7 +133,7 @@ Wine patches after this sub-project: 0001–0003 and 0005–0014 unchanged; 0004
   - every `otool -L` entry of every Mach-O in the bundle starts with `/usr/lib/`, `/System/`, `@rpath/`, `@loader_path/` or `@executable_path/`;
   - **the x18 scan:** for every arm64 Mach-O in the bundle except `ntdll.so`, `otool -tV` with comments stripped (`sed 's/;.*//'`), matched with `LC_ALL=C grep -E` against the regex of `docs/research/2026-10-02-native-arm64/probes/x18-cache-scan.sh`, gives only the hits listed in the committed `wine-arm64/x18-allow.txt` (file, routine, count; today: `libgnutls.30.dylib` — 1 in `gcm_ghash_v8_4x`, 3 in `sha256_block_data_order`, 3 in `sha512_block_data_order`, each the data words after the routine's last `ret`). Any other hit, or a changed count, fails;
   - every symbol Wine resolves from the two libraries (70 for gnutls, 46 for FreeType) is exported (`nm -gU`);
-  - no shipped dylib contains the build folder's path (`strings`);
+  - neither new dylib contains the build folder's path (after `strip -S`; DXMT's `winemetal.so` names build paths by design);
   - `minos 27.0` (the existing loop already covers them).
 - **Check step `fonts-tls`:** `wine-arm64/tests/arm64-fonts-tls.c` (aarch64 PE; `WA_FLAGS_arm64-fonts-tls = -lgdi32 -lsecur32 -ldwrite -lcrypt32`) prints and requires:
   - `CreateFontW(L"Tahoma")`: `GetTextMetricsW` height, `GetTextExtentPoint32W(L"Hello")` and `GetDialogBaseUnits()`, all > 0 (win32u's FreeType load);
@@ -171,7 +171,7 @@ Wine patches after this sub-project: 0001–0003 and 0005–0014 unchanged; 0004
   - `bridge/probe.sh` in an arm64 mode, x64 lane only: the bundle's `lsteamclient.dll` copied into the prefix as `steamclient64.dll`, the x64 `steamprobe.exe` under FEX with SMITE 2's `steam_api64.dll` (read in place) and `STEAM_COMPAT_CLIENT_INSTALL_PATH` pointing at Mac Steam. `SteamAPI_Init` succeeds, the SteamID is non-zero, and an auth ticket of more than 0 bytes comes back. The step never prints the SteamID or the persona name: it reports `steamid ok` and `ticket <n> bytes`;
   - fault survival: after `SteamAPI_Init`, `steamprobe.exe` (a new mode behind an argument) raises an access violation in PE code and catches it with SEH, so Steam's crash handler hasn't taken over Wine's faults;
   - it needs Steam running and logged in, and SMITE 2 installed (as `dxmt-x64` already does); without them it fails naming what's missing;
-  - reported, not gated: the x18 scan of the installed `steamclient.dylib` (Valve's code, outside our control), with hits classified as data after `ret`.
+  - reported, not gated: the x18 scan of the arm64 slice of the installed `steamclient.dylib` (Valve's code, outside our control); its hits are data after `ret` today.
 - **Not here:** the launcher copying the DLL into game prefixes and its arm64 paths, and the release-bundle licence decision (sub-project 5); the overlay (6); the 32-bit client (8).
 
 ## 8. JIT memory: the zero-flip check
@@ -194,7 +194,7 @@ One patch to `dlls/ntdll/unix/signal_arm64.c`, following `docs/research/2026-10-
   - T2: `wine-arm64/tests/arm64-x18path.c`, also built as `x64-x18path.exe` (under FEX) by an extra Makefile rule; one line `ok <path>` per path: SEH access violation, `__debugbreak`, SIGILL, Suspend/Get/SetThreadContext, a SendMessage callback, `NtReadFile` into an unmapped buffer, an APC, 200 thread create/exit cycles, a raw `syscall`, a FEX-suspended thread; 0 mismatches and no `x18:` line;
   - T3: `wine` run directly (not through `exe_cmd`) on `arm64-hello.exe` with `WINE_X18_SELFTEST=double_on` must exit with status 133 (`SIGTRAP`), with no `err:seh` line; Apple's annotation is reported from the crash report if one appears, not gated;
   - T4 (stress): `arm64-x18path.exe stress`: 4 threads loop `NtQuerySystemTime` and a no-op unix call for 3 s while another thread hammers `SuspendThread`/`GetThreadContext`/`ResumeThread` and a timer signal fires every millisecond; 0 mismatches, no trap;
-  - a static check: in `otool -tV ntdll.so` with comments stripped, x18 appears only in `__wine_syscall_dispatcher`, `__wine_unix_call_dispatcher`, `call_user_mode_callback` and `__wine_syscall_dispatcher_return`, each inside an ON window.
+  - a static check: in `otool -tV ntdll.so` with comments stripped, x18 appears only in `__wine_syscall_dispatcher`, `__wine_unix_call_dispatcher`, `call_user_mode_callback` and `__wine_syscall_dispatcher_return`. (Amended 2026-10-04 with the lighter tests: whether each use sits inside an ON window is proven at run time by T1–T4 and the invariant, not by a static ordering check.)
 - **Measured, not gated (M2):** the round-trip cost against today's patch 0004 (an A/B on two builds, once, during development), expected ≤ 4 ns per syscall round trip. DXMT frame time isn't used: it is paced by the display (sub-project 2's acceptance).
 - `probes/x18-cache-scan.sh` keeps running on every macOS beta (it still guards `_sigtramp`).
 
@@ -234,7 +234,7 @@ New steps go before `dxmt` in `STEPS`: `fonts-tls`, `msync`, `wxflip-x64`, `x18`
 
 ## 12. Acceptance
 
-Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with its time (including the deps), every check step, S1–S7, M1's timing rows in both modes, M2's A/B, the bridge's results (`steamid ok`, the ticket size; never the SteamID or persona name), the red runs before each change (37 MISSING; dbu 0,0 and `0x80090305`), the bundle's new layout and its licence tree, and the pins and patch list. `wine-arm64/README.md` gains the new steps, the deps, the msync and x18 credits in its licence section, and the check's new run time.
+Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with its time (including the deps), every check step, S1–S7, M1's timing rows in both modes, M2's A/B, the bridge's results (`steamid ok`, the ticket size; never the SteamID or persona name), the red runs before each change (46 MISSING; dbu 0,0 and `0x80090305`; msync; x18), the bundle's new layout and its licence tree, and the pins and patch list. `wine-arm64/README.md` gains the new steps, the deps, the msync and x18 credits in its licence section, and the check's new run time.
 
 ## 13. Risks
 
