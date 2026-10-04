@@ -35,13 +35,13 @@ export WINEMSYNC=1
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 # NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync x18"
 STEPS="$STEPS g5-jit"
 STEPS="$STEPS fonts-tls steam-bridge dxmt dxmt-present dxmt-arm64ec dxmt-x64 g4-bench"
 NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync g5-jit fonts-tls steam-bridge"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync x18 g5-jit fonts-tls steam-bridge"
 NEEDS_PREFIX="$NEEDS_PREFIX dxmt $NEEDS_DXMT g4-bench"
-NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync g5-jit steam-bridge $NEEDS_DXMT g4-bench"
+NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync x18 g5-jit steam-bridge $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
@@ -303,6 +303,40 @@ msync_cmd() {
   done
 }
 
+# Gate S5 (ship-base spec §9): strict x18. T1 arm64-x18v: 16 threads keep x18 == their TEB through preemption. T2
+# arm64-x18path and x64-x18path (under FEX): x18 is the TEB again after every way between PE and unix code. T4
+# arm64-x18path stress: the same while a fifth thread suspends the four that run syscalls and unix calls. T3: a
+# toggle imbalance (ntdll's WINE_X18_SELFTEST=double_on enables the mode twice at process start) kills the process by
+# SIGTRAP (status 133) instead of becoming a Windows exception. Statically, ntdll.so names x18 only in the routines that
+# move between PE and unix code. Nothing may print ntdll's "x18: PE stack running OFF". Each run's stderr is kept as
+# x18-<test>[-<arg>].err.
+X18_ROUTINES="___wine_syscall_dispatcher ___wine_unix_call_dispatcher _call_user_mode_callback"
+X18_ROUTINES="$X18_ROUTINES ___wine_syscall_dispatcher_return"
+x18_run() {  # x18_run <test> [arg]
+  out=$(exe_cmd "$@") && rc=0 || rc=$?
+  echo "$out"
+  cp "$WORK/$1.err" "$WORK/x18-$1${2:+-$2}.err"
+  [ "$rc" = 0 ] || { echo "FAIL x18: $*: $(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' || echo "$out" | tail -n 1)"; }
+  return "$rc"
+}
+x18_cmd() {
+  # The crash dialog off: a crash ends the run.
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || return 1
+  x18_run arm64-x18v && x18_run arm64-x18path && x18_run x64-x18path && x18_run arm64-x18path stress || return 1
+  WINE_X18_SELFTEST=double_on wine_run "$TESTS/arm64-hello.exe" > "$WORK/x18-t3.log" 2>&1 && rc=0 || rc=$?
+  echo "T3: WINE_X18_SELFTEST=double_on: exit $rc"
+  [ "$rc" = 133 ] || { echo "FAIL x18: T3 exited $rc, not 133 (SIGTRAP)"; return 1; }
+  ! LC_ALL=C /usr/bin/grep -q 'err:seh' "$WORK/x18-t3.log" || { echo "FAIL x18: T3 logged err:seh"; return 1; }
+  so="$TOOL/Contents/Resources/lib/wine/aarch64-unix/ntdll.so"
+  h=$(sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$so") || { echo "FAIL x18: x18scan.sh failed on ntdll.so"; return 1; }
+  [ -n "$h" ] || { echo "FAIL x18: ntdll.so names x18 nowhere"; return 1; }
+  bad=$(echo "$h" | awk -v ok=" $X18_ROUTINES " 'index(ok, " " $1 " ") == 0')
+  [ -z "$bad" ] || { echo "$bad"; echo "FAIL x18: ntdll.so names x18 outside $X18_ROUTINES"; return 1; }
+  echo "info x18: ntdll.so names x18 $(echo "$h" | LC_ALL=C /usr/bin/grep -c .) times, in $(echo "$h" | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
+  off=$(LC_ALL=C /usr/bin/grep -l 'x18: PE stack running OFF' "$WORK"/x18-*.err "$WORK/x18-t3.log" || true)
+  [ -z "$off" ] || { echo "FAIL x18: 'x18: PE stack running OFF' in $(echo "$off" | tr '\n' ' ')"; return 1; }
+}
+
 # x64-bench's rows (gates G5 and G4). bench_rows <file>: fails, saying so, unless the run printed every one.
 BENCH_ROWS=36
 bench_rows() {
@@ -532,6 +566,7 @@ run_step() {
     wxflip) step wxflip 60 wxflip_cmd; grep '^info ' "$WORK/wxflip.log" ;;
     wxflip-x64) step wxflip-x64 60 wxflip_x64_cmd; grep '^info ' "$WORK/wxflip-x64.log" ;;
     msync) step msync 300 msync_cmd; grep '^info ' "$WORK/msync.log" ;;
+    x18) step x18 180 x18_cmd; grep '^info ' "$WORK/x18.log" ;;
     g1-unaligned) step g1-unaligned 60 exe_cmd x64-unaligned ;;
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     fonts-tls) step fonts-tls 60 fonts_tls_cmd ;;
