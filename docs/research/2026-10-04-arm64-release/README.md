@@ -6,5 +6,6 @@ Four read-only maps written before the design, each citing `file:line` at commit
 - `map-setup-state.md`: setup, per-game settings, prefixes, preflight, the app and its signing.
 - `map-arm64-deliverables.md`: what sub-projects 1-3 hand the launcher (`wine.app`'s layout, `check.sh`'s recipe).
 - `map-release.md`: release packaging and licensing (nothing has been released yet; lsteamclient's licence).
+- `spec-review.md`: the adversarial review of the spec draft (three lenses, each re-checked by a sceptic).
 
 The design built on them: `docs/superpowers/specs/2026-10-04-macneutron-arm64-release-design.md`.
