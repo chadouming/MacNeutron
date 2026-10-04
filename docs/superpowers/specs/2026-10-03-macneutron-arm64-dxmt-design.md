@@ -104,9 +104,9 @@ One Wine commit in sub-project 1's development tree, exported as the next Wine p
 
 - **`window.c`:** a `DECLSPEC_EXPORT` 10-slot `macdrv_functions` table in DXMT's slot order (§2), and a stand-in struct whose `client_cocoa_view` is at offset 24 (`C_ASSERT`). `get_win_data` creates a client surface for the window, records it on the window's data, and returns with the window lock held; `release_win_data` unlocks. A window from another process gets a NULL view, so DXMT stops at its own message, not a NULL dereference. Surfaces are freed when the window is destroyed, after the lock is released.
 - **`cocoa_window.m`:** the Metal layer posts `CLIENT_SURFACE_PRESENTED` from `nextDrawable`, for DXMT's views only.
-- **`event.c`, `macdrv.h`, `macdrv_cocoa.h`:** the event handler calls `client_surface_present`.
+- **`event.c`, `macdrv.h`, `macdrv_cocoa.h`:** the event handler calls `client_surface_present` for a surface the window still lists.
 
-The draft in the research folder is the starting point. Known limits it shares with CrossOver: a `nextDrawable` during window close can queue a pointer to a freed surface (§7's window cycles exercise it); every frame posts an event; the lock is held across main-thread round trips; child-window swap chains need dappermint's `f77c272bbe` (deferred until a game needs it).
+The draft in the research folder is the starting point. Known limits it shares with CrossOver: a `nextDrawable` during window close can queue a pointer to a freed surface, now guarded: the handler presents only surfaces the window still lists (§7's window cycles exercise it); every frame posts an event; the lock is held across main-thread round trips; child-window swap chains need dappermint's `f77c272bbe` (deferred until a game needs it; the handler presents a toplevel window's surfaces only).
 
 ## 6. The bundle
 
@@ -191,6 +191,6 @@ Recorded in `docs/testing/acceptance-arm64-dxmt.md`: clean build, the bring-up r
 - **DXMT has never loaded here:** the ARM64X front ends, `winemetal.dll`'s unix calls, and x64 callers reaching DXMT's ARM64EC code through FEX (COM calls through vtables included) are untried; the bring-up order tests each in turn. If x64 calls fail where ARM64EC calls work, the fault is in the call path (FEX's or Wine's ARM64EC dispatch, or DXMT code without entry thunks), and is fixed there with a patch naming the failure.
 - **Bit-identical results across hosts:** the D3DMetal comparisons are exact for most checks, and today they hold for x86_64 DXMT. arm64 DXMT may differ in the last bit: clang contracts floating-point multiply-adds into FMA on arm64 by default (x86_64 without `-mfma` can't), so host-side float math in airconv or `winemetal.so` can round differently, and different AIR can make Metal's compiler optimize differently. Expect it at D3 rather than read it as a DXMT bug; the first fix is `-ffp-contract=off` for the unix side (a DXMT patch naming the failing check), and a check is only ever loosened with its reason recorded.
 - **Weak memory:** DXMT's queue and threading code now runs natively on Arm's weaker memory model instead of under Rosetta's TSO. The hazard checks (`dxmt/check.sh` lane B) may expose real races.
-- **Window-close races** shared with CrossOver's design (§5); the window cycles exercise one.
+- **Window-close races** shared with CrossOver's design (§5); the freed-surface case is now guarded (the handler presents only surfaces the window still lists), and the window cycles exercise it.
 - **Check time:** two full `dxmt/check.sh` lanes plus their D3DMetal reference runs; measured at D3.
 - **Two DXMT trees:** the Rosetta stack builds the pin as is; the arm64 stack builds the pin plus patches. They diverge until the patches are folded into the fork.

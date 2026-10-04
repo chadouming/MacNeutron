@@ -15,7 +15,9 @@ surface view at offset 24, where DXMT reads client_cocoa_view. Nothing
 in win32u updates or presents such a surface, so the view's metal layer
 reports each nextDrawable to the window's thread, which presents the
 surface: that shows the view again after a GDI flush hid it and keeps
-it on the client rect.
+it on the client rect. The handler presents only a surface the window
+still lists, since a nextDrawable during window close can post a
+pointer to a freed surface.
 
 Sources (LGPL), adapted to Wine 11.19's client surfaces:
 - CodeWeavers' dlls/winemac.drv/d3dmetal.c (Brendan Shanks,
@@ -28,12 +30,12 @@ Sources (LGPL), adapted to Wine 11.19's client surfaces:
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- dlls/winemac.drv/cocoa_window.m | 38 ++++++++++++++-
+ dlls/winemac.drv/cocoa_window.m | 38 ++++++++++++-
  dlls/winemac.drv/event.c        |  5 ++
  dlls/winemac.drv/macdrv.h       |  2 +
  dlls/winemac.drv/macdrv_cocoa.h |  5 ++
- dlls/winemac.drv/window.c       | 86 +++++++++++++++++++++++++++++++++
- 5 files changed, 135 insertions(+), 1 deletion(-)
+ dlls/winemac.drv/window.c       | 98 +++++++++++++++++++++++++++++++++
+ 5 files changed, 147 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
 index 94fc3e7..447c142 100644
@@ -106,7 +108,7 @@ index 94fc3e7..447c142 100644
  {
      OnMainThread(^{
 diff --git a/dlls/winemac.drv/event.c b/dlls/winemac.drv/event.c
-index 18185a6..a9d9110 100644
+index 18185a6..dbb9369 100644
 --- a/dlls/winemac.drv/event.c
 +++ b/dlls/winemac.drv/event.c
 @@ -67,6 +67,7 @@ static const char *dbgstr_event(int type)
@@ -130,13 +132,13 @@ index 18185a6..a9d9110 100644
          macdrv_app_quit_requested(event);
          break;
 +    case CLIENT_SURFACE_PRESENTED:
-+        macdrv_client_surface_presented(event);
++        macdrv_client_surface_presented(hwnd, event);
 +        break;
      case DISPLAYS_CHANGED:
          macdrv_displays_changed(event);
          break;
 diff --git a/dlls/winemac.drv/macdrv.h b/dlls/winemac.drv/macdrv.h
-index 5ee84a2..beddc32 100644
+index 5ee84a2..51ee41c 100644
 --- a/dlls/winemac.drv/macdrv.h
 +++ b/dlls/winemac.drv/macdrv.h
 @@ -242,6 +242,7 @@ extern void macdrv_ime_set_text(HWND hwnd, CFStringRef text, bool complete,
@@ -151,7 +153,7 @@ index 5ee84a2..beddc32 100644
  extern void activate_on_following_focus(void);
  
  extern void macdrv_handle_event(const macdrv_event *event);
-+extern void macdrv_client_surface_presented(const macdrv_event *event);
++extern void macdrv_client_surface_presented(HWND hwnd, const macdrv_event *event);
  
  extern void macdrv_window_close_requested(HWND hwnd);
  extern void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event);
@@ -186,10 +188,10 @@ index 78f92a8..38897fa 100644
  extern WineMetalSwapChain_id macdrv_create_offscreen_swapchain(void* hwnd, CGRect bounds);
  extern CAMetalLayer *macdrv_swapchain_get_layer(WineMetalSwapChain_id swapchain);
 diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
-index 7d8bf13..021e4d5 100644
+index 7d8bf13..bdcfb57 100644
 --- a/dlls/winemac.drv/window.c
 +++ b/dlls/winemac.drv/window.c
-@@ -1185,6 +1185,90 @@ bool macdrv_client_surface_acquire_metal_swapchain(struct macdrv_client_surface
+@@ -1185,6 +1185,102 @@ bool macdrv_client_surface_acquire_metal_swapchain(struct macdrv_client_surface
      return surface->metal_swapchain != NULL;
  }
  
@@ -242,9 +244,21 @@ index 7d8bf13..021e4d5 100644
 +    free(data);
 +}
 +
-+void macdrv_client_surface_presented(const macdrv_event *event)
++/* A nextDrawable during window close can post a surface DestroyWindow has freed since, so present
++ * only a surface the window still lists. DestroyWindow frees them on this thread, so a listed one
++ * outlives client_surface_present. Events come for the toplevel's Cocoa window, so a child window's
++ * surface is never listed here: child-window swap chains aren't supported yet. */
++void macdrv_client_surface_presented(HWND hwnd, const macdrv_event *event)
 +{
-+    client_surface_present(event->client_surface_presented.client_surface);
++    struct client_surface *client = event->client_surface_presented.client_surface;
++    struct macdrv_win_data *data;
++    BOOL listed;
++
++    if (!(data = get_win_data(hwnd))) return;
++    listed = data->dxmt_surfaces &&
++             CFArrayContainsValue(data->dxmt_surfaces, CFRangeMake(0, CFArrayGetCount(data->dxmt_surfaces)), client);
++    release_win_data(data);  /* before presenting: the surfaces lock ranks above win_data_mutex */
++    if (listed) client_surface_present(client);
 +}
 +
 +/* Looked up by DXMT's winemetal.so with dlsym(RTLD_DEFAULT, "macdrv_functions"); the slot
@@ -280,7 +294,7 @@ index 7d8bf13..021e4d5 100644
  /**********************************************************************
   *              SetDesktopWindow   (MACDRV.@)
   */
-@@ -1269,6 +1353,8 @@ void macdrv_DestroyWindow(HWND hwnd)
+@@ -1269,6 +1365,8 @@ void macdrv_DestroyWindow(HWND hwnd)
  
      CFDictionaryRemoveValue(win_datas, hwnd);
      release_win_data(data);
