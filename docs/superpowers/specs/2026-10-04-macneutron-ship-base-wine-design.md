@@ -234,7 +234,7 @@ New steps go before `dxmt` in `STEPS`: `fonts-tls`, `msync`, `wxflip-x64`, `x18`
 
 ## 12. Acceptance
 
-Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with its time (including the deps), every check step, S1–S6, M1's timing rows in both modes, M2's A/B, the bridge's results (`steamid ok`, the ticket size; never the SteamID or persona name), the red runs before each change (37 MISSING; dbu 0,0 and `0x80090305`), the bundle's new layout and its licence tree, and the pins and patch list. `wine-arm64/README.md` gains the new steps, the deps, the msync and x18 credits in its licence section, and the check's new run time.
+Recorded in `docs/testing/acceptance-arm64-ship-base.md`: the clean build with its time (including the deps), every check step, S1–S7, M1's timing rows in both modes, M2's A/B, the bridge's results (`steamid ok`, the ticket size; never the SteamID or persona name), the red runs before each change (37 MISSING; dbu 0,0 and `0x80090305`), the bundle's new layout and its licence tree, and the pins and patch list. `wine-arm64/README.md` gains the new steps, the deps, the msync and x18 credits in its licence section, and the check's new run time.
 
 ## 13. Risks
 
