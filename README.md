@@ -20,7 +20,9 @@ make wine-arm64-check  # its gates under real Wine
 ```
 
 The arm64 runtime now runs Direct3D 11/12 (D3D10's front end is bundled, untested) through our DXMT built for arm64,
-ARM64EC programs natively and x64 ones under FEX (`docs/testing/acceptance-arm64-dxmt.md`).
+ARM64EC programs natively and x64 ones under FEX (`docs/testing/acceptance-arm64-dxmt.md`). It also renders Windows
+text, does TLS, synchronises with msync and reaches Steam through an arm64 Steam bridge
+(`docs/testing/acceptance-arm64-ship-base.md`).
 Its `wine.app` carries every component's licence in `Contents/Resources/licenses` (`wine-arm64/licenses/README`).
 Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.
 

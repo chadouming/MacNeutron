@@ -1,7 +1,7 @@
 # MacNeutron — Native arm64 stack, sub-project 3: Ship-base Wine
 
 - **Date:** 2026-10-04 (revised the same day after an adversarial review: three lenses, each re-checked by a sceptic)
-- **Status:** Approved by the maintainer on 2026-10-04, with two changes folded in: the Steam bridge moves into this sub-project, and the tests are lightened. The design was approved in conversation the same day ("Go"), with the maintainer's decisions in §1.
+- **Status:** Implemented 2026-10-04; gates S1–S7 pass and M1–M2 are measured: `docs/testing/acceptance-arm64-ship-base.md`. Approved by the maintainer on 2026-10-04, with two changes folded in: the Steam bridge moves into this sub-project, and the tests are lightened. The design was approved in conversation the same day ("Go"), with the maintainer's decisions in §1.
 - **Builds on:**
   - `2026-10-02-macneutron-native-arm64-design.md` (sub-project 1 and the roadmap; this spec amends its §2, §3.4, §5.3 and §11, see §14)
   - `2026-10-03-macneutron-arm64-dxmt-design.md` (sub-project 2: DXMT in `wine.app`, the check steps this spec extends)
