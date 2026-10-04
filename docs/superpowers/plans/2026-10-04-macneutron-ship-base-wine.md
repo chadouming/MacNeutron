@@ -233,7 +233,7 @@
   - `steamprobe.exe <steam_api64.dll> [fault]`;
   - step `steam-bridge`.
 
-- [ ] **Step 1: The three patches first**, in a scratch sparse clone of Proton at the pin (Step 2's recipe, outside `build/`). Each "after" file comes from the winecx clone (`GIT_NO_LAZY_FETCH=1`; the blobs `190447ca` `Makefile.in`, `a6626286` and `095846d9` are present; the "before" files are Proton's own at `db9e6ff`). Commits, each with `--author="millia ampora <198710911+dappermint@users.noreply.github.com>"` and "From dappermint/winecx <sha>" in the message:
+- [ ] **Step 1: The three patches first**, in a scratch sparse clone of Proton at the pin (Step 2's recipe, outside `build/`). Each "after" file comes from the winecx clone (`GIT_NO_LAZY_FETCH=1`; the blobs `190447ca` `Makefile.in`, `a6626286` and `095846d9` are present; the "before" files are Proton's own at `db9e6ff`). Commits, each with `--author="millia ampora <…>"` (dappermint's GitHub noreply address) and "From dappermint/winecx <sha>" in the message:
   1. `8d188ec0db`: NOMINMAX (`-DNOMINMAX` in `Makefile.in`) and the X11 keysym guard;
   2. `dada36ebab`: `UNIX_LIBS = -lc++` in `Makefile.in`;
   3. `6cfbd169a5`: the Proton-only client exports made optional.

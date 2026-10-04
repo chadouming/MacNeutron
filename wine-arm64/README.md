@@ -20,10 +20,13 @@ app).
 ## Requirements
 
 - Apple Silicon, **macOS 27**, and Xcode (Apple clang).
-- Homebrew `autoconf`, `bison`, `flex`, `cmake`, `ninja`, `meson` and `pkg-config`. The build names whatever is missing
-  and never installs it. The build itself doesn't run `autoconf`; the development loop needs it for a patch that changes `configure.ac`.
-  No Homebrew library reaches the build: `pkg-config` looks only in `build/wine-arm64-src/deps`, and the build stops if
-  a flags line of Wine's `config.log` names `/opt/homebrew`.
+- Homebrew `autoconf`, `bison`, `flex`, `cmake`, `ninja`, `meson`, `pkg-config` and `gettext` (its `msgfmt` builds
+  Wine's translations). The build names whatever is missing and never installs it. The build itself doesn't run
+  `autoconf`; the development loop needs it for a patch that changes `configure.ac`.
+  No Homebrew library reaches the build: `pkg-config` looks only in `build/wine-arm64-src/deps`, `CPATH`,
+  `LIBRARY_PATH`, `CFLAGS` and `CXXFLAGS` are unset, and the build stops if a flags line of Wine's `config.log` names
+  `/opt/homebrew`, `/usr/local` or `/opt/local`, or if Wine's configure found a dlopened library other than FreeType,
+  gnutls and libodbc.
 - Xcode's Metal Toolchain, for DXMT's shaders (`xcodebuild -downloadComponent MetalToolchain`).
 - Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once.
 - The first build downloads the four tarballs of `deps.pins` (15 MB, checked by SHA-256) and a sparse checkout of
@@ -191,8 +194,8 @@ worktree) start over from the series: it is deleted and fetched again.
     `dappermint/winecx` branch `cx/wine1117` at `e0aa380780`, with millia ampora's msync commits there (`8df1826853`,
     `9be392b3b4`, `3a7a712d66`, `307f90fdb1`, `620d8c542f`, `a7ef7b3b01`, `ef72fdb55b`, `6d316146c2`), merged onto
     Wine 11.19. The patch's message lists our changes to it.
-  - 0004 and 0017 (strict x18 toggling) are ours, following Apple's rule in `os/arch/arm64.h` and our design in
-    `docs/research/2026-10-02-native-arm64/x18-boundaries.md`.
+  - 0004, 0017, 0018 and 0019 (strict x18 toggling) are ours, following Apple's rule in `os/arch/arm64.h` and our
+    design in `docs/research/2026-10-02-native-arm64/x18-boundaries.md`.
   - 0016 (registering `dlls/lsteamclient` in configure) and the other Wine patches are ours.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is

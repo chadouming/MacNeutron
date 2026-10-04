@@ -35,6 +35,7 @@ LSC_PATCHES="$ROOT/wine-arm64/patches/lsteamclient"
 #    the development loop does, for a patch that changes configure.ac (README).
 need_tool autoconf autoconf; need_tool bison bison keg; need_tool flex flex keg; need_tool cmake cmake
 need_tool ninja ninja; need_tool meson meson; need_tool pkg-config pkg-config
+need_tool msgfmt gettext  # without it Wine's configure only warns, and the bundle has no translations
 # DXMT compiles its own Metal shaders; Xcode ships the compiler as a separate component.
 xcrun metal --version > /dev/null 2>&1 || missing="$missing, Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"
 die_if_missing
@@ -137,6 +138,11 @@ prepare lsteamclient "$lsteamclient_mode"
 LC_ALL=C /usr/bin/grep -qx /dlls/lsteamclient "$W/.git/info/exclude" 2> /dev/null \
   || echo /dlls/lsteamclient >> "$W/.git/info/exclude"
 ln -sfn ../../lsteamclient/lsteamclient "$W/dlls/lsteamclient"
+# The repository commit the bundle's SOURCE names (step 8). Dirty when anything the build reads from the repository
+# differs from that commit, a new file included.
+mac=$(git -C "$ROOT" rev-parse HEAD)
+[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile)" ] \
+  || mac="$mac+dirty"
 # The build is a development build if any tree is.
 if [ "$wine_mode" = development ] || [ "$fex_mode" = development ] || [ "$dxmt_mode" = development ] \
   || [ "$lsteamclient_mode" = development ]; then
@@ -145,7 +151,11 @@ if [ "$wine_mode" = development ] || [ "$fex_mode" = development ] || [ "$dxmt_m
   dev=1
 else
   dev=
-  if [ "$(cat "$OUT/version" 2> /dev/null)" = "$stamp" ] && [ -d "$OUT/wine.app" ]; then
+  # A bundle staged from a dirty tree whose changes are now committed has the same stamp: bundled again, once, so its
+  # SOURCE names the commit.
+  if [ "$(cat "$OUT/version" 2> /dev/null)" = "$stamp" ] && [ -d "$OUT/wine.app" ] && { [ "${mac%+dirty}" != "$mac" ] \
+    || ! LC_ALL=C /usr/bin/grep -q '^MACNEUTRON_COMMIT=.*+dirty$' "$OUT/wine.app/Contents/Resources/licenses/SOURCE"; }
+  then
     echo "wine-arm64: up to date" >&2
     exit 0
   fi
@@ -188,9 +198,11 @@ build_dep() {
   ( cd "$SRC/deps-src/$n" && eval "$deps_make" ) > "$SRC/deps-$n.log" 2>&1 \
     || die "building $n failed; see $SRC/deps-$n.log"
 }
-unpack() {  # unpack <name>:<url>: the tarball into deps-src/<name>
-  mkdir -p "$SRC/deps-src/${1%%:*}"
-  tar -xf "$SRC/${1##*/}" -C "$SRC/deps-src/${1%%:*}" --strip-components 1 || die "can't unpack ${1##*/}"
+unpack() {  # unpack <name>:<url>: the tarball into deps-src/<name>, through <name>.tmp so a stop leaves none
+  rm -rf "$SRC/deps-src/${1%%:*}.tmp"
+  mkdir -p "$SRC/deps-src/${1%%:*}.tmp"
+  tar -xf "$SRC/${1##*/}" -C "$SRC/deps-src/${1%%:*}.tmp" --strip-components 1 || die "can't unpack ${1##*/}"
+  mv "$SRC/deps-src/${1%%:*}.tmp" "$SRC/deps-src/${1%%:*}"
 }
 if [ "$(cat "$DEPS/.complete" 2> /dev/null)" = "$deps_in" ]; then
   echo "wine-arm64: FreeType and gnutls are up to date" >&2
@@ -202,7 +214,7 @@ else
   for t in $DEPS_TARS; do unpack "$t"; done
   (
     eval "export $deps_env"
-    unset PKG_CONFIG_PATH
+    unset PKG_CONFIG_PATH CPATH LIBRARY_PATH CFLAGS CXXFLAGS  # the compiler's own search paths stay the SDK's
     # shellcheck disable=SC2086  # the options are lists
     { build_dep gmp $conf_gmp; build_dep nettle $conf_nettle; build_dep gnutls $conf_gnutls
       build_dep freetype $conf_freetype; }
@@ -240,16 +252,22 @@ else
   echo "wine-arm64: configuring (log: $SRC/configure.log)" >&2
   rm -rf "$SRC/wine-build"
   mkdir -p "$SRC/wine-build"
-  ( cd "$SRC/wine-build" && unset PKG_CONFIG_PATH && "$W/configure" "$@" ) > "$SRC/configure.log" 2>&1 \
-    || die "configure failed; see $SRC/configure.log"
+  ( cd "$SRC/wine-build" && unset PKG_CONFIG_PATH CPATH LIBRARY_PATH CFLAGS CXXFLAGS && "$W/configure" "$@" ) \
+    > "$SRC/configure.log" 2>&1 || die "configure failed; see $SRC/configure.log"
   printf '%s\n' "$inputs" > "$SRC/wine-build/.configure-inputs"
 fi
-# Every build, so a configure that took Homebrew's flags never gets built on: configure:<line>: <library> cflags: ...
+# Every build, so a configure that took Homebrew's (or /usr/local's, MacPorts') flags never gets built on:
+# configure:<line>: <library> cflags: ...
 [ -f "$SRC/wine-build/config.log" ] || die "no $SRC/wine-build/config.log to scan for Homebrew's flags"
-out=$(LC_ALL=C /usr/bin/grep -E '(cflags|libs):.*/opt/homebrew' "$SRC/wine-build/config.log" \
+out=$(LC_ALL=C /usr/bin/grep -E '(cflags|libs):.*(/opt/homebrew|/usr/local|/opt/local)' "$SRC/wine-build/config.log" \
   | sed 's/^configure:[0-9]*: //')
-[ -z "$out" ] || die "Wine's configure took flags from Homebrew: $(echo "$out" | tr '\n' ';')" \
+[ -z "$out" ] || die "Wine's configure took flags from outside the build: $(echo "$out" | tr '\n' ';')" \
   "see $SRC/wine-build/config.log"
+# The libraries Wine dlopens by name: FreeType and gnutls (ours) and libodbc (Wine's default), nothing found elsewhere.
+out=$(sed -n 's/^#define \(SONAME_[A-Z0-9_]*\) .*/\1/p' "$SRC/wine-build/include/config.h" | sort | tr '\n' ' ')
+[ "$out" = "SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBODBC " ] \
+  || die "Wine's configure found dlopened libraries: ${out:-none}(want SONAME_LIBFREETYPE, SONAME_LIBGNUTLS," \
+    "SONAME_LIBODBC); see $SRC/wine-build/config.log"
 
 # 5. Make.
 echo "wine-arm64: building (log: $SRC/make.log)" >&2
@@ -313,10 +331,6 @@ build_translate arm64 "$SRC/llvm-arm64" "$D" "$SRC/dxmt-build" "$OUT" "$SRC"
 # 8. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
 #    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.
 series() { if [ "$1" = development ]; then echo dev; else echo "$2"; fi; }  # series <mode> <series hash>
-mac=$(git -C "$ROOT" rev-parse HEAD)
-# Dirty when anything the build reads from the repository differs from that commit, a new file included.
-[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile)" ] \
-  || mac="$mac+dirty"
 {
   echo "MACNEUTRON_COMMIT=$mac"
   echo "WINE_COMMIT=$WINE_COMMIT"

@@ -87,7 +87,13 @@ DS="$S/deps-src"
 mkdir -p "$L/freetype" "$L/gnutls" "$L/nettle" "$L/gmp"
 put "$DS/freetype" LICENSE.TXT "$L/freetype/"
 put "$DS/freetype" docs/FTL.TXT "$L/freetype/"
+# The BDF and PCF drivers' X11-style licence, which LICENSE.TXT points to.
+put "$DS/freetype" src/bdf/README "$L/freetype/bdf-README"
+put "$DS/freetype" src/pcf/README "$L/freetype/pcf-README"
 put "$DS/gnutls" COPYING.LESSERv2 "$L/gnutls/"
+# The aarch64 CRYPTOGAMS routines' BSD licence (lib/accelerated/aarch64/README points to it) and inih's.
+put "$DS/gnutls" lib/accelerated/x86/license.txt "$L/gnutls/cryptogams-license.txt"
+put "$DS/gnutls" lib/inih/LICENSE.txt "$L/gnutls/inih-LICENSE.txt"
 for f in COPYING.LESSERv3 COPYINGv3; do
   put "$DS/nettle" "$f" "$L/gnutls/"; put "$DS/nettle" "$f" "$L/nettle/"; put "$DS/gmp" "$f" "$L/gmp/"
 done

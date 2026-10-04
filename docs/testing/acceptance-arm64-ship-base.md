@@ -99,7 +99,7 @@ lib/wine/aarch64-unix/libgnutls.30.dylib    3.1 MB   arm64, minos 27.0, id @rpat
 lib/wine/aarch64-unix/lsteamclient.so       4.4 MB   arm64, minos 27.0; links @rpath/ntdll.so, /usr/lib/libc++.1.dylib,
                                                      libSystem; loads Mac Steam's steamclient.dylib at run time
 lib/wine/aarch64-windows/lsteamclient.dll   57 MB    ARM64X (CHPE metadata), Wine builtin; not stripped
-lib/wine/aarch64-unix/ntdll.so              695 KB   msync (0015), strict x18 (0004, 0017)
+lib/wine/aarch64-unix/ntdll.so              695 KB   msync (0015), strict x18 (0004, 0017; 0018 and 0019 after the run)
 bin/wineserver                              865 KB   msync (0015)
 licenses/                                            the tree below
 ```
@@ -412,6 +412,8 @@ Patches added or changed by this sub-project:
   its own patch because the in-place history rewrite was refused by the session's permission rules).
 - Wine **0018** `ntdll: Quiet the x18 self-test and tighten the toggle trap check.` (after the acceptance run; 18+, 8-;
   see below).
+- Wine **0019** `ntdll: Toggle x18 on above the new callback frame, and check the toggle's layout.` (the final
+  review's fix pass; see below).
 - lsteamclient **0001-0003**, `dappermint/winecx`'s three Mac fixes by millia ampora (`8d188ec0db` NOMINMAX and an X11
   keysym guard, `dada36ebab` `-lc++`, `6cfbd169a5` the two Proton-only client exports made optional), authors kept.
 

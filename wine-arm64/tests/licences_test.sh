@@ -45,13 +45,14 @@ check() {  # check <wine.app> <build dir>
   # 4. Sub-project 3's libraries, once they are in the bundle (a library present without its licence is a failure).
   #    nettle and gmp are folded into libgnutls: their texts come with it.
   if has 'libfreetype*'; then
-    for f in LICENSE.TXT FTL.TXT; do [ -s "$L/freetype/$f" ] || miss "freetype/$f"; done
+    for f in LICENSE.TXT FTL.TXT bdf-README pcf-README; do [ -s "$L/freetype/$f" ] || miss "freetype/$f"; done
     g -qF "The FreeType Project" "$L/README" 2> /dev/null || miss "FreeType credit line in README"
   fi
   if has 'libgnutls*'; then
     for f in gnutls/COPYING.LESSERv2 gnutls/COPYING.LESSERv3 gnutls/COPYINGv3 nettle/COPYING.LESSERv3 nettle/COPYINGv3 \
-             gmp/COPYING.LESSERv3 gmp/COPYINGv3
+             gmp/COPYING.LESSERv3 gmp/COPYINGv3 gnutls/cryptogams-license.txt gnutls/inih-LICENSE.txt
     do [ -s "$L/$f" ] || miss "$f"; done
+    g -qF "Markus Friedl" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for Markus Friedl"
   fi
   if has 'libfreetype*' || has 'libgnutls*'; then
     for n in FREETYPE GNUTLS NETTLE GMP; do key "${n}_URL"; key "${n}_SHA256"; done
