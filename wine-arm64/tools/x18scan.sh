@@ -8,9 +8,16 @@ set -eu
 arch=
 if [ "${1:-}" = -arch ]; then arch="-arch ${2:?usage: x18scan.sh [-arch <a>] <mach-o>}"; shift 2; fi
 f=${1:?usage: x18scan.sh [-arch <a>] <mach-o>}
-# Line 1 is the file's name; an instruction line starts with its address, every other line that ends in ':' is a label.
+# The disassembly, in a file (winemetal.so's is 165 MB). otool exits 0 on a file that is no object or lacks the arch,
+# printing at most a header: without one instruction line the scan would pass on nothing.
+dis=$(mktemp)
+trap 'rm -f "$dis"' EXIT
 # shellcheck disable=SC2086  # arch is empty or two words
-otool $arch -tV "$f" | sed 's/;.*//' | LC_ALL=C /usr/bin/grep -E '^[^0-9]|[^0-9a-zA-Z_][xw]18([^0-9]|$)' \
+otool $arch -tV "$f" > "$dis" || { echo "x18scan.sh: otool failed on $f" >&2; exit 1; }
+awk '/^[0-9a-f]+\t/ { n = 1; exit } END { exit !n }' "$dis" \
+  || { echo "x18scan.sh: otool read no instructions from $f${arch:+ ($arch)}: $(head -n 1 "$dis")" >&2; exit 1; }
+# Line 1 is the file's name; an instruction line starts with its address, every other line that ends in ':' is a label.
+sed 's/;.*//' "$dis" | LC_ALL=C /usr/bin/grep -E '^[^0-9]|[^0-9a-zA-Z_][xw]18([^0-9]|$)' \
   | awk 'NR == 1 { next }
     /^[0-9a-f]+\t/ { sub(/^[0-9a-f]+\t/, ""); gsub(/\t/, " "); sub(/ +$/, ""); print l " " $0; next }
     /:$/ { l = substr($0, 1, length($0) - 1) }'

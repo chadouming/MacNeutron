@@ -123,6 +123,12 @@ while IFS= read -r f; do
   out=$(otool -L "$f" | tail -n +$skip | awk '{ print $1 }' \
     | LC_ALL=C /usr/bin/grep -vE '^(/usr/lib/|/System/|@rpath/|@loader_path/|@executable_path/)' || true)
   [ -z "$out" ] || die "${f#"$APP"/} depends on $(echo "$out" | tr '\n' ' ')"
+  # Where it looks for @rpath: the bundle's own paths, never a build folder (FREETYPE_LIBS gives the build-time
+  # tools/sfnt2fon one; nothing shipped may carry it).
+  out=$(otool -l "$f" | awk '$1 == "cmd" { r = $2 == "LC_RPATH" }
+    r && $1 == "path" { sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print }' \
+    | LC_ALL=C /usr/bin/grep -v '^@' || true)
+  [ -z "$out" ] || die "${f#"$APP"/} has the rpath $(echo "$out" | tr '\n' ' ')"
 done < "$OUT/macho.list"
 # FreeType and gnutls (ship-base spec §5): found by @rpath, free of the build folder's path (DXMT's winemetal.so names
 # its own build paths by design), and exporting every symbol Wine resolves from them, as Wine's sources name them:
@@ -155,7 +161,8 @@ lib_assert libgnutls.30.dylib 70 "$({ funcptrs gnutls_ "$@"
 # decode as instructions naming x18. A new hit or a changed count is read in the disassembly, never just allowed.
 x18=$(LC_ALL=C /usr/bin/grep -v '/ntdll\.so$' "$OUT/macho.list" | while IFS= read -r f; do
   if lipo -archs "$f" | LC_ALL=C /usr/bin/grep -qw arm64; then
-    sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$f" | sed "s|^|${f##*/} |"
+    h=$(sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$f") || die "x18scan.sh failed on ${f#"$APP"/}"
+    [ -z "$h" ] || echo "$h" | sed "s|^|${f##*/} |"
   fi
 done)
 got=$(echo "$x18" | awk 'NF { print $1, $2 }' | sort | uniq -c | awk '{ print $2, $3, $1 }' | LC_ALL=C sort)

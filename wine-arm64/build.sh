@@ -125,8 +125,9 @@ fi
 
 # 3. FreeType and gnutls (ship-base spec §5), which Wine dlopens, from the pinned tarballs into $DEPS: gmp and nettle
 #    static and folded into libgnutls.30.dylib, FreeType without PNG, HarfBuzz or Brotli. Nothing outside /usr/lib and
-#    /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins or the configure options change (their
-#    hash is deps/.complete); deps-src stays, bundle.sh copies the licence texts from it.
+#    /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins, the configure options or the step's
+#    environment and commands change (their hash is deps/.complete); deps-src stays, bundle.sh copies the licence texts
+#    from it.
 deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"; }
 DEPS_TARS="gmp:$GMP_URL nettle:$NETTLE_URL gnutls:$GNUTLS_URL freetype:$FREETYPE_URL"  # <name>:<url>, build order
 fetch "$GMP_URL" "$SRC/${GMP_URL##*/}" "$GMP_SHA256"
@@ -140,25 +141,39 @@ conf_gnutls="--enable-shared --disable-static --sysconfdir=/etc --with-included-
   --without-leancrypto --disable-nls --disable-tools --disable-cxx --disable-doc --disable-tests --disable-libdane"
 conf_freetype="--enable-shared --disable-static --without-png --without-harfbuzz --without-brotli --with-zlib=yes
   --with-bzip2=yes"
-deps_in=$({ deps_pins; echo "$conf_gmp"; echo "$conf_nettle"; echo "$conf_gnutls"; echo "$conf_freetype"; } \
+# The step's environment, its build of one library (in deps-src/<name>, with the options as "$@") and what each built
+# dylib gets after: kept as text, which is both run (eval) and hashed. The text, not its expansion: $DEPS is where
+# .complete lives, and the CPU count is no input.
+# shellcheck disable=SC2016  # expanded by eval
+deps_env='CC=/usr/bin/clang PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" CPPFLAGS="-I$DEPS/include" LDFLAGS="-L$DEPS/lib"'
+# shellcheck disable=SC2016
+deps_make='./configure --prefix="$DEPS" "$@" && make -j"$(sysctl -n hw.ncpu)" && make install'
+# shellcheck disable=SC2016
+deps_post='strip -S "$f" && install_name_tool -id "@rpath/lib$l.dylib" "$f"'
+deps_in=$({ deps_pins; echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"; echo "$deps_env"; echo "$deps_make"
+  echo "$deps_post"; echo "$conf_gmp"; echo "$conf_nettle"; echo "$conf_gnutls"; echo "$conf_freetype"; } \
   | shasum -a 256 | cut -d ' ' -f 1)
 # build_dep <name> <configure options...>: configure, make and install one library from deps-src/<name>.
 build_dep() {
   n=$1; shift
   echo "wine-arm64: building $n (log: $SRC/deps-$n.log)" >&2
-  ( cd "$SRC/deps-src/$n" && ./configure --prefix="$DEPS" "$@" && make -j"$(sysctl -n hw.ncpu)" && make install ) \
-    > "$SRC/deps-$n.log" 2>&1 || die "building $n failed; see $SRC/deps-$n.log"
+  ( cd "$SRC/deps-src/$n" && eval "$deps_make" ) > "$SRC/deps-$n.log" 2>&1 \
+    || die "building $n failed; see $SRC/deps-$n.log"
+}
+unpack() {  # unpack <name>:<url>: the tarball into deps-src/<name>
+  mkdir -p "$SRC/deps-src/${1%%:*}"
+  tar -xf "$SRC/${1##*/}" -C "$SRC/deps-src/${1%%:*}" --strip-components 1 || die "can't unpack ${1##*/}"
 }
 if [ "$(cat "$DEPS/.complete" 2> /dev/null)" = "$deps_in" ]; then
   echo "wine-arm64: FreeType and gnutls are up to date" >&2
+  for t in $DEPS_TARS; do  # bundle.sh copies the licence texts from deps-src
+    [ -d "$SRC/deps-src/${t%%:*}" ] || { echo "wine-arm64: unpacking ${t##*/} again" >&2; unpack "$t"; }
+  done
 else
   rm -rf "$DEPS" "$SRC/deps-src"
-  for t in $DEPS_TARS; do
-    mkdir -p "$SRC/deps-src/${t%%:*}"
-    tar -xf "$SRC/${t##*/}" -C "$SRC/deps-src/${t%%:*}" --strip-components 1 || die "can't unpack ${t##*/}"
-  done
+  for t in $DEPS_TARS; do unpack "$t"; done
   (
-    export CC=/usr/bin/clang PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" CPPFLAGS="-I$DEPS/include" LDFLAGS="-L$DEPS/lib"
+    eval "export $deps_env"
     unset PKG_CONFIG_PATH
     # shellcheck disable=SC2086  # the options are lists
     { build_dep gmp $conf_gmp; build_dep nettle $conf_nettle; build_dep gnutls $conf_gnutls
@@ -168,8 +183,7 @@ else
   # it. Then what it links: /usr/lib and /System only (after otool -L's file and ID lines). A failure names the log.
   for l in freetype.6 gnutls.30; do
     f="$DEPS/lib/lib$l.dylib" log="$SRC/deps-${l%.*}.log"
-    strip -S "$f" || die "can't strip ${f##*/}"
-    install_name_tool -id "@rpath/lib$l.dylib" "$f" || die "can't set the install name of ${f##*/}"
+    eval "$deps_post" || die "can't strip ${f##*/} or set its install name"
     out=$(otool -L "$f" | tail -n +3 | awk '{ print $1 }' | LC_ALL=C /usr/bin/grep -vE '^(/usr/lib/|/System/)' || true)
     [ -z "$out" ] || die "${f##*/} depends on $(echo "$out" | tr '\n' ' ')(see $log)"
   done
@@ -203,6 +217,7 @@ else
   printf '%s\n' "$inputs" > "$SRC/wine-build/.configure-inputs"
 fi
 # Every build, so a configure that took Homebrew's flags never gets built on: configure:<line>: <library> cflags: ...
+[ -f "$SRC/wine-build/config.log" ] || die "no $SRC/wine-build/config.log to scan for Homebrew's flags"
 out=$(LC_ALL=C /usr/bin/grep -E '(cflags|libs):.*/opt/homebrew' "$SRC/wine-build/config.log" \
   | sed 's/^configure:[0-9]*: //')
 [ -z "$out" ] || die "Wine's configure took flags from Homebrew: $(echo "$out" | tr '\n' ';')" \

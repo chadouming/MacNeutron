@@ -180,12 +180,16 @@ unentitled_cmd() {
 }
 
 # exe_cmd <test> [args...]: runs $TESTS/<test>.exe with the arguments, which passes when it prints PASS <test>. Its
-# stderr (Wine's messages and traces) goes to $WORK/<test>.err.
+# stderr (Wine's messages and traces) goes to $WORK/<test>.err; on a failure, its last 5 lines come first in the log, so
+# the step's FAIL line is still the program's own last line (or, if it printed nothing, Wine's).
 exe_cmd() {
   t=$1; shift
   out=$(wine_run "$TESTS/$t.exe" "$@" 2> "$WORK/$t.err" | tr -d '\r') || true  # CRLF line ends: text mode on a pipe
+  echo "$out" | LC_ALL=C /usr/bin/grep -qx "PASS $t" && { echo "$out"; return 0; }
+  echo "the last lines of ${WORK#"$ROOT"/}/$t.err:"
+  tr -d '\r' < "$WORK/$t.err" | tail -n 5
   echo "$out"
-  echo "$out" | grep -qx "PASS $t"
+  return 1
 }
 
 # Gate G3: the CPU ID registers FEX reads (patch 10). `reg query` prints nothing for REG_QWORD; `reg export` does.
