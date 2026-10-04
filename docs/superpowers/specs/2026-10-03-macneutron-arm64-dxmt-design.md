@@ -106,7 +106,7 @@ One Wine commit in sub-project 1's development tree, exported as the next Wine p
 - **`cocoa_window.m`:** the Metal layer posts `CLIENT_SURFACE_PRESENTED` from `nextDrawable`, for DXMT's views only.
 - **`event.c`, `macdrv.h`, `macdrv_cocoa.h`:** the event handler calls `client_surface_present` for a surface the window still lists.
 
-The draft in the research folder is the starting point. Known limits it shares with CrossOver: a `nextDrawable` during window close can queue a pointer to a freed surface, now guarded: the handler presents only surfaces the window still lists (§7's window cycles exercise it); every frame posts an event; the lock is held across main-thread round trips; child-window swap chains need dappermint's `f77c272bbe` (deferred until a game needs it; the handler presents a toplevel window's surfaces only).
+The draft in the research folder is the starting point. Known limits it shares with CrossOver: a `nextDrawable` during window close can queue a pointer to a freed surface, now guarded: the handler presents only surfaces the window still lists (§7's window cycles exercise it); every frame posts an event; the lock is held across main-thread round trips; child-window swap chains need dappermint's `f77c272bbe` (deferred until a game needs it; the handler presents a toplevel window's surfaces only). Still open, also inherited: `nextDrawable` runs on DXMT's thread and reads the content view and its client surface without synchronisation, while the main thread frees that view when the window is destroyed (`macdrv_dispose_view`); closing it needs the view to hold its own reference, or a lock, between the two threads.
 
 ## 6. The bundle
 
@@ -137,7 +137,7 @@ The draft in the research folder is the starting point. Known limits it shares w
 - Tool `x86` runs our DXMT under Rosetta (the `ours` clone). Section 1 compares `ours` (arm64) with `x86`, best of three each, and prints both as `info` lines, ungraded (gate D6); its "ran our d3d11.dll" check compares the bundle's front end with the prefix's.
 - `dxil-probe` and `dxil-translate` come from `MACNEUTRON_ARM64_TOOLS`.
 - Skipped, as launcher features (sub-project 5): `MACNEUTRON_LOG` naming the unsupported op (`:421-424`) and section 10 (`:729-744`).
-- At exit, and on TERM, the lanes are stopped and `wineserver -k` runs for each arm64 prefix (a trap: `check.sh`'s step stop reaches `dxmt/check.sh` but not its lanes).
+- At exit, and on TERM or INT, the lanes are stopped and `wineserver -k` runs for each arm64 prefix (a trap: `check.sh`'s step stop reaches `dxmt/check.sh` but not its lanes).
 - Everything else, including the expected strings and every D3DMetal comparison, runs unchanged. Rosetta mode (no `MACNEUTRON_ARM64_APP`) behaves exactly as before.
 
 **One change for both modes:** `invalid` prints `off` when a run lacks the `Metal API Validation Enabled` line, so a run where validation never switched on can't count as 0 errors.
@@ -149,11 +149,11 @@ The draft in the research folder is the starting point. Known limits it shares w
 | `dxmt` | Copies the front ends into the prefix; turns the crash dialog off (`HKCU\Software\Wine\WineDbg` `ShowCrashDialog` = 0, so a crash ends instead of waiting for the watchdog); checks the markers and `DXMT/version` as `bundle.sh` does; waits for the prefix's server to exit so later clones get a saved registry |
 | `dxmt-present` | On screen, both lanes: `present_loop 1280 720 1280 720 3000 0` and `d3d12_clear 3000`, each read by `winshot` against the measured thresholds, and each printing its completion line (`frames 3000`, `presented 3000/3000 frames`). ARM64EC lane only: `present_loop 640 360 640 360 60 0 cycles=20` prints `cycles 20 ok` and exits 0 |
 | `dxmt-arm64ec` | `dxmt/check.sh` in arm64 mode with the ARM64EC programs: `dxmt-check: all passed` |
-| `dxmt-x64` | `dxmt/check.sh` in arm64 mode with the x64 programs under FEX: `dxmt-check: all passed`, and its FSR 3 check ran (`ok   the FSR 3 swapchain proxy presents on our DXMT`, not the skip line), which needs SMITE 2 installed (its `amd_fidelityfx_dx12.dll`, read from the game's install) |
+| `dxmt-x64` | `dxmt/check.sh` in arm64 mode with the x64 programs under FEX: `dxmt-check: all passed`, and its FSR 3 check ran (`ok   the FSR 3 swapchain proxy presents on our DXMT`, not the skip line), which needs SMITE 2 installed in Steam's default library (its `amd_fidelityfx_dx12.dll` is read there) |
 
 - **Dependencies:** the three `dxmt-*` steps pull in `dxmt` (a new `NEEDS_DXMT` list) and join `NEEDS_FEX`; all four join `NEEDS_PREFIX` (`dxmt` itself needs no FEX). With FEX registered in every lane, as in a game's prefix, partial and full runs run the same way.
 - **Clean-up:** `runtime_pids` also lists the Rosetta tool clones `dxmt/check.sh` makes, whose work folders live under `check.sh`'s own (`$WORK/dxmt-arm64ec`, `$WORK/dxmt-x64`), so the orphan line covers them.
-- **Failure output:** a failing `dxmt-arm64ec`/`dxmt-x64` step's FAIL line gives the number of `FAIL` lines and the first one. A failing step stops the run, as for sub-project 1's steps; `check.sh <step>` runs one alone.
+- **Failure output:** a failing `dxmt-arm64ec`/`dxmt-x64` step's FAIL line gives the number of `FAIL` lines and the first one, or, when `dxmt-x64`'s FSR 3 line is missing, `dxmt/check.sh`'s skip line (SMITE 2 isn't installed). A failing step stops the run, as for sub-project 1's steps; `check.sh <step>` runs one alone.
 - **One target:** `wine-arm64-check` gains the prerequisites `dxmt dxmt-tests presenter dxmt-tests-arm64ec` (`dxmt` builds the x86_64 LLVM if it's missing).
 
 ## 8. Gates

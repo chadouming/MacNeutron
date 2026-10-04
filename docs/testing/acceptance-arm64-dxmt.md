@@ -6,8 +6,8 @@ maintainer's Mac, with:
 - MacNeutron's runtime-v4.7.3 installed, with its tarball cached in `~/Library/Caches/MacNeutron/` (G4's baseline and
   the D3DMetal reference);
 - GPTK imported (the D3DMetal reference of `dxmt/check.sh`, in both arm64 lanes and in `make dxmt-check`);
-- SMITE 2 installed (Steam), for `dxmt-x64`'s FSR 3 swap chain check (its `amd_fidelityfx_dx12.dll`, read from the
-  game's install); without it `dxmt-x64` fails naming the skip, and the later steps (`g4-bench`) don't run;
+- SMITE 2 installed in Steam's default library, for `dxmt-x64`'s FSR 3 swap chain check (its `amd_fidelityfx_dx12.dll`,
+  read from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`); without it `dxmt-x64` fails naming the skip, and the later steps (`g4-bench`) don't run;
 - Screen Recording granted to the app that runs the check (System Settings › Privacy & Security › Screen Recording),
   for `winshot` in `dxmt-present`. Windows appear on the display during the check.
 
@@ -50,7 +50,11 @@ Record results at the bottom.
 | 2026-10-03 | Mac17,8 (Apple M5 Pro, 48 GB) | 27.0.1 (26A434) | wine-11.19, `455e3509b98a6919fd4ad1def4803e08c41c03b2` | `4ed80fd07176dce976a7351f559d59a47b68cbae` (2026-08-26) | fork `1fba8d25b5e29ab49012d633676a6b0d4b3b96c5` (`dxmt/pins`), LLVM 15.0.7 | 14 Wine (`patches/wine`), 5 FEX (`patches/fex`), 1 DXMT (`patches/dxmt`) |
 
 Repository at `f1389ca` (the build inputs are the pins and patches in it). **D1-D5 pass and D6 is measured**, so
-spec §1's done-when holds. The full check took **14 min 51 s** (891 s, `make wine-arm64-check` from start to end;
+spec §1's done-when holds. After this run the final review's fixes landed (`bf3f565`: Wine patch 13 presents only
+surfaces the window still lists; `fc80cee`, `9bcb38d`: docs and the Ctrl-C trap); `dxmt-present`, `dxmt-arm64ec` and
+`dxmt-x64` passed again on that build (162 `ok`, 0 FAIL in each lane; logs `build/wine-arm64-dxmt-final-fix-*.log`).
+In that pass one `make dxmt-check` run failed a single D3DMetal reference line (`hazard fence-transitive 1 0`, ours
+`0 0`) and passed on re-run: a D3DMetal race on the Rosetta stack, untouched here, seen once. The full check took **14 min 51 s** (891 s, `make wine-arm64-check` from start to end;
 its prerequisites took seconds, as they were built).
 
 ### 1. Clean build (D1)

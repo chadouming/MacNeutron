@@ -13,7 +13,7 @@ client and translated by Wine and DXMT (Apple's D3DMetal optional, per game).
 make build   # swift build -c release
 make test    # unit tests
 make smoke   # real Wine
-make dxmt         # our DXMT fork with Direct3D 12 into build/dxmt; first run ~500 MB of downloads and a 30-60 min LLVM build
+make dxmt         # our DXMT fork with Direct3D 12 into build/dxmt; first run ~500 MB of downloads and a few minutes of LLVM build
 make dxmt-check   # our DXMT under real Wine (needs GPTK imported)
 make wine-arm64        # native arm64 Wine + FEX in a signed wine.app (needs the Developer ID setup in wine-arm64/README.md)
 make wine-arm64-check  # its gates under real Wine

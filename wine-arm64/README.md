@@ -1,7 +1,7 @@
 # wine-arm64: native arm64 Wine and FEX
 
 `make wine-arm64` builds the first stage of MacNeutron's native arm64 stack: upstream Wine 11.19 (ARM64EC and arm64),
-with our patches, FEX, which runs x64 Windows code inside it, and our DXMT built for arm64 (Direct3D 10/11/12),
+with our patches, FEX, which runs x64 Windows code inside it, and our DXMT built for arm64 (Direct3D 11/12; D3D10's front end bundled, untested),
 staged as one signed, entitled `build/wine-arm64/wine.app`. Every Windows process runs natively on arm64 with 4K
 pages; only the game's x86-64 code is translated.
 
@@ -65,8 +65,8 @@ The DXMT steps, after `g5-jit`:
 needs System Settings › Privacy & Security › Screen Recording; without it `dxmt-present` fails and names that setting.
 The lanes compare our DXMT with D3DMetal on the installed Rosetta runtime, as `make dxmt-check` does, so they need
 what it needs: runtime-v4.7.3 installed with its tarball cached in `~/Library/Caches/MacNeutron/`, and GPTK imported.
-`dxmt-x64`'s FSR 3 swap chain check also needs SMITE 2 installed (Steam; its `amd_fidelityfx_dx12.dll` is read from the
-game's install, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`) don't
+`dxmt-x64`'s FSR 3 swap chain check also needs SMITE 2 installed in Steam's default library (its `amd_fidelityfx_dx12.dll` is read
+from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`) don't
 run.
 
 ## Layout
