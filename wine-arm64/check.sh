@@ -1,7 +1,9 @@
 #!/bin/sh
 # The arm64 Wine runtime on the maintainer's Mac (native arm64 spec §7.3): `make wine-arm64-check`.
-# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`; g4-bench
-# also needs MacNeutron's runtime-v4.7.3 installed (MACNEUTRON_TOOL names another tool folder).
+# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`, and the
+# dxmt steps `make dxmt dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench also needs MacNeutron's runtime-v4.7.3
+# installed (MACNEUTRON_TOOL names another tool folder), and the dxmt-* steps, for their D3DMetal reference, the same
+# with GPTK imported and its tarball cached.
 # Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
 # Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
 # Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
@@ -28,17 +30,21 @@ RWINE="$RTOOL/Libraries/Wine/bin"
 # NEEDS_FEX: the x64 steps, which run after `fex` registers FEX in that prefix (else Wine's stub xtajit64 runs them).
 # NEEDS_DXMT: the steps that run DXMT, after `dxmt` puts its front ends in that prefix.
 G1="g1-hello g1-seh g1-threads g1-kuser g1-smc g1-tsc g1-unaligned"
-STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt dxmt-present g4-bench"
-NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt dxmt-present g4-bench"
-NEEDS_FEX="$G1 g2-litmus g5-jit dxmt-present g4-bench"
-NEEDS_DXMT="dxmt-present"
+STEPS="macos signature boot pages unentitled arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt dxmt-present"
+STEPS="$STEPS dxmt-arm64ec dxmt-x64 g4-bench"
+NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
+NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip g5-jit dxmt $NEEDS_DXMT g4-bench"
+NEEDS_FEX="$G1 g2-litmus g5-jit $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
-# knows the executable.
+# knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
+# dxmt/check.sh makes in the dxmt-* steps' work folders.
 runtime_pids() {
+  for d in "$RTOOL" "$WORK"/dxmt-*/stock "$WORK"/dxmt-*/ours; do
+    set -- "$@" "$d/bin/macneutron" "$d/Libraries/Wine/lib/wine/x86_64-unix/wine" "$d/Libraries/Wine/bin/wineserver"
+  done
   for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver" \
-    "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver" \
-    "$RTOOL/bin/macneutron" "$RTOOL/Libraries/Wine/lib/wine/x86_64-unix/wine" "$RWINE/wineserver"; do
+    "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver" "$@"; do
     [ -e "$f" ] || continue
     lsof -t "$f" 2> /dev/null || true
   done | sort -u | tr '\n' ' '
@@ -345,12 +351,16 @@ onscreen() {
   tr -d '\r' < "$o.raw" > "$o.txt"  # CRLF line ends: text mode
   cat "$o.txt"
   if [ "$shot_ok" = 1 ]; then echo "info $lane $p: $shot"; else echo "$shot"; fi
-  grep -q "^$want" "$o.txt" || { echo "FAIL dxmt-present: $lane $p: no '$want' line, exit $rc"; return 1; }
-  [ "$shot_ok" = 1 ] || { echo "FAIL dxmt-present: $lane $p: $(echo "$shot" | tail -n 1)"; return 1; }
-  # shellcheck disable=SC2086  # pixels <n> green <pct> white <pct>
-  set -- $shot
-  [ "$4" -ge "$green" ] || { echo "FAIL dxmt-present: $lane $p: green $4 < $green"; return 1; }
-  [ "$6" -ge "$white" ] || { echo "FAIL dxmt-present: $lane $p: white $6 < $white"; return 1; }
+  # shellcheck disable=SC2046  # pixels <n> green <pct> white <pct>
+  set -- $(printf '%s\n' "$shot" | grep '^pixels')
+  if ! grep -q "^$want" "$o.txt"; then why="no '$want' line, exit $rc"
+  elif [ "$shot_ok" = 0 ]; then why=$(echo "$shot" | tail -n 1)
+  elif [ "${4:-0}" -lt "$green" ]; then why="green ${4:-none} < $green"
+  elif [ "${6:-0}" -lt "$white" ]; then why="white ${6:-none} < $white"
+  else return 0; fi
+  tr -d '\r' < "$o.err" | tail -n 5
+  echo "FAIL dxmt-present: $lane $p: $why"
+  return 1
 }
 
 # Gate D2 (arm64 DXMT spec §7, §8): D3D11 and D3D12 windows on screen in both lanes (ARM64EC programs natively, x64
@@ -368,9 +378,26 @@ dxmt_present_cmd() {
   dxmt_run "$ec/present_loop.exe" 640 360 640 360 60 0 cycles=20 > "$o.raw" 2> "$o.err" && rc=0 || rc=$?
   tr -d '\r' < "$o.raw" > "$o.txt"
   cat "$o.txt"
-  grep -qx 'cycles 20 ok' "$o.txt" || { echo "FAIL dxmt-present: $what: no 'cycles 20 ok' line, exit $rc"; return 1; }
-  [ "$rc" = 0 ] || { echo "FAIL dxmt-present: $what: exit $rc"; return 1; }
+  why=
+  grep -qx 'cycles 20 ok' "$o.txt" || why="no 'cycles 20 ok' line, exit $rc"
+  [ -n "$why" ] || [ "$rc" = 0 ] || why="exit $rc"
+  [ -z "$why" ] || { tr -d '\r' < "$o.err" | tail -n 5; echo "FAIL dxmt-present: $what: $why"; return 1; }
   echo "info $what: cycles 20 ok"
+}
+
+# dxmt/check.sh in arm64 mode (arm64 DXMT spec §7): our DXMT on this runtime, in clones of the prefix, against D3DMetal
+# on Rosetta. dxmt_lane_cmd <lane> <tests folder> <present_loop.exe> [line it must print]: passes when the check ran in
+# arm64 mode and all passed; else its last line gives the number of FAIL lines and the first (none: the check's own).
+dxmt_lane_cmd() {
+  l="$WORK/dxmt-$1.log" t0=$(date +%s)
+  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_PREFIX="$PFX" MACNEUTRON_ARM64_TESTS="$2" \
+    MACNEUTRON_ARM64_LOOP="$3" MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
+  echo "info dxmt-$1: $(($(date +%s) - t0)) s"
+  grep -q '^info arm64 mode: ' "$l" || { echo "dxmt/check.sh did not run in arm64 mode"; return 1; }
+  n=$(grep -c '^FAIL' "$l" || true)
+  [ "$n" = 0 ] || { echo "$n FAIL lines; first: $(grep -m 1 '^FAIL' "$l")"; return 1; }
+  grep -qx 'dxmt-check: all passed' "$l" || { grep -v '^info dxmt-' "$l" | tail -n 1; return 1; }
+  [ -z "${4:-}" ] || grep -qxF "$4" "$l" || { echo "no '$4' line"; return 1; }
 }
 
 run_step() {
@@ -397,6 +424,10 @@ run_step() {
     g5-jit) step g5-jit 600 g5_jit_cmd; grep '^info ' "$WORK/g5-jit.log" ;;
     dxmt) step dxmt 120 dxmt_cmd ;;
     dxmt-present) step dxmt-present 600 dxmt_present_cmd; grep '^info ' "$WORK/dxmt-present.log" ;;
+    dxmt-arm64ec) step dxmt-arm64ec 3600 dxmt_lane_cmd arm64ec "$B/dxmt-tests-arm64ec" \
+      "$B/dxmt-tests-arm64ec/present_loop.exe"; grep '^info ' "$WORK/dxmt-arm64ec.log" ;;
+    dxmt-x64) step dxmt-x64 3600 dxmt_lane_cmd x64 "$B/dxmt-tests" "$B/presenter/present_loop.exe" \
+      'ok   the FSR 3 swapchain proxy presents on our DXMT'; grep '^info ' "$WORK/dxmt-x64.log" ;;
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     *) die "no runner for $1" ;;
   esac

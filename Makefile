@@ -131,8 +131,9 @@ build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
 
 # The arm64 runtime on this Mac: boots, runs native ARM64 code, leaves nothing behind (spec §7.3). Needs
 # MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and for gate G4's
-# Rosetta baseline an installed runtime-v4.7.3, run by the launcher `build` makes.
-wine-arm64-check: build wine-arm64 wine-arm64-tests
+# Rosetta baseline an installed runtime-v4.7.3, run by the launcher `build` makes; the dxmt-* steps' D3DMetal reference
+# also needs GPTK imported into it and its tarball cached (dxmt/check.sh).
+wine-arm64-check: build wine-arm64 wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
 	sh wine-arm64/check.sh

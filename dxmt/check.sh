@@ -2,6 +2,10 @@
 # Our DXMT build under real Wine, no Steam (DXMT fork spec §6). Needs `make build dxmt presenter dxmt-tests`, an
 # installed runtime with GPTK imported, and that runtime's tarball in ~/Library/Caches/MacNeutron. MACNEUTRON_TOOL
 # overrides the tool folder, which is never modified: the checks run on two APFS clones of it (instant, no space).
+# DXMT_CHECK_WORK overrides the work folder. Arm64 mode (arm64 DXMT spec §7), when MACNEUTRON_ARM64_APP names the arm64
+# runtime's wine.app: our DXMT runs there, in clones of MACNEUTRON_ARM64_PREFIX (booted, DXMT's front ends in system32),
+# the programs from MACNEUTRON_ARM64_TESTS and MACNEUTRON_ARM64_LOOP, dxil-probe and dxil-translate from
+# MACNEUTRON_ARM64_TOOLS; D3DMetal, the reference, stays on the installed runtime under Rosetta.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DXMT="$ROOT/build/dxmt"
@@ -9,11 +13,21 @@ TESTS="$ROOT/build/dxmt-tests"
 S="$ROOT/dxmt/tests/shaders"
 LOOP="$ROOT/build/presenter/present_loop.exe"
 TOOL="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
-WORK="${TMPDIR:-/tmp}/macneutron dxmt"
+WORK="${DXMT_CHECK_WORK:-${TMPDIR:-/tmp}/macneutron dxmt}"
+ARM64="${MACNEUTRON_ARM64_APP:-}"
+TOOLS="$DXMT"
 fail=0
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 die() { echo "dxmt-check: $*" >&2; exit 1; }
 
+if [ -n "$ARM64" ]; then
+  echo "info arm64 mode: $ARM64"
+  APFX="${MACNEUTRON_ARM64_PREFIX:-}" ATESTS="${MACNEUTRON_ARM64_TESTS:-}" ALOOP="${MACNEUTRON_ARM64_LOOP:-}"
+  TOOLS="${MACNEUTRON_ARM64_TOOLS:-}"
+  for f in "$ARM64/Contents/MacOS/wine" "$APFX/system.reg" "$ATESTS/d3d12_clear.exe" "$ALOOP" "$TOOLS/dxil-probe"; do
+    [ -e "$f" ] || die "arm64 mode: no $f"
+  done
+fi
 [ -f "$TOOL/gptk.json" ] || die "import GPTK first (check 4 runs D3DMetal)"
 TARBALL="$HOME/Library/Caches/MacNeutron/$(cat "$TOOL/runtime-version").tar.gz"
 [ -f "$TARBALL" ] || die "the runtime tarball isn't cached at $TARBALL (reinstall the runtime once)"
@@ -29,14 +43,25 @@ cp "$ROOT/.build/release/macneutron" "$WORK/stock/bin/macneutron"
 cp -cR "$WORK/stock" "$WORK/ours"
 "$ROOT/.build/release/macneutron" install-dxmt --tool-dir "$WORK/ours" "$DXMT" > /dev/null
 
-# run <stock|ours> <name> <backend> <exe> [args...]  →  output in $WORK/<name>.txt
+# run <stock|ours|x86> <name> <backend> <exe> [args...]  →  output in $WORK/<name>.txt. x86 is ours under Rosetta: in
+# arm64 mode, ours with backend dxmt runs on the arm64 runtime, with the launcher's overrides (GraphicsBackend.swift)
+# and WINEDEBUG default given to that run alone: exported, they would reach D3DMetal's launches, which would load DXMT.
 run() {
   tool=$1 name=$2 backend=$3; shift 3
   # A fresh translation cache folder per run unless CACHE names a shared one: a dirty build shares its
   # `git describe`, so no run may read entries an earlier build left.
-  env STEAM_COMPAT_DATA_PATH="$WORK/compat/$tool${LANE:+-$LANE}" SteamAppId=0 MACNEUTRON_GRAPHICS="$backend" \
-      MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 DXMT_SHADER_CACHE_PATH="${CACHE:-$WORK/cache/$name}" \
-      "$WORK/$tool/bin/macneutron" launch waitforexitandrun "$@" > "$WORK/$name.out" 2>&1 &
+  if [ -n "$ARM64" ] && [ "$tool" = ours ] && [ "$backend" = dxmt ]; then
+    exe=$1; shift
+    case $exe in "$LOOP") exe=$ALOOP ;; "$TESTS"/*) exe="$ATESTS/${exe#"$TESTS"/}" ;; esac
+    env WINEPREFIX="$WORK/arm64/ours${LANE:+-$LANE}" WINEDLLOVERRIDES="dxgi,d3d10core,d3d11,d3d12=n,b;d3d9,d3d10=b" \
+        WINEDEBUG="${WINEDEBUG:--all}" DXMT_SHADER_CACHE_PATH="${CACHE:-$WORK/cache/$name}" \
+        "$ARM64/Contents/MacOS/wine" "$exe" "$@" > "$WORK/$name.out" 2>&1 &
+  else
+    [ "$tool" != x86 ] || tool=ours
+    env STEAM_COMPAT_DATA_PATH="$WORK/compat/$tool${LANE:+-$LANE}" SteamAppId=0 MACNEUTRON_GRAPHICS="$backend" \
+        MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 DXMT_SHADER_CACHE_PATH="${CACHE:-$WORK/cache/$name}" \
+        "$WORK/$tool/bin/macneutron" launch waitforexitandrun "$@" > "$WORK/$name.out" 2>&1 &
+  fi
   pid=$!
   # The watchdog's sleep outlives the kill below: kept off stdout, it can't hold a $(...) open for 120 s.
   ( sleep 120; kill "$pid" 2> /dev/null ) > /dev/null 2>&1 & dog=$!
@@ -52,9 +77,35 @@ for p in stock ours ours-A ours-B ours-C ours-D ours-E; do
       "$WORK/${p%%-*}/bin/macneutron" launch getcompatpath "$WORK" > /dev/null 2>&1 & pids="$pids $!"
 done
 for p in $pids; do wait "$p" || die "creating a prefix failed"; done
+# Arm64 mode: our DXMT's prefixes, the same set, clones of the template once its server is gone (a saved registry).
+if [ -n "$ARM64" ]; then
+  WINEPREFIX="$APFX" "$ARM64/Contents/Resources/bin/wineserver" -w
+  mkdir "$WORK/arm64"
+  for p in ours ours-A ours-B ours-C ours-D ours-E; do cp -cR "$APFX" "$WORK/arm64/$p"; done
+fi
+# At any exit, and on TERM (wine-arm64/check.sh stops a step so): the lanes and what they run (a snapshot, taken first:
+# once a lane is gone its children belong to launchd), then, in arm64 mode, the arm64 prefixes' Wine. The lanes are
+# background subshells, which neither run these traps nor take SIGINT.
+pA= pB= pC= pD= pE=
+stop_lanes() {
+  for p in $pA $pB $pC $pD $pE; do
+    kids=$(pgrep -P "$p" 2> /dev/null || true)
+    # shellcheck disable=SC2086  # kids is a list
+    kill "$p" $kids 2> /dev/null || true
+  done
+  [ -z "$ARM64" ] || for p in "$WORK"/arm64/*; do
+    [ -d "$p" ] && WINEPREFIX="$p" "$ARM64/Contents/Resources/bin/wineserver" -k > /dev/null 2>&1 || true
+  done
+}
+trap stop_lanes EXIT
+trap 'exit 143' TERM
 # Helpers the lanes share. invalid <run>: the Metal API validation errors (MTL_DEBUG_LAYER=1, logging instead of
-# aborting) a run logged; each has "Validation" in its first line, as does the line saying it's on, which doesn't count.
-invalid() { grep 'Validation' "$WORK/$1.txt" | grep -vc 'Metal API Validation Enabled' || true; }
+# aborting) a run logged; each has "Validation" in its first line, as does the line saying it's on (once a process),
+# which doesn't count. "off" when no such line says so: a run validation never switched on for can't count as clean.
+invalid() {
+  grep -q 'Metal API Validation Enabled' "$WORK/$1.txt" || { echo off; return 0; }
+  grep 'Validation' "$WORK/$1.txt" | grep -vc 'Metal API Validation Enabled' || true
+}
 same_pixels() {  # same_pixels <ours> <ref> [prefix]: yes when both drew ("<prefix> ok") and 12 pixels are within 1/255
   python3 - "$1" "$2" "${3:-}" <<'PY'
 import sys
@@ -70,21 +121,29 @@ cachetest() { run ours "$1" dxmt "$TESTS/d3d12_cache.exe" "Z:$S/cache.vs.dxil" "
 counters() { grep -o 'd3d12 shader cache: .*' "$WORK/$1.txt" | tail -1; }
 drawn() { grep '^cache ' "$WORK/$1.txt" || echo "no cache line in $1"; }
 RP="$WORK/ours/Libraries/DXMT/x64/dxmt-replay.exe"
+[ -z "$ARM64" ] || RP="$ARM64/Contents/Resources/DXMT/aarch64-windows/dxmt-replay.exe"
 replay() { run ours "$1" dxmt "$RP" "Z:$2"; grep '^replay: ' "$WORK/$1.txt" | tail -1 | sed 's/, [0-9]* ms$//'; }
 
 # Checks run alone first: their times, the frame time and the clear time against each other's, and the probe's 1 s
 # answer, must not share the machine.
 # 1. D3D11 on our DXMT is as fast as on DXMT 0.80: best of three runs each, within 10%. Both builds swing between
 #    two speeds from run to run (about 4.7 and 5.7 ms here), so fewer runs can compare a fast run with a slow one.
+#    Arm64 mode: our DXMT there against it under Rosetta (x86), both recorded, not graded (gate D6).
+ref=stock dll="$DXMT/x86_64-windows/d3d11.dll" sys="$WORK/compat/ours/pfx/drive_c/windows/system32"
+[ -z "$ARM64" ] || ref=x86 dll="$ARM64/Contents/Resources/DXMT/aarch64-windows/d3d11.dll" \
+  sys="$WORK/arm64/ours/drive_c/windows/system32"
 for i in 1 2 3; do
-  run stock "stock$i" dxmt "$LOOP" 1280 720 0 0 600 0
+  run $ref "$ref$i" dxmt "$LOOP" 1280 720 0 0 600 0
   run ours "ours$i" dxmt "$LOOP" 1280 720 0 0 600 0
 done
 best() { cat "$WORK/${1}1.txt" "$WORK/${1}2.txt" "$WORK/${1}3.txt" | grep -o 'avg frame [0-9.]*' | awk '{print $3}' | sort -n | head -1; }
-expect "D3D11 frame time within 10% of DXMT 0.80" \
-  "$(awk -v a="$(best ours)" -v b="$(best stock)" 'BEGIN { print (a != "" && b != "" && a <= b * 1.10) ? "yes" : "no (" a " vs " b " ms)" }')" "yes"
-expect "the D3D11 game ran our d3d11.dll" \
-  "$(cmp -s "$DXMT/x86_64-windows/d3d11.dll" "$WORK/compat/ours/pfx/drive_c/windows/system32/d3d11.dll" && echo yes || echo no)" "yes"
+if [ -n "$ARM64" ]; then
+  echo "info D3D11 frame time: arm64 $(best ours) ms, rosetta $(best x86) ms"
+else
+  expect "D3D11 frame time within 10% of DXMT 0.80" \
+    "$(awk -v a="$(best ours)" -v b="$(best stock)" 'BEGIN { print (a != "" && b != "" && a <= b * 1.10) ? "yes" : "no (" a " vs " b " ms)" }')" "yes"
+fi
+expect "the D3D11 game ran our d3d11.dll" "$(cmp -s "$dll" "$sys/d3d11.dll" && echo yes || echo no)" "yes"
 # 9. GPU efficiency (spec 2026-10-02). E1: D3D12 textures that aren't UAVs get Apple lossless compression (which
 #    PixelFormatView usage alone would turn off): a clear-only pass of a 3840x2160 RGBA16F target is at least 3x
 #    cheaper than with DXMT_D3D12_COMPRESSION=0, and writes through other views of one layout, copies and placed
@@ -101,10 +160,10 @@ expect "and read back as on D3DMetal through other views, copies and heap placem
   "$(grep -E '^compress (views|placed) ' "$WORK/compress.txt")" "$(grep -E '^compress (views|placed) ' "$WORK/compress-ref.txt")"
 
 # 5. The DXIL probe: results recorded, not graded; one line per shader, and a non-container is refused.
-"$DXMT/dxil-probe" "$S"/*.dxil > "$WORK/probe.txt" || true
+"$TOOLS/dxil-probe" "$S"/*.dxil > "$WORK/probe.txt" || true
 cat "$WORK/probe.txt"
 expect "the probe reports every shader" "$(grep -cE '^(ok|fail) ' "$WORK/probe.txt")" "$(ls "$S"/*.dxil | wc -l | tr -d ' ')"
-expect "the probe refuses a non-container" "$("$DXMT/dxil-probe" "$DXMT/version" | cut -d ' ' -f 1)" fail
+expect "the probe refuses a non-container" "$("$TOOLS/dxil-probe" "$DXMT/version" | cut -d ' ' -f 1)" fail
 # Malformed containers: a part count of 2^32-1, and bitcode that lies past the end of its DXIL part.
 python3 - "$WORK" <<'PY'
 import struct, sys
@@ -113,12 +172,12 @@ open(w + "/many-parts.dxil", "wb").write(b"DXBC" + bytes(16) + struct.pack("<III
 part = b"DXIL" + struct.pack("<I", 24) + struct.pack("<II", 0x60060, 6) + b"DXIL" + struct.pack("<III", 0x106, 16, 64)
 open(w + "/past-part.dxil", "wb").write(b"DXBC" + bytes(16) + struct.pack("<IIII", 1, 36 + len(part) + 64, 1, 36) + part + bytes(64))
 PY
-"$DXMT/dxil-probe" "$WORK/many-parts.dxil" > "$WORK/many-parts.txt" & probe=$!
+"$TOOLS/dxil-probe" "$WORK/many-parts.dxil" > "$WORK/many-parts.txt" & probe=$!
 sleep 1
 if kill -0 "$probe" 2> /dev/null; then kill "$probe"; quick=no; else quick=yes; fi
 reason() { sed 's/^[a-z]* .*\.dxil //'; }  # the probe's message after "<ok|fail> <file>"; $WORK has a space
 expect "the probe answers a huge part count at once" "$quick:$(reason < "$WORK/many-parts.txt")" "yes:no DXIL part (a DXBC shader)"
-expect "the probe keeps bitcode inside its part" "$("$DXMT/dxil-probe" "$WORK/past-part.dxil" | reason)" \
+expect "the probe keeps bitcode inside its part" "$("$TOOLS/dxil-probe" "$WORK/past-part.dxil" | reason)" \
   "bitcode lies outside the DXIL part"
 
 # The rest in five lanes at once, each a subshell with its own prefix (its exports stay its own) and its own log,
@@ -418,10 +477,13 @@ export DXMT_DXIL_DUMP="/nonexistent/macneutron dxil"
 dxil dxil-unwritable
 expect "an unwritable capture folder changes nothing for the game" "$(grep -c '^compute hr=0x00000000$' "$WORK/dxil-unwritable.txt" || true)" 1
 unset DXMT_DXIL_DUMP
-# The unsupported op is named in the game log (MACNEUTRON_LOG=1 sends the output there).
-LOG="$HOME/Library/Logs/MacNeutron/steam-0.log"; before=$(cat "$LOG" 2> /dev/null | wc -l)
-export MACNEUTRON_LOG=1; dxil dxil-logged; unset MACNEUTRON_LOG
-expect "the unsupported op is named in the log" "$(tail -n +$((before + 1)) "$LOG" | grep -c 'Failed to compile cs shader: DXIL: dx.op.createHandleFromHeap')" 1
+# The unsupported op is named in the game log (MACNEUTRON_LOG=1 sends the output there). A launcher feature: not in
+# arm64 mode, which has no launcher yet (sub-project 5).
+if [ -z "$ARM64" ]; then
+  LOG="$HOME/Library/Logs/MacNeutron/steam-0.log"; before=$(cat "$LOG" 2> /dev/null | wc -l)
+  export MACNEUTRON_LOG=1; dxil dxil-logged; unset MACNEUTRON_LOG
+  expect "the unsupported op is named in the log" "$(tail -n +$((before + 1)) "$LOG" | grep -c 'Failed to compile cs shader: DXIL: dx.op.createHandleFromHeap')" 1
+fi
 # 3b. DXIL behaviour groups: our DXMT against D3DMetal on the same GPU.
 X="$ROOT/dxmt/tests/dxil"
 run ours exec-ours dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
@@ -678,14 +740,14 @@ fi
 run ours d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0
 expect "present_loop completes on D3DMetal" "$(grep -c 'avg frame' "$WORK/d3dmetal.txt" || true)" 1
 # 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
-"$DXMT/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
+"$TOOLS/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
-"$DXMT/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
+"$TOOLS/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
 expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "31/31"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
 # the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
-"$DXMT/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
+"$TOOLS/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
   "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "31:31"
 expect "vertex and geometry shaders keep their math unfused" \
@@ -703,7 +765,7 @@ expect "and as on D3DMetal but where a load straddles the view's end" \
 exit $fail
 ) > "$WORK/lane-E.log" 2>&1 & pE=$!
 
-for l in A B C D E; do eval "wait \$p$l" || fail=1; cat "$WORK/lane-$l.log"; done
+for l in A B C D E; do eval "wait \$p$l" || fail=1; eval "p$l="; cat "$WORK/lane-$l.log"; done
 
 # Checks run alone last: the queue stats count what DXMT saw at call time against the GPU's progress, and section 10
 # reads lane A's prefix and the launcher log, which other launches would write to.
@@ -729,19 +791,22 @@ expect "a signal behind no pending timestamps stays on the GPU" \
 # 10. The launcher (spec §3.7): recordings land in the compat folder and the first session stamps the builds; with
 #     another build in the stamp, the next launch replays every recording before the game, which then only hits.
 #     (d3d12_cache's recording there holds every mode section 7 ran: a, rt, layout and root.)
-LANE=A; P="$WORK/compat/ours-A/dxmt-pipelines"  # lane A's prefix: its d3d12_cache runs recorded and stamped there
-expect "the launcher records into the game's compat folder" "$([ -s "$P/d3d12_cache.exe.pipelines" ] && echo yes || echo no)" yes
-expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "$(cat "$WORK/ours/dxmt-version")"
-echo "old build" > "$P/replayed"
-LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; before=$(cat "$LLOG" 2> /dev/null | wc -l)
-CACHE="$WORK/cache/e2e"
-cachetest e2e a
-unset CACHE
-expect "a changed build replays d3d12_cache's recording before the game" \
-  "$(tail -n +$((before + 1)) "$LLOG" | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
-expect "then the game only hits" "$(counters e2e)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
-expect "and draws as D3DMetal" "$(drawn e2e)" "$(drawn cache-ref-a)"
-expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "$(cat "$WORK/ours/dxmt-version")"
+#     A launcher feature: not in arm64 mode (sub-project 5).
+if [ -z "$ARM64" ]; then
+  LANE=A; P="$WORK/compat/ours-A/dxmt-pipelines"  # lane A's prefix: its d3d12_cache runs recorded and stamped there
+  expect "the launcher records into the game's compat folder" "$([ -s "$P/d3d12_cache.exe.pipelines" ] && echo yes || echo no)" yes
+  expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "$(cat "$WORK/ours/dxmt-version")"
+  echo "old build" > "$P/replayed"
+  LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; before=$(cat "$LLOG" 2> /dev/null | wc -l)
+  CACHE="$WORK/cache/e2e"
+  cachetest e2e a
+  unset CACHE
+  expect "a changed build replays d3d12_cache's recording before the game" \
+    "$(tail -n +$((before + 1)) "$LLOG" | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
+  expect "then the game only hits" "$(counters e2e)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
+  expect "and draws as D3DMetal" "$(drawn e2e)" "$(drawn cache-ref-a)"
+  expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "$(cat "$WORK/ours/dxmt-version")"
+fi
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
