@@ -293,6 +293,18 @@ codesign -d --entitlements - "$LOADER" 2>&1 | LC_ALL=C /usr/bin/grep -q com.appl
   || die "the loader lacks com.apple.security.cs.disable-library-validation (wine.entitlements)"
 others=$(macho | grep '/wine$' | grep -vxF "$LOADER" || true)
 [ -z "$others" ] || die "another Mach-O named wine: $others"
+# Version resources: every shipped module whose Makefile.in sets a VER_ variable carries a VS_FIXEDFILEINFO (its
+# signature, 0xFEEF04BD, little-endian). Installers and launchers read it (SMITE 2's bootstrap refuses a
+# vcruntime140_1.dll without one); makedep dropped it from modules built for the hybrid arch only (Wine patch 0020).
+sig=$(printf '\275\004\357\376')
+out=$(for mk in "$S"/wine/dlls/*/Makefile.in "$S"/wine/programs/*/Makefile.in; do
+  LC_ALL=C /usr/bin/grep -q '^VER_' "$mk" || continue
+  m=$(sed -n 's/^MODULE[[:space:]]*=[[:space:]]*//p' "$mk")
+  f="$R/lib/wine/aarch64-windows/$m"
+  case $m in (''|*.tlb) continue ;; esac  # typelibs carry no version
+  [ ! -f "$f" ] || LC_ALL=C /usr/bin/grep -qaF "$sig" "$f" || echo "$m"
+done)
+[ -z "$out" ] || die "no version resource in $(echo "$out" | tr '\n' ' ')(their Makefile.in sets VER_)"
 
 # 4. Stage.
 rm -rf "$OUT/wine.app"

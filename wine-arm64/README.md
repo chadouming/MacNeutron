@@ -195,6 +195,9 @@ re-clone; that is why they wait for the rebase.
   Wine process; once per run would be enough.
 - Re-check DXMT patch 0002 (`winemetal.so` loads the MetalFX presenter, `libmacneutron-present.dylib`, in a constructor)
   against DXMT's `winemetal` sources.
+- Re-check makedep's `output_module` against upstream (patch 0020): a module enabled for `arm64ec` but not `aarch64`
+  (`vcruntime140_1`, `dpnsvr`) must still link its `.res`. `bundle.sh` fails naming any module whose `Makefile.in`
+  sets `VER_` and that ships without a version resource.
 - Keep patch 0014 even if it looks unneeded: a missing dylib then falls back silently instead of crashing
   (`docs/research/2026-10-04-ship-base/brief.md`).
 
@@ -215,6 +218,8 @@ re-clone; that is why they wait for the rebase.
   - 0004, 0017, 0018 and 0019 (strict x18 toggling) are ours, following Apple's rule in `os/arch/arm64.h` and our
     design in `docs/research/2026-10-02-native-arm64/x18-boundaries.md`.
   - 0016 (registering `dlls/lsteamclient` in configure) and the other Wine patches are ours.
+  - 0020 (makedep links the resources of a module built for the hybrid arch only, which lost its version resource)
+    is ours and stays local: it isn't proposed upstream.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
