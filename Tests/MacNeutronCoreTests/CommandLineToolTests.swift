@@ -35,6 +35,15 @@ import Testing
     #expect(!FileManager.default.fileExists(atPath: tool.path(percentEncoded: false)))
 }
 
+@Test func aMissingSteamExeChangesNothing() async throws {
+    let tool = try makeTempDir().appending(path: "tool dir", directoryHint: .isDirectory)
+    let source = try makeSignedWineApp(at: makeTempDir())
+    #expect(await CommandLineTool.run(["install", "--tool-dir", tool.path(percentEncoded: false),
+                                       "--wine-app", source.path(percentEncoded: false), "--steam-exe", "/no such/steam.exe"],
+                                      environment: [:], executable: URL(filePath: "/x")) == 1)
+    #expect(!FileManager.default.fileExists(atPath: tool.path(percentEncoded: false)))
+}
+
 @Test func installExitCodes() {
     #expect(CommandLineTool.installExitCode(.installed) == 0)
     #expect(CommandLineTool.installExitCode(.unchanged) == 0)

@@ -158,7 +158,8 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron", directoryHint: .isDirectory))
     try makeFakeWineApp(at: layout.root, id: "A")
     let kernelPath = try realPath(layout.wine)
-    #expect(kernelPath != layout.wine.path(percentEncoded: false))  // /private/var/… versus /var/…
+    // $TMPDIR is under /var, a symlink to /private/var, on macOS; the kernel reports the latter.
+    #expect(kernelPath != layout.wine.path(percentEncoded: false))
     let (outcome, _) = try installFake(try makeFakeWineApp(at: makeTempDir(), id: "B"), into: layout,
                                        running: [kernelPath])
     #expect(outcome == .deferred(kernelPath))

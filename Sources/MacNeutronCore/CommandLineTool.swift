@@ -28,6 +28,9 @@ public enum CommandLineTool {
             }
             let steamExe = option("--steam-exe", in: &args)
             guard args.isEmpty else { return usageError() }
+            if let steamExe, !FileManager.default.fileExists(atPath: steamExe) {  // before the runtime changes
+                return failure(CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: steamExe]))
+            }
             let layout = ToolLayout(root: URL(filePath: dir, directoryHint: .isDirectory))
             do {
                 let outcome = try RuntimeInstaller.install(
