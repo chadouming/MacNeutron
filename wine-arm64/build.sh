@@ -277,21 +277,26 @@ echo "wine-arm64: building (log: $SRC/make.log)" >&2
 make -C "$SRC/wine-build" -j"$(sysctl -n hw.ncpu)" > "$SRC/make.log" 2>&1 || die "make failed; see $SRC/make.log"
 
 # 6. FEX: the ARM64EC DLL with llvm-mingw's toolchain file (absolute path; TUNE_CPU=none, since the default reads
-#    /proc/cpuinfo), the unixlib with Apple clang. Each build folder is configured once.
+#    /proc/cpuinfo), the unixlib with Apple clang. Each build folder is configured again, from scratch, when its cmake
+#    arguments change (<folder>/.setup-inputs, as DXMT's); fetch_fex removes both.
 echo "wine-arm64: building FEX (log: $SRC/fex.log)" >&2
 : > "$SRC/fex.log"
-if [ ! -f "$SRC/fex-ec/build.ninja" ]; then
-  cmake -S "$F" -B "$SRC/fex-ec" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$F/Data/CMake/toolchain_mingw.cmake" \
-    -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False \
-    -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False \
-    >> "$SRC/fex.log" 2>&1 || { rm -rf "$SRC/fex-ec"; die "configuring FEX failed; see $SRC/fex.log"; }
-fi
+fex_setup() {  # fex_setup <what> <build folder> <cmake arguments...>
+  _fs_what=$1 _fs_dir=$2; shift 2
+  if [ ! -f "$_fs_dir/build.ninja" ] || [ "$(cat "$_fs_dir/.setup-inputs" 2> /dev/null)" != "$(printf '%s\n' "$@")" ]; then
+    echo "wine-arm64: configuring $_fs_what" >&2
+    rm -rf "$_fs_dir"
+    cmake -B "$_fs_dir" "$@" >> "$SRC/fex.log" 2>&1 \
+      || { rm -rf "$_fs_dir"; die "configuring $_fs_what failed; see $SRC/fex.log"; }
+    printf '%s\n' "$@" > "$_fs_dir/.setup-inputs"
+  fi
+}
+fex_setup FEX "$SRC/fex-ec" -S "$F" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$F/Data/CMake/toolchain_mingw.cmake" \
+  -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False \
+  -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False
 ninja -C "$SRC/fex-ec" arm64ecfex >> "$SRC/fex.log" 2>&1 || die "building libarm64ecfex.dll failed; see $SRC/fex.log"
-if [ ! -f "$SRC/fex-unixlib/build.ninja" ]; then
-  cmake -S "$F/Source/Windows/UnixLib" -B "$SRC/fex-unixlib" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OSX_DEPLOYMENT_TARGET=27.0 >> "$SRC/fex.log" 2>&1 \
-    || { rm -rf "$SRC/fex-unixlib"; die "configuring FEX's unixlib failed; see $SRC/fex.log"; }
-fi
+fex_setup "FEX's unixlib" "$SRC/fex-unixlib" -S "$F/Source/Windows/UnixLib" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OSX_DEPLOYMENT_TARGET=27.0
 ninja -C "$SRC/fex-unixlib" >> "$SRC/fex.log" 2>&1 || die "building FEX's unixlib failed; see $SRC/fex.log"
 # Wine loads it only as a builtin (it ignores other DLLs in its own directories). Spec §6.3: it imports ntdll.dll alone
 # and has no TLS directory (libc++ is linked statically).
@@ -311,7 +316,10 @@ fi
 build_llvm arm64 "$SRC/llvm-arm64" "$B/dxmt-src/llvm-project"
 echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 : > "$SRC/dxmt.log"
-printf "[binaries]\nxcrun = ['/bin/sh', '%s']\n" "$ROOT/wine-arm64/tools/xcrun-metal.sh" > "$SRC/dxmt-xcrun.txt"
+# Rewritten only when its text changes: a newer cross file makes meson regenerate the build.
+printf "[binaries]\nxcrun = ['/bin/sh', '%s']\n" "$ROOT/wine-arm64/tools/xcrun-metal.sh" > "$SRC/dxmt-xcrun.txt.new"
+if cmp -s "$SRC/dxmt-xcrun.txt.new" "$SRC/dxmt-xcrun.txt"; then rm "$SRC/dxmt-xcrun.txt.new"
+else mv "$SRC/dxmt-xcrun.txt.new" "$SRC/dxmt-xcrun.txt"; fi
 set -- "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --cross-file "$SRC/dxmt-xcrun.txt" \
   --buildtype release --strip --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true \
   -Dnative_llvm_path="$SRC/llvm-arm64" -Dwine_build_path="$SRC/wine-build"
