@@ -5,7 +5,7 @@
 #   notarize  build/release/r0/wine.app (stapled, unquarantined; Task 9 reuses it) and quarantined/wine.app
 #   online    clone the quarantined copy to <mode>/Application Support/wine.app, boot a fresh prefix with the staged
 #   offline   bundle, run arm64-hello.exe with the clone's loader as a launchd job: result-<mode>.txt.
-#             offline refuses while there is a default route.
+#             offline refuses while Apple's ticket or OCSP servers are reachable.
 #   results   both result files, the CDHash lines and every submission
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -48,8 +48,10 @@ stop() {
 
 run() {  # run <online|offline>
   mode=$1
-  if [ "$mode" = offline ] && /sbin/route -n get default > /dev/null 2>&1; then
-    die "offline needs the network off: /sbin/route -n get default still finds a route"
+  # Offline means Gatekeeper can't reach Apple: the ticket lookup (CloudKit) and certificate revocation (OCSP).
+  if [ "$mode" = offline ] && { scutil -r api.apple-cloudkit.com | LC_ALL=C /usr/bin/grep -qx Reachable \
+      || scutil -r ocsp.apple.com | LC_ALL=C /usr/bin/grep -qx Reachable; }; then
+    die "offline needs the network off: Apple's ticket or OCSP servers are still reachable"
   fi
   Q="$R0/quarantined/wine.app"
   [ -d "$Q" ] || die "no quarantined copy at $Q: run r0.sh notarize first"
