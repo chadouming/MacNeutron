@@ -13,8 +13,9 @@ needs Xcode 27 (Swift 6) and the Developer ID setup in `wine-arm64/README.md` (t
 ## Download and set up
 
 1. Download `MacNeutron-<version>.zip` from the project's releases, unzip it, and move `MacNeutron.app` to
-   `/Applications` before opening it (macOS runs an app opened from Downloads from a temporary read-only copy, which
-   breaks the runtime install).
+   `/Applications` before opening it (macOS runs an app opened from Downloads from a temporary read-only copy, so the
+   first runtime install is a slow full copy instead of an instant clone). Upgrading from an older MacNeutron: quit
+   Steam before opening the new one, and start it again after setup.
 2. Open MacNeutron. The setup window checks the requirements (Steam), installs the runtime automatically, and then
    turns on Steam Play mode. After that, MacNeutron lives in the menu bar. It keeps Steam's mappings current so your
    Mac games stay native, and its Games window sets the graphics backend and options per game.
@@ -43,8 +44,8 @@ Portions of this software are copyright © The FreeType Project (www.freetype.or
 
 `make wine-arm64` needs `brew install cmake ninja meson` and Xcode's Metal Toolchain
 (`xcodebuild -downloadComponent MetalToolchain`). Windows-side binaries are built with Clang from the pinned llvm-mingw,
-which the build fetches once (118 MB). `make app` needs `brew install mingw-w64` for `steam.exe`, and signs with
-`MACNEUTRON_SIGN_IDENTITY` and `MACNEUTRON_PROVISIONING_PROFILE`.
+which the build fetches once (118 MB). `make app` signs with `MACNEUTRON_SIGN_IDENTITY` and
+`MACNEUTRON_PROVISIONING_PROFILE`.
 
 ## Install the runtime from the command line
 
