@@ -93,7 +93,11 @@ loader=$!
 exec 3> "$WORK/stdin"   # held open: pause waits on it
 i=0; while [ -z "$(lsof -t "$TOOL/wine.app/Contents/MacOS/wine" 2> /dev/null)" ] && [ $i -lt 30 ]; do sleep 1; i=$((i + 1)); done
 out=$(install_tool) && st=0 || st=$?
-ok=0; [ "$st" -eq 3 ] && case $out in "deferred: "*/wine.app/Contents/MacOS/wine" is running") ok=1;; esac
+# The loader started the prefix's server too, and the install names the newest match it finds: the loader, or the
+# server when the scan comes before Wine's services start. Either is under the tool's wine.app.
+ok=0; [ "$st" -eq 3 ] && case $out in
+  "deferred: "*/wine.app/Contents/MacOS/wine" is running"|"deferred: "*/wine.app/Contents/Resources/bin/wineserver" is running") ok=1;;
+esac
 row "install defers while the loader runs" $ok "exit $st, $out"
 exec 3>&-
 server "$P" -k
