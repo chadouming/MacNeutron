@@ -1,13 +1,13 @@
 #!/bin/sh
 # The arm64 Wine runtime on the maintainer's Mac (native arm64 spec §7.3): `make wine-arm64-check`.
 # Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`, and the
-# dxmt steps `make dxmt dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench also needs MacNeutron's runtime-v4.7.3
-# installed (MACNEUTRON_TOOL names another tool folder), and the dxmt-* steps, for their D3DMetal reference, the same
-# with GPTK imported and its tarball cached. dxmt-x64's FSR 3 check needs SMITE 2 installed (Steam): its
-# amd_fidelityfx_dx12.dll, read from the game's install, never copied. steam-bridge needs `make bridge`, Steam running
-# and logged in, and SMITE 2 installed (its steam_api64.dll, read in place).
-# Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
-# Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
+# dxmt steps `make dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench, for its Rosetta baseline, and the dxmt-* steps,
+# for their D3DMetal reference, need the frozen Rosetta reference (tools/freeze-rosetta-reference.sh;
+# MACNEUTRON_REFERENCE names another), run by its own launcher. dxmt-x64's FSR 3 check needs SMITE 2 installed
+# (Steam): its amd_fidelityfx_dx12.dll, read from the game's install, never copied. steam-bridge needs `make bridge`,
+# Steam running and logged in, and SMITE 2 installed (its steam_api64.dll, read in place).
+# Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as the
+# app installs it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
 # Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,9 +21,9 @@ PFX="$WORK/prefix arm64"
 # The `unentitled` step's loader: a clone of $TOOL re-signed without the entitlement, with a prefix of its own.
 UNENT="$WORK/unentitled.app"
 UPFX="$WORK/prefix unentitled"
-# Gate G4's baseline: a clone of the installed MacNeutron tool folder (x86_64 Wine under Rosetta), never the folder
-# itself, run by the launcher just built. RPFX is its STEAM_COMPAT_DATA_PATH; Wine's prefix is RPFX/pfx.
-RSRC="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
+# Gate G4's baseline: a clone of the frozen Rosetta reference (x86_64 Wine under Rosetta), never the reference itself,
+# run by its own launcher. RPFX is its STEAM_COMPAT_DATA_PATH; Wine's prefix is RPFX/pfx.
+REF="${MACNEUTRON_REFERENCE:-$HOME/Library/Application Support/MacNeutron Reference/rosetta-tool}"
 RTOOL="$WORK/rosetta tool"
 RPFX="$WORK/prefix rosetta"
 RWINE="$RTOOL/Libraries/Wine/bin"
@@ -44,11 +44,14 @@ NEEDS_PREFIX="$NEEDS_PREFIX dxmt $NEEDS_DXMT g4-bench"
 NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync x18 g5-jit steam-bridge $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
-# knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
-# dxmt/check.sh makes in the dxmt-* steps' work folders.
+# knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the reference's
+# clones dxmt/check.sh makes in the dxmt-* steps' work folders; and the tool folders it assembles there.
 runtime_pids() {
-  for d in "$RTOOL" "$WORK"/dxmt-*/stock "$WORK"/dxmt-*/ours; do
+  for d in "$RTOOL" "$WORK"/dxmt-*/ref; do
     set -- "$@" "$d/bin/macneutron" "$d/Libraries/Wine/lib/wine/x86_64-unix/wine" "$d/Libraries/Wine/bin/wineserver"
+  done
+  for d in "$WORK"/dxmt-*/ours; do
+    set -- "$@" "$d/bin/macneutron" "$d/wine.app/Contents/MacOS/wine" "$d/wine.app/Contents/Resources/bin/wineserver"
   done
   for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver" \
     "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver" "$@"; do
@@ -422,8 +425,8 @@ g5_jit_cmd() {
 }
 
 # Gate G4 (spec §8), measured, not gated: x64-bench, five processes per side, the sides alternating so drift falls on
-# both alike. FEX: this stack, with FEX's defaults. Rosetta: the launcher just built, in a clone of the installed tool
-# folder (the pinned runtime-v4.7.3), with dxmt/check.sh's environment; the launcher adds ROSETTA_ADVERTISE_AVX=1 and
+# both alike. FEX: this stack, with FEX's defaults. Rosetta: the frozen reference's own launcher, in a clone of it (the
+# pinned runtime-v4.7.3), with dxmt/check.sh's environment; that launcher adds ROSETTA_ADVERTISE_AVX=1 and
 # WINEMSYNC=1. Both sides run with WINEDEBUG=-all, the launcher's default. Passes when every run printed every row;
 # bench_report.py's table (FEX time / Rosetta time per row) says how fast. Output in $WORK/bench.
 rosetta() {  # rosetta <launch verb> <args...>
@@ -431,12 +434,10 @@ rosetta() {  # rosetta <launch verb> <args...>
     "$RTOOL/bin/macneutron" launch "$@"
 }
 g4_bench_cmd() {
-  v=$(cat "$RSRC/runtime-version" 2> /dev/null || true)
-  [ "$v" = runtime-v4.7.3 ] || { echo "the tool folder at $RSRC holds ${v:-no runtime}, not runtime-v4.7.3"; return 1; }
-  # The folder itself, not a symlink to it: cp -R would copy the link, and the launcher copied next would land in the
-  # installed folder.
-  cp -cR "$(cd "$RSRC" && pwd -P)" "$RTOOL" || return 1
-  cp "$ROOT/.build/release/macneutron" "$RTOOL/bin/macneutron" || return 1
+  v=$(cat "$REF/runtime-version" 2> /dev/null || true)
+  [ "$v" = runtime-v4.7.3 ] || { echo "the reference at $REF holds ${v:-no runtime}, not runtime-v4.7.3"; return 1; }
+  # The folder itself, not a symlink to it: cp -R would copy the link, and the launches would run in the reference.
+  cp -cR "$(cd "$REF" && pwd -P)" "$RTOOL" || return 1
   rosetta getcompatpath "$WORK" > /dev/null || { echo "creating the Rosetta prefix failed"; return 1; }
   b="$WORK/bench"
   mkdir -p "$b/fex" "$b/rosetta"
@@ -533,18 +534,19 @@ dxmt_present_cmd() {
   echo "info $what: cycles 20 ok"
 }
 
-# dxmt/check.sh in arm64 mode (arm64 DXMT spec §7): our DXMT on this runtime, in clones of the prefix, against D3DMetal
-# on Rosetta. dxmt_lane_cmd <lane> <machine> <tests folder> <present_loop.exe> [line it must print]: passes when every
-# program is built for <machine> (ARM64EC or AMD64, as llvm-readobj reads the hybrid metadata: both lanes' headers say
-# 0x8664), the check ran in arm64 mode and all passed; else its last line gives the number of FAIL lines and the first
-# (none: the check's own), or, for a missing line, dxmt/check.sh's skip line for it (FSR 3: SMITE 2 isn't installed).
+# dxmt/check.sh (arm64 DXMT spec §7, arm64 release spec §8.2): our DXMT on this runtime, through the launcher in a tool
+# folder it assembles, against D3DMetal on the frozen reference. dxmt_lane_cmd <lane> <machine> <tests folder>
+# <present_loop.exe> [line it must print]: passes when every program is built for <machine> (ARM64EC or AMD64, as
+# llvm-readobj reads the hybrid metadata: both lanes' headers say 0x8664), the check ran in arm64 mode and all passed;
+# else its last line gives the number of FAIL lines and the first (none: the check's own), or, for a missing line,
+# dxmt/check.sh's skip line for it (FSR 3: SMITE 2 isn't installed).
 dxmt_lane_cmd() {
   l="$WORK/dxmt-$1.log" t0=$(date +%s) ro="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-readobj"
   for e in "$3"/*.exe "$4"; do
     "$ro" --file-headers "$e" | grep -q "Machine: IMAGE_FILE_MACHINE_$2 " || { echo "${e##*/} is not built for $2"; return 1; }
   done
-  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_PREFIX="$PFX" MACNEUTRON_ARM64_TESTS="$3" \
-    MACNEUTRON_ARM64_LOOP="$4" MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
+  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_TESTS="$3" MACNEUTRON_ARM64_LOOP="$4" \
+    MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
   echo "info dxmt-$1: $(($(date +%s) - t0)) s"
   grep -q '^info arm64 mode: ' "$l" || { echo "dxmt/check.sh did not run in arm64 mode"; return 1; }
   n=$(grep -c '^FAIL' "$l" || true)
