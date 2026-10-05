@@ -1,6 +1,9 @@
 #!/bin/sh
 # Assembles and signs build/wine-arm64/wine.app from the built Wine tree (native arm64 spec §4, §7.2). The bundle is
 # built as wine.app.tmp and moved to wine.app only after every assertion holds, so a failure stages nothing.
+# bundle.sh --release --version <V> --out <folder> (arm64 release spec §5.2, release/release.sh) stages
+# <folder>/wine.app from the same build tree instead, never over build/wine-arm64: version <V>, its own SOURCE naming
+# HEAD, and before signing, no debug info, no import libraries and no Wine developer tools.
 # Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE. BUILD_DIR replaces build/ (tests).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,6 +11,25 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/dxmt/pins"  # DXMT_COMMIT
 B="${BUILD_DIR:-$ROOT/build}"
 OUT="$B/wine-arm64"
+release= VERSION=dev
+usage="usage: bundle.sh [--release --version <X.Y.Z> --out <folder>]"
+while [ $# -gt 0 ]; do
+  case $1 in
+    --release) release=1 ;;
+    --version) [ $# -ge 2 ] || die "$usage"; VERSION=$2; shift ;;
+    --out) [ $# -ge 2 ] || die "$usage"; OUT=$2; shift ;;
+    *) die "$usage" ;;
+  esac
+  shift
+done
+if [ -n "$release" ]; then
+  [ "$VERSION" != dev ] && [ -n "$VERSION" ] && [ "$OUT" != "$B/wine-arm64" ] || die "$usage"
+  mkdir -p "$OUT"
+  OUT=$(cd "$OUT" && pwd)
+  [ "$OUT" != "$(cd "$B" && pwd)/wine-arm64" ] || die "--out is the development bundle's folder, $OUT"
+else
+  [ "$VERSION:$OUT" = "dev:$B/wine-arm64" ] || die "$usage"
+fi
 BUILD="$B/wine-arm64-src/wine-build"
 FEX_DLL="$B/wine-arm64-src/fex-ec/Bin/libarm64ecfex.dll"
 FEX_SO="$B/wine-arm64-src/fex-unixlib/libarm64ecfex.so"
@@ -70,7 +92,9 @@ S="$B/wine-arm64-src"
 mkdir -p "$L/wine" "$L/fex" "$L/llvm" "$L/llvm-mingw" "$L/macneutron"
 for f in README NOTICES.md; do put "$ROOT/wine-arm64/licenses" "$f" "$L/"; done
 put "$ROOT" LICENSE "$L/macneutron/"  # the presenter's and the patch files' (arm64 release spec §7.1)
-put "$S" SOURCE "$L/"
+# A release names HEAD (release.sh refuses a dirty tree): build.sh's SOURCE keeps the commit of the last build that
+# changed something, which commits that touch no build input leave behind (arm64 release spec §14).
+if [ -n "$release" ]; then write_source "$L/SOURCE" "$(git -C "$ROOT" rev-parse HEAD)"; else put "$S" SOURCE "$L/"; fi
 for f in LICENSE COPYING.LIB AUTHORS NOTICES.md; do put "$S/wine" "$f" "$L/wine/"; done
 put "$S/wine" libs/gsm/COPYRIGHT "$L/wine/gsm-COPYRIGHT"
 put "$S/wine" libs/faudio/LICENSE "$L/wine/faudio-LICENSE"
@@ -109,13 +133,43 @@ LGPL-2.1-or-later: copyright 2012 Piotr Caban for CodeWeavers, from Wine (Wine's
 EOF
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 # The version (arm64 release spec §5.1): dev for a development bundle.
-/usr/libexec/PlistBuddy -c 'Add :CFBundleShortVersionString string dev' -c 'Add :CFBundleVersion string dev' \
-  "$APP/Contents/Info.plist" > /dev/null || die "can't write the version into Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" \
+  -c "Add :CFBundleVersion string $VERSION" "$APP/Contents/Info.plist" > /dev/null \
+  || die "can't write the version into Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 
 # The Mach-O files in the bundle, one per line (PE DLLs need no signature).
 macho() { find "$APP" -type f -print0 | xargs -0 file | sed -n 's/: *Mach-O .*//p'; }
 LOADER="$APP/Contents/MacOS/wine"
+
+# 1b. Release only (arm64 release spec §5.2, §14), before signing seals the files: debug info stripped from the PE files
+#     with llvm-mingw's llvm-strip (the toolchain that built them; it keeps the builtin marker and the ARM64X CHPE
+#     metadata, which the assertions below check) and from the Mach-Os with strip -S (it keeps the local symbols
+#     x18-allow.txt names); the import libraries and Wine's developer tools, which nothing runs, deleted. The sizes
+#     before and after go to <folder>/SIZES.txt for the release record.
+if [ -n "$release" ]; then
+  before=$(du -sk "$APP" | cut -f 1)
+  find "$R/lib" -name '*.a' -delete
+  for t in winegcc wineg++ winecpp winebuild winedump widl wrc wmc winemaker function_grep.pl; do
+    [ -e "$R/bin/$t" ] || [ -L "$R/bin/$t" ] || die "no Resources/bin/$t to delete: is the list still Wine's?"
+    rm "$R/bin/$t"
+  done
+  llvm_strip="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-strip"
+  find "$R/lib/wine/aarch64-windows" "$R/DXMT/aarch64-windows" -type f -print0 | xargs -0 file \
+    | sed -n 's/: *PE32.*//p' > "$OUT/pe.list"
+  [ -s "$OUT/pe.list" ] || die "no PE files found to strip"
+  while IFS= read -r f; do
+    "$llvm_strip" --strip-debug "$f" >> "$OUT/strip.log" 2>&1 \
+      || die "llvm-strip failed on ${f#"$APP"/}; see $OUT/strip.log"
+  done < "$OUT/pe.list"
+  macho | while IFS= read -r f; do
+    strip -S "$f" >> "$OUT/strip.log" 2>&1 || die "strip -S failed on ${f#"$APP"/}; see $OUT/strip.log"
+  done
+  rm "$OUT/pe.list"
+  after=$(du -sk "$APP" | cut -f 1)
+  printf 'wine.app before stripping: %s KB\nwine.app after stripping: %s KB\n' "$before" "$after" > "$OUT/SIZES.txt"
+  echo "wine-arm64: stripped wine.app from $before KB to $after KB" >&2
+fi
 
 # 2. Sign: everything but the loader, then the bundle with the entitlements, which land on the loader alone.
 macho | grep -vxF "$LOADER" | tr '\n' '\0' \
@@ -195,11 +249,13 @@ rm "$OUT/macho.list"
 [ -e "$R/bin/wineserver" ] || die "no Resources/bin/wineserver"
 [ -e "$R/share/wine/wine.inf" ] || die "no Resources/share/wine/wine.inf"
 v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2> /dev/null || true)
-[ "$v" = dev ] || die "Info.plist's CFBundleShortVersionString is '${v:-missing}', not dev"
+[ "$v" = "$VERSION" ] || die "Info.plist's CFBundleShortVersionString is '${v:-missing}', not $VERSION"
+links=$(find "$APP" -type l ! -exec test -e {} \; -print)
+[ -z "$links" ] || die "dangling links: $(echo "$links" | tr '\n' ' ')"
 id=$(otool -D "$U/libmacneutron-present.dylib" | tail -n +2)
 [ "$id" = @rpath/libmacneutron-present.dylib ] \
   || die "libmacneutron-present.dylib's install name is ${id:-missing}, not @rpath/libmacneutron-present.dylib"
-# DXMT: Wine's builtin marker as dxmt/build.sh checks it (bytes 64-79), the version token, the pin's place in the tree.
+# DXMT: Wine's builtin marker (bytes 64-79, in the DOS stub), the version token, the pin's place in the tree.
 builtin() { [ "$(dd if="$1" bs=1 skip=64 count=16 2> /dev/null)" = "Wine builtin DLL" ]; }
 builtin "$R/lib/wine/aarch64-windows/winemetal.dll" || die "winemetal.dll lacks Wine's builtin marker"
 for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
@@ -232,4 +288,4 @@ others=$(macho | grep '/wine$' | grep -vxF "$LOADER" || true)
 # 4. Stage.
 rm -rf "$OUT/wine.app"
 mv "$APP" "$OUT/wine.app"
-echo "wine-arm64: staged $OUT/wine.app" >&2
+echo "wine-arm64: staged $OUT/wine.app ($VERSION)" >&2

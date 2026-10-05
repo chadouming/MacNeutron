@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prints the bin folder of the pinned llvm-mingw (Clang) toolchain, fetching it into build/dxmt-src once.
-# Every Windows-side binary is built with it: DXMT (dxmt/build.sh), steam.exe, the presenter and D3D12 test programs.
+# Every Windows-side binary is built with it: Wine's and DXMT's (wine-arm64/build.sh), steam.exe and the test programs.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/dxmt/pins"

@@ -1,4 +1,4 @@
-# LLVM 15 and the host tools linked against it, by architecture, for dxmt/build.sh (x86_64) and wine-arm64/build.sh (arm64) (sourced).
+# LLVM 15 and the host tools linked against it, by architecture, for wine-arm64/build.sh (arm64) (sourced).
 # The caller defines die, ROOT and LLVM_TAG (dxmt/pins); this file sets no variables. Messages go to stderr.
 
 # LLVM 15: static, with DXMT's CI flags but no assertions (they slowed every pipeline's translation, which Unreal does

@@ -102,10 +102,10 @@ fetch_lsteamclient() {
   git -C "$LSC.tmp" checkout -q -b macneutron FETCH_HEAD || die "can't check out lsteamclient/ from $LSTEAMCLIENT_REPO"
   patch_tree "$LSC.tmp" lsteamclient "$LSC_PATCHES" "$lsc_series" "$LSTEAMCLIENT_COMMIT"
 }
-wine_series=$(series_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch)
-fex_series=$(series_of "$ROOT/wine-arm64/pins" "$FEX_PATCHES"/*.patch)
-dxmt_series=$(series_of "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch)
-lsc_series=$(lsteamclient_series "$ROOT/wine-arm64/deps.pins" "$LSC_PATCHES"/*.patch)
+wine_series=$(tree_series wine)
+fex_series=$(tree_series fex)
+dxmt_series=$(tree_series dxmt)
+lsc_series=$(tree_series lsteamclient)
 # Every build input, once: the up-to-date check and the stamp written at the end must agree.
 stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" \
   "$ROOT/wine-arm64/lib.sh" "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" \
@@ -337,26 +337,7 @@ mkdir -p "$SRC/presenter"
 
 # 8. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
 #    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.
-series() { if [ "$1" = development ]; then echo dev; else echo "$2"; fi; }  # series <mode> <series hash>
-{
-  echo "MACNEUTRON_COMMIT=$mac"
-  echo "WINE_COMMIT=$WINE_COMMIT"
-  echo "WINE_SERIES=$(series "$wine_mode" "$wine_series")"
-  echo "FEX_COMMIT=$FEX_COMMIT"
-  echo "FEX_SERIES=$(series "$fex_mode" "$fex_series")"
-  # " <sha> <path> (<describe>)", the first character "+" or "-" when the checkout differs from FEX's record.
-  git -C "$F" submodule status | awk '{ c = $1; sub(/^[-+U]/, "", c); n = $2; sub(/.*\//, "", n) }
-    n ~ /^(fmt|range-v3|rpmalloc|unordered_dense|xxhash|cpp-optparse)$/ { print "FEX_SUBMODULE_" n "=" c }'
-  echo "DXMT_COMMIT=$DXMT_COMMIT"
-  echo "DXMT_SERIES=$(series "$dxmt_mode" "$dxmt_series")"
-  git -C "$D" submodule status | awk '{ c = $1; sub(/^[-+U]/, "", c); n = $2; sub(/.*\//, "", n)
-    print "DXMT_SUBMODULE_" n "=" c }'  # external/nvapi, include/native/directx
-  echo "LLVM_TAG=$LLVM_TAG"
-  echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
-  echo "LSTEAMCLIENT_COMMIT=$LSTEAMCLIENT_COMMIT"
-  echo "LSTEAMCLIENT_SERIES=$(series "$lsteamclient_mode" "$lsc_series")"
-  deps_pins  # the tarballs' <NAME>_URL and <NAME>_SHA256
-} > "$SRC/SOURCE"
+write_source "$SRC/SOURCE" "$mac"
 echo "wine-arm64: bundling (log: $OUT/install.log)" >&2
 sh "$ROOT/wine-arm64/bundle.sh"
 
