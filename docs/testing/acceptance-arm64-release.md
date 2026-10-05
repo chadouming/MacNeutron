@@ -171,8 +171,10 @@ per process start through the reserved area under the top of the address space, 
 million per allocation once the 385 GB guard region under `0x7000000000` was in the way. Wine patch 0021 asks
 `mach_vm_region` for the region in the way after a failed probe and continues past it (to its end bottom-up, to its
 start minus the size top-down, aligned; every skipped candidate overlaps it). The benchmark now makes 2,000 threads in
-0.71-0.77 s (x64) and 0.22-0.25 s (arm64; Rosetta-era runtime: 0.57 s); `+virtual` shows no fallback to 64 KB steps
-(every failed probe is followed by a skip, at most 345 per allocation, one per host region).
+0.71-0.77 s (x64) and 0.22-0.25 s (arm64; Rosetta-era runtime: 0.57 s). Under `+virtual`, a 2,000-thread x64 run
+showed at most 345 failed probes per allocation; a second run, summarised with a count of the patch's "skipping host
+region" lines, had 622,451 failed probes, each followed by a whole-region skip (none by a 64 KB step), at most 324 per
+allocation.
 
 SMITE 2, scratch prefix cloned from one with the good settings, Steam bridge on, `env -i` (engine initialised = from the
 log's first line to `Engine is initialized`; lobby = launch to `Took … to LoadMap(…L_MainLobby_P)`):
