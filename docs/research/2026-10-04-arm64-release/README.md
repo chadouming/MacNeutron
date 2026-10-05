@@ -10,5 +10,6 @@ Four read-only maps written before the design, each citing `file:line` at commit
   interface digests written for the implementation plan (exact signatures, line ranges and test names at `92d8f83`;
   line numbers drift as the plan's tasks land).
 - `spec-review.md`: the adversarial review of the spec draft (three lenses, each re-checked by a sceptic).
+- `plan-review.md`: the adversarial review of the implementation plan draft (same method).
 
 The design built on them: `docs/superpowers/specs/2026-10-04-macneutron-arm64-release-design.md`.
