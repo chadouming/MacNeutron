@@ -1,4 +1,4 @@
-.PHONY: build test smoke app bridge bridge-check presenter presenter-check dxmt dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check
+.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -15,42 +15,33 @@ build:
 test:
 	swift test
 
-# Real Wine; see Tests/Smoke/smoke.sh for prerequisites.
-smoke: build
+# The launcher on wine.app in a tool folder assembled with `macneutron install`, and the install itself (gates L5,
+# L6; real Wine, no Steam). See Tests/Smoke/smoke.sh.
+smoke: build bridge wine-arm64
 	sh Tests/Smoke/smoke.sh
 
-# Windows helpers for the Steam bridge (docs/superpowers/specs/2026-09-28-macneutron-steam-bridge-design.md), and
-# steam.exe and its test helper for the arm64 runtime in $(BRIDGE)/arm64 (ship-base spec §7: neither steam.exe runs
-# on the other runtime). steamprobe.exe stays x64: it runs under FEX there.
+# The Steam bridge (docs/superpowers/specs/2026-09-28-macneutron-steam-bridge-design.md): steam.exe and its test
+# helper for the arm64 runtime in $(BRIDGE)/arm64, and the x64 steamprobe.exe, which runs under FEX.
 bridge:
-	mkdir -p $(BRIDGE)/tests $(BRIDGE)/arm64/tests
-	$(MINGW) -o $(BRIDGE)/steam.exe bridge/steam.c -ladvapi32
+	mkdir -p $(BRIDGE)/arm64/tests
 	$(MINGW) -fms-extensions -o $(BRIDGE)/steamprobe.exe bridge/probe.c
-	$(MINGW) -o $(BRIDGE)/tests/helper.exe bridge/tests/helper.c -ladvapi32 -lshell32
 	$(MINGW_A64) -o $(BRIDGE)/arm64/steam.exe bridge/steam.c -ladvapi32
 	$(MINGW_A64) -o $(BRIDGE)/arm64/tests/helper.exe bridge/tests/helper.c -ladvapi32 -lshell32
 
-# steam.exe under the installed runtime (real Wine, no Steam).
-bridge-check: bridge
+# steam.exe on wine.app, directly and through the launcher (real Wine, no Steam).
+bridge-check: build bridge wine-arm64
 	sh bridge/probe.sh --redact-self-test
 	sh bridge/check.sh
 
-# MetalFX presenter (docs/superpowers/specs/2026-09-28-macneutron-metalfx-upscaler-design.md) and its test program.
+# The MetalFX presenter's test program. The presenter itself is built into wine.app (wine-arm64/build.sh), where
+# winemetal.so loads it.
 presenter:
 	mkdir -p $(PRESENTER)
-	clang -arch x86_64 -arch arm64 -fobjc-arc -O2 -dynamiclib -framework Foundation -framework AppKit \
-		-framework QuartzCore -framework Metal -framework MetalFX \
-		-o $(PRESENTER)/libmacneutron-present.dylib presenter/present.m
 	$(MINGW) -o $(PRESENTER)/present_loop.exe presenter/tests/present_loop.c -ld3d11 -ldxgi -luser32 -lgdi32 -ldxguid -luuid
 
-# The presenter under the installed runtime on D3DMetal (real Wine, no Steam).
-presenter-check: presenter
+# The presenter in wine.app through the launcher on DXMT (real Wine, no Steam).
+presenter-check: build wine-arm64 presenter
 	sh presenter/check.sh
-
-# MacNeutron's DXMT fork with Direct3D 12 (docs/superpowers/specs/2026-09-28-macneutron-dxmt-fork-design.md).
-# First run: about 500 MB of downloads and a few minutes of LLVM build; see dxmt/build.sh.
-dxmt:
-	sh dxmt/build.sh
 
 # D3D12 test programs for our DXMT, built in parallel (one compiler per core).
 DXMT_TESTS = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests/%.exe,$(wildcard dxmt/tests/d3d12_*.cpp))
@@ -74,34 +65,36 @@ build/dxmt-tests-arm64ec/present_loop.exe: presenter/tests/present_loop.c
 	$(MINGW_EC) -o $@ $< -ld3d11 -ldxgi -luser32 -lgdi32 -ldxguid -luuid
 
 # Translate a folder of captured DXIL shaders offline (DIR=~/dxil-smite2); never commit a game's shaders.
-dxil-corpus: dxmt
-	build/dxmt/dxil-translate "$(DIR)"
+dxil-corpus: wine-arm64
+	build/wine-arm64/dxil-translate "$(DIR)"
 
-# Our DXMT under the installed runtime (real Wine, no Steam); see dxmt/check.sh.
-dxmt-check: build dxmt presenter dxmt-tests
+# Our DXMT in wine.app through the launcher against D3DMetal in the frozen Rosetta reference
+# (tools/freeze-rosetta-reference.sh), with the x64 test programs under FEX, then the ARM64EC ones (real Wine, no
+# Steam); see dxmt/check.sh.
+dxmt-check: build wine-arm64 dxmt-tests dxmt-tests-arm64ec presenter
 	sh dxmt/tests/build_test.sh
 	sh dxmt/check.sh
+	MACNEUTRON_ARM64_TESTS=build/dxmt-tests-arm64ec MACNEUTRON_ARM64_LOOP=build/dxmt-tests-arm64ec/present_loop.exe DXMT_CHECK_WORK="$$TMPDIR/macneutron dxmt arm64ec" sh dxmt/check.sh
 
-# Ad-hoc signed MacNeutron.app with the macneutron CLI inside it.
-app: build bridge presenter dxmt
+# A development MacNeutron.app, ad hoc signed, with the CLI, wine.app and steam.exe inside. Never open it on this Mac:
+# its start installs into the real tool folder. Needs the signing variables (it builds wine.app); make release
+# builds the notarized one.
+app: build bridge wine-arm64
+	@! ps -axo comm= | LC_ALL=C /usr/bin/grep -qF "$(abspath $(APP))/" || { echo 'app: quit the MacNeutron running from $(APP) first' >&2; exit 1; }
 	rm -rf $(APP)
-	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Helpers
+	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Helpers $(APP)/Contents/Resources
 	cp App/Info.plist $(APP)/Contents/Info.plist
 	cp .build/release/MacNeutronApp $(APP)/Contents/MacOS/MacNeutron
 	cp .build/release/macneutron $(APP)/Contents/Helpers/macneutron
-	mkdir -p $(APP)/Contents/Resources
-	cp $(BRIDGE)/steam.exe $(APP)/Contents/Resources/steam.exe
 	codesign --force --sign - $(APP)/Contents/Helpers/macneutron
-	mkdir -p $(APP)/Contents/Frameworks
-	cp $(PRESENTER)/libmacneutron-present.dylib $(APP)/Contents/Frameworks/libmacneutron-present.dylib
-	codesign --force --sign - $(APP)/Contents/Frameworks/libmacneutron-present.dylib
-	sh dxmt/published.sh build/dxmt-src/dxmt $$(cat build/dxmt/version)
-	mkdir -p $(APP)/Contents/Resources/DXMT $(APP)/Contents/Frameworks/DXMT
-	cp -R build/dxmt/x86_64-windows build/dxmt/i386-windows build/dxmt/version \
-		build/dxmt/COPYING.LIB build/dxmt/LICENSE build/dxmt/LICENSE.OLD $(APP)/Contents/Resources/DXMT/
-	cp -R build/dxmt/x86_64-unix $(APP)/Contents/Frameworks/DXMT/
-	for f in $(APP)/Contents/Frameworks/DXMT/x86_64-unix/*; do codesign --force --sign - "$$f"; done
+	cp -c -R build/wine-arm64/wine.app $(APP)/Contents/Helpers/wine.app
+	cp $(BRIDGE)/arm64/steam.exe $(APP)/Contents/Resources/steam.exe
 	codesign --force --sign - $(APP)
+
+# The release: notarized MacNeutron.app, its zip and the source archive (spec §6.3). VERSION=x.y.z; needs the
+# signing and notary variables and the network.
+release: build bridge wine-arm64
+	sh release/release.sh "$(VERSION)"
 
 # Native arm64 Wine 11.19 with our patches, FEX for x64 code and our DXMT for ARM64X
 # (docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md §5, §6; 2026-10-03-macneutron-arm64-dxmt-design.md).
@@ -142,10 +135,10 @@ build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
 	/usr/bin/clang -O1 -o $@ $< -framework CoreGraphics -framework ImageIO -framework CoreFoundation
 
 # The arm64 runtime on this Mac: boots, runs native ARM64 code, leaves nothing behind (spec §7.3). Needs
-# MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and for gate G4's
-# Rosetta baseline an installed runtime-v4.7.3, run by the launcher `build` makes; the dxmt-* steps' D3DMetal reference
-# also needs GPTK imported into it and its tarball cached (dxmt/check.sh).
-wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec
+# MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and the frozen Rosetta
+# reference (MACNEUTRON_REFERENCE, tools/freeze-rosetta-reference.sh): gate G4's baseline runs on its own launcher,
+# and the dxmt-* steps' D3DMetal reference is its GPTK (dxmt/check.sh).
+wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter dxmt-tests-arm64ec
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
 	sh wine-arm64/tests/licences_test.sh build/wine-arm64/wine.app
