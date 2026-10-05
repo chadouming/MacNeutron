@@ -1,5 +1,7 @@
 # Shader pre-caching acceptance test (DXMT fork, sub-project 4, first slice)
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Spec: `docs/superpowers/specs/2026-09-30-macneutron-pipeline-cache-design.md` §7. Manual, on a Mac with D3DMetal
 (GPTK imported) and SMITE 2 installed. Record results at the bottom.
 

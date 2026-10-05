@@ -1,7 +1,7 @@
 # MacNeutron — Native arm64 stack: roadmap and sub-project 1 (arm64 Wine + FEX for x64)
 
 - **Date:** 2026-10-02
-- **Status:** Approved 2026-10-03. Sub-project 1 implemented 2026-10-03: G1, G2, G3 and G5 pass and G4 is measured (`docs/testing/acceptance-arm64-wine.md`). Sub-projects 2 and 3 are done too (§2).
+- **Status:** Approved 2026-10-03. Sub-project 1 implemented 2026-10-03: G1, G2, G3 and G5 pass and G4 is measured (`docs/testing/acceptance-arm64-wine.md`). Sub-projects 2 and 3 are done too (§2). Amended by `2026-10-04-macneutron-arm64-release-design.md` §13 on 2026-10-04: the first release is arm64-only.
 - **Builds on:**
   - `2026-09-27-macproton-runtime-design.md` (tool folder, launcher, prefixes)
   - `2026-09-28-macneutron-dxmt-fork-design.md` (our DXMT fork, `dxmt/` build layout)
@@ -19,7 +19,7 @@
     - sub-project 1's gates.
   - **Out:**
     - sub-projects 2–9 (§2), each with its own spec;
-    - shipping any of this to players: the Rosetta runtime stays the only shipped runtime until sub-project 5;
+    - shipping any of this to players: the Rosetta runtime stays the only shipped runtime until sub-project 5 (superseded 2026-10-04: sub-project 5 ships arm64 only, and removes the Rosetta runtime);
     - upstream contributions of any kind, other than issue reports.
 
 ## 1. Goal
@@ -36,7 +36,7 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 **Sub-project 1 is done when** §8's gates G1, G2, G3 and G5 pass on the maintainer's Mac, G4 is measured, and the result is recorded in `docs/testing/acceptance-arm64-wine.md`:
 - `make wine-arm64` builds, signs and stages the runtime from committed pins and patches;
 - x64 Windows programs run correctly under FEX in it;
-- FEX's CPU cost against Rosetta is known. A game's switch is decided per game from that game's own measurements (sub-project 9), not by G4.
+- FEX's CPU cost against Rosetta is known. A game's switch is decided per game from that game's own measurements (sub-project 9), not by G4. (Superseded 2026-10-04: there is no per-game switch; the first release is arm64-only, `2026-10-04-macneutron-arm64-release-design.md` §13.)
 
 ### Decisions made during brainstorming
 
@@ -44,7 +44,7 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 |---|---|
 | Shape | One process, layered: FEX ARM64EC + Wine ARM64EC + DXMT ARM64X. Rejected: a fused x86 + Win32 + D3D translator (no precedent, person-years) |
 | Priority | The main workstream, as fast as possible. DXMT GPU-efficiency work pauses |
-| When a game switches | Per game. A 64-bit D3D11/12 game moves once it runs on the arm64 stack at ≤ ~1.4× the CPU cost it has under Rosetta. 32-bit and D3D9 games stay on Rosetta until their own sub-projects land |
+| When a game switches | ~~Per game. A 64-bit D3D11/12 game moves once it runs on the arm64 stack at ≤ ~1.4× the CPU cost it has under Rosetta. 32-bit and D3D9 games stay on Rosetta until their own sub-projects land~~ Superseded 2026-10-04 by the maintainer: the first release is arm64-only; 32-bit and D3D9 games stop working with it and come back with rows 7 and 8 (`2026-10-04-macneutron-arm64-release-design.md` §13) |
 | Apple entitlement | **Granted** on 2026-10-02: the "Cross-architecture Compatibility Framework" capability (`com.apple.developer.cross-architecture-support`) for App ID `net.authspot.macneutron.wine`, team `49QMZXLR8S`, through a Developer ID provisioning profile. The entitled path is the design; the unentitled design survives only in the research (`wine-11.19-survey.md`) |
 | Wine base | Upstream `wine-11.19`, not citi94's port, CrossOver's tree or Madeira's |
 | x18 (Windows TEB) | Apple's public `os_set_custom_x18_abi_enabled`. Once per thread for sub-project 1; strict toggling at every Windows↔Unix transition before shipping (sub-project 3). No old-SDK linking |
@@ -62,11 +62,11 @@ This is a survival move, not a speed one. GPU-bound games such as SMITE 2 will n
 | 2 | **DXMT for arm64:** ARM64X PE side, aarch64 `winemetal.so`, arm64 LLVM 15 | Wine build tree from 1 | Runs alongside 1. Testable with ARM64EC-built test programs, no FEX needed. Blockers (fixed by DXMT patch 0001 and Wine patch 0013):<br>• `__rdtsc` in `src/d3d12/d3d12_stats.cpp`, the only compile error;<br>• Wine 11.19's `winemac.so` has no `macdrv_functions` and exports only two symbols, so both of DXMT's lookups (`winemetal_unix.c:1713-1722`) fail and nothing presents. Fix: a `macdrv_functions` shim table with default visibility in a winemac patch<br>**Done** 2026-10-03: `2026-10-03-macneutron-arm64-dxmt-design.md`, `docs/testing/acceptance-arm64-dxmt.md` |
 | 3 | **Ship-base Wine** | 1 | Strict x18 toggling (§5.3); msync from CrossOver `wine1117`; FreeType and gnutls built from pinned source and bundled; the Steam bridge (lsteamclient ARM64X against Steam's universal `steamclient.dylib`, an aarch64 `steam.exe`); licence and notice files for every shipped component. Spec: `2026-10-04-macneutron-ship-base-wine-design.md` (amended 2026-10-04: row 4 folded in; `MAP_JIT` dropped, see §3.4)<br>**Done** 2026-10-04: `docs/testing/acceptance-arm64-ship-base.md` (Wine 0004 and 0015-0019, lsteamclient 0001-0003) |
 | 4 | **Steam path** | — | Folded into row 3 (2026-10-04). The launcher's arm64 Steam wiring and the decision whether release bundles may include lsteamclient (it is under Valve's Steamworks SDK licence) moved to row 5 |
-| 5 | **Launcher: a second runtime** | 3 | Per-game runtime choice, separate prefixes, preflight split; installing `wine.app` (at a path with spaces, as `wine-arm64/check.sh` tests); `WINEMSYNC=1` for every arm64 run (`WINEMSYNC=0` per game as the off switch; client and server must agree, §11); the arm64 Steam bridge wiring (copying `lsteamclient.dll`, and `build/bridge/arm64/`'s `steam.exe` and `tests/helper.exe`, into prefixes); installing DXMT into arm64 prefixes (`DXMT/aarch64-windows/*` into system32, with the DXMT overrides; sub-project 2 spec §6); whether releases may include lsteamclient (Steamworks SDK licence; not redistributed until decided); release packaging: notarization of the entitled bundle (unverified, §11), release source archives, refusing development inputs in release bundles, stripping builtin PE files (`lsteamclient.dll` is 57 MB); the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`); shader pre-caching from the launcher in arm64 mode; `dxmt/check.sh`'s launcher checks (section 10, `MACNEUTRON_LOG`) in arm64 mode. Deferred from sub-projects 2 and 3: the sub-project 2 spec's scope and §6, the sub-project 3 spec's scope and §13, `docs/testing/acceptance-arm64-ship-base.md` "Found on the way". Parked here, with no owner in the sub-project 3 spec ("a separate small change"): the Rosetta app's missing LLVM and mingw-w64 notices |
-| 6 | **SMITE 2 parity and measurements** | 2, 3, 5 | Frame time vs the Rosetta stack; the cost of x64↔ARM64EC crossings; per-game CPU cost; a CPU-bound title; classify the x18 hits in Steam's arm64 `steamclient.dylib` (552, counted, not classified, in sub-project 3) |
-| 7 | **Direct3D 9** (optional, can start now on Rosetta) | — | Import dacevedo12/dxmt `v0.4-d3d9` (LGPL) into our fork; Wine's wined3d stays the fallback |
-| 8 | **32-bit games** | 3, 7 | Standard WoW64: i386 in `--enable-archs` and FEX's `libwow64fex.dll`. The entitlement makes the low 4 GB usable, so Madeira's guest-window redesign isn't needed. FEX's WoW64 JIT still allocates RWX, so its dual-view port belongs here |
-| 9 | **Per-game cutover** | 6 (+7 for D3D9, +8 for 32-bit) | A game moves when its own measurements clear the bar in §1's decisions; then delete GPTK, DXVK, the AVX switch and the Rosetta preflight |
+| 5 | **Launcher: the arm64-only release** | 3 | Scope and decisions: `2026-10-04-macneutron-arm64-release-design.md` (it replaces the per-game runtime choice and the preflight split below: every game runs on `wine.app`, and the Rosetta runtime, GPTK, DXVK, the AVX switch and the Rosetta preflight are deleted). Originally: per-game runtime choice, separate prefixes, preflight split; installing `wine.app` (at a path with spaces, as `wine-arm64/check.sh` tests); `WINEMSYNC=1` for every arm64 run (`WINEMSYNC=0` per game as the off switch; client and server must agree, §11); the arm64 Steam bridge wiring (copying `lsteamclient.dll`, and `build/bridge/arm64/`'s `steam.exe` and `tests/helper.exe`, into prefixes); installing DXMT into arm64 prefixes (`DXMT/aarch64-windows/*` into system32, with the DXMT overrides; sub-project 2 spec §6); whether releases may include lsteamclient (Steamworks SDK licence; not redistributed until decided); release packaging: notarization of the entitled bundle (unverified, §11), release source archives, refusing development inputs in release bundles, stripping builtin PE files (`lsteamclient.dll` is 57 MB); the presenter loaded without `DYLD_INSERT_LIBRARIES` (the hardened runtime ignores `DYLD_*`); shader pre-caching from the launcher in arm64 mode; `dxmt/check.sh`'s launcher checks (section 10, `MACNEUTRON_LOG`) in arm64 mode. Deferred from sub-projects 2 and 3: the sub-project 2 spec's scope and §6, the sub-project 3 spec's scope and §13, `docs/testing/acceptance-arm64-ship-base.md` "Found on the way". Parked here, with no owner in the sub-project 3 spec ("a separate small change"): the Rosetta app's missing LLVM and mingw-w64 notices |
+| 6 | **SMITE 2 parity and measurements** | 2, 3, 5 | Planned, but gates nothing (arm64-only release, `2026-10-04-macneutron-arm64-release-design.md` §13). Frame time vs the Rosetta stack (now the frozen reference); the cost of x64↔ARM64EC crossings; per-game CPU cost; a CPU-bound title; classify the x18 hits in Steam's arm64 `steamclient.dylib` (552, counted, not classified, in sub-project 3) |
+| 7 | **Restore Direct3D 9** (the arm64-only release drops it; optional) | — | Import dacevedo12/dxmt `v0.4-d3d9` (LGPL) into our fork; Wine's wined3d stays the fallback |
+| 8 | **Restore 32-bit support** (the arm64-only release drops 32-bit games) | 3, 7 | Standard WoW64: i386 in `--enable-archs` and FEX's `libwow64fex.dll`. The entitlement makes the low 4 GB usable, so Madeira's guest-window redesign isn't needed. FEX's WoW64 JIT still allocates RWX, so its dual-view port belongs here |
+| 9 | **Per-game cutover** (folded into row 5, `2026-10-04-macneutron-arm64-release-design.md` §13) | 6 (+7 for D3D9, +8 for 32-bit) | A game moves when its own measurements clear the bar in §1's decisions; the deletion of GPTK, DXVK, the AVX switch and the Rosetta preflight moved to row 5 |
 | 10 | **Media** (added 2026-10-04) | 3 | FFmpeg for `winedmo` and/or GStreamer for `winegstreamer`: today `winedmo` builds as a stub and `winegstreamer` isn't built, so game intro movies and cutscenes don't play |
 
 ## 3. Evidence (verified 2026-10-02 on an M5 Pro, macOS 27.0.1, unless marked)
@@ -473,7 +473,7 @@ Recorded in `docs/testing/acceptance-arm64-wine.md`:
 - **The dual-view port** touches FEX's emitter, linker and the SIGBUS backpatcher. Madeira's changes are iOS-shaped, so expect adaptation, not a cherry-pick. Wine's handling of section views (commit on demand, patch 11's EC marking) is new territory.
 - **Restricted entitlement:**
   - It ties working builds to the maintainer's team.
-  - Notarization of a bundle with it is unverified (sub-project 5).
+  - Notarization of a bundle with it is unverified (sub-project 5): trial R0 of `2026-10-04-macneutron-arm64-release-design.md` notarizes and launches it (§6.2).
   - Apple could revoke it; the unentitled design is the fallback, at months of cost.
 - **16K with patch 6** is untested. If 4K pages ever had to go, that is the first thing to try.
 - **Upstream churn:** Wine and FEX move weekly. We rebase on our own schedule; patch files keep each rebase reviewable.

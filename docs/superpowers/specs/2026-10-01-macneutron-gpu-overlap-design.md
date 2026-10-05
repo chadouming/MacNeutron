@@ -2,6 +2,7 @@
 
 - **Date:** 2026-10-01
 - **Status:** M1 and M2 done (`docs/testing/acceptance-dxmt-gpu-overlap.md`); amended 2026-10-01 after their measurements with A (cheap waits) and B (fewer command buffers), and two M3 details
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:**
   - `2026-09-28-macneutron-dxmt-fork-design.md`: roadmap §2 item 4 (performance); `make dxmt-check`, capture mode.
   - `2026-09-30-macneutron-pipeline-cache-design.md`: the first performance slice (shader pre-caching), and `DXMT_STATS`, the pass labels and the measurements below.

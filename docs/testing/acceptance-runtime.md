@@ -1,5 +1,7 @@
 # Runtime acceptance test (sub-project 1)
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Manual. Proves a Windows-only game installs and runs from native macOS Steam's Play button
 through `macneutron`, before the menu-bar app (sub-project 3) automates Steam Play mode.
 

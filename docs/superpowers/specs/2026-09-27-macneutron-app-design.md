@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-27
 - **Status:** Draft for review
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-09-27-macproton-runtime-design.md` (overall architecture, runtime, and the verified Steam behaviour in its §2).
 - **Scope:**
   - **In:** the MacNeutron rename; a SwiftUI menu-bar app with first-run setup; safe management of Steam Play mode; automatic protection of Mac games; per-game settings; cleanup of orphaned prefixes.

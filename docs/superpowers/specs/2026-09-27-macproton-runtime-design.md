@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-27
 - **Status:** Draft for review
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Scope of this spec:** overall v1 architecture (context for all sub-projects) and the full design of sub-project 1 (the `macproton` runtime). Sub-projects 2 (Steam API bridge) and 3 (Steam integration + menu-bar app) get their own specs.
 
 ## 1. Goal

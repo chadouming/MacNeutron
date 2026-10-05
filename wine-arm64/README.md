@@ -4,7 +4,7 @@
 with our patches, FEX, which runs x64 Windows code inside it, and our DXMT built for arm64 (Direct3D 11/12; D3D10's front end bundled, untested),
 staged as one signed, entitled `build/wine-arm64/wine.app`. Every Windows process runs natively on arm64 with 4K
 pages; only the game's x86-64 code is translated. It also carries FreeType and gnutls built from pinned source
-(Windows text, dialogs and TLS), msync (on wherever `WINEMSYNC=1` is set: `check.sh`, later the launcher), the Steam bridge (Proton's `lsteamclient`, built for arm64),
+(Windows text, dialogs and TLS), msync (on wherever `WINEMSYNC=1` is set: `check.sh`, and the launcher unless `MACNEUTRON_NO_MSYNC=1`), the Steam bridge (Proton's `lsteamclient`, built for arm64),
 strict x18 toggling, and every component's licence in `Contents/Resources/licenses`.
 
 Design, gates and risks: [`docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md`](../docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md)
@@ -14,8 +14,8 @@ Results on the maintainer's Mac: [`docs/testing/acceptance-arm64-wine.md`](../do
 [`docs/testing/acceptance-arm64-dxmt.md`](../docs/testing/acceptance-arm64-dxmt.md) and
 [`docs/testing/acceptance-arm64-ship-base.md`](../docs/testing/acceptance-arm64-ship-base.md).
 
-This is a development build for sub-projects 1 to 3. The shipped runtime is still the Rosetta one (`make dxmt`, the
-app).
+This is the runtime MacNeutron ships: the app embeds this `wine.app` (`Contents/Helpers/wine.app`) and the launcher runs
+every game on it. A build needs the Developer ID setup below; there is no ad-hoc signed `wine.app`.
 
 ## Requirements
 
@@ -52,22 +52,21 @@ make wine-arm64        # fetch Wine, FEX and DXMT at the pins, patch, build, sig
                        # a cold first build includes the arm64 LLVM (about 2 min here) and the deps (about 3 min)
 make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, D2-D4 and S1-S7 (about 16 min)
 
-make build bridge wine-arm64-tests dxmt dxmt-tests presenter dxmt-tests-arm64ec  # what check.sh needs besides the runtime
+make build bridge wine-arm64-tests dxmt-tests-arm64ec presenter  # what check.sh needs besides the runtime
 sh wine-arm64/check.sh g2-litmus   # named steps only (and the steps they need); see STEPS in check.sh
 ```
 
 `make wine-arm64-check` builds the launcher (`make build`), the Steam bridge (`make bridge`: `steam-bridge` needs
 `build/bridge/arm64/steam.exe` and `build/bridge/steamprobe.exe`), the test programs (`make wine-arm64-tests`) and what the
-DXMT steps run (`make dxmt dxmt-tests presenter dxmt-tests-arm64ec`: our Rosetta DXMT, the x64 and ARM64EC D3D test
-programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
-runs the launcher). Gate G4's Rosetta baseline runs MacNeutron's installed runtime-v4.7.3 (`MACNEUTRON_TOOL` names
-another tool folder). Each run starts from a clean prefix under `build/wine-arm64 check/`, and ends by checking that
-no process of either runtime is left. Every run sees `WINEMSYNC=1`, as on the Rosetta runtime: a client and its
+DXMT steps run (`make dxmt-tests-arm64ec presenter`: the x64 and ARM64EC D3D test programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
+runs the launcher). Gate G4's Rosetta baseline runs the frozen reference tool (`tools/freeze-rosetta-reference.sh` makes it from the
+last Rosetta-era tool folder; `MACNEUTRON_REFERENCE` names another). Each run starts from a clean prefix under `build/wine-arm64 check/`, and ends by checking that
+no process of either runtime is left. Every run sees `WINEMSYNC=1`, as the launcher does: a client and its
 wineserver must agree, so only the `msync` step, which starts its own servers, sets it otherwise.
 
 The full check needs, besides the build:
-- **GPTK imported** and MacNeutron's runtime-v4.7.3 installed with its tarball cached in `~/Library/Caches/MacNeutron/`
-  (G4's baseline and the DXMT lanes' D3DMetal reference);
+- **the frozen reference** (`tools/freeze-rosetta-reference.sh`, `MACNEUTRON_REFERENCE`), which holds the Rosetta
+  runtime and the imported GPTK (G4's baseline and the DXMT lanes' D3DMetal reference);
 - **Steam running and logged in**, and **SMITE 2** installed in Steam's default library (`steam-bridge`, and
   `dxmt-x64`'s FSR 3 check);
 - **Screen Recording** for the app that runs the check, and nothing in native full screen on the main display
@@ -98,8 +97,8 @@ The DXMT steps, after `steam-bridge`:
 needs System Settings › Privacy & Security › Screen Recording; without it `dxmt-present` fails and names that setting.
 With an app in native full screen on the main display, Wine's windows open on that display's hidden desktop Space and
 `dxmt-present` fails with `winshot: no on-screen window titled …`.
-The lanes compare our DXMT with D3DMetal on the installed Rosetta runtime, as `make dxmt-check` does, so they need
-what it needs: runtime-v4.7.3 installed with its tarball cached in `~/Library/Caches/MacNeutron/`, and GPTK imported.
+The lanes compare our DXMT with D3DMetal on the frozen reference's Rosetta runtime, as `make dxmt-check` does, so they
+need what it needs: the frozen reference (`MACNEUTRON_REFERENCE`).
 `dxmt-x64`'s FSR 3 swap chain check also needs SMITE 2 installed in Steam's default library (its `amd_fidelityfx_dx12.dll` is read
 from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`) don't
 run.
@@ -123,8 +122,8 @@ reading the routines.
 `wine.app` carries the Steam bridge on arm64 (ship-base spec §7): Proton's `lsteamclient` (pinned in `deps.pins`, with
 `patches/lsteamclient/`), built by Wine's own build as an ARM64X `lsteamclient.dll` and an arm64 `lsteamclient.so`
 that loads the arm64 slice of Mac Steam's universal `steamclient.dylib`. `make bridge` also builds an aarch64
-`steam.exe` and its test helper into `build/bridge/arm64/` (one `steam.exe` per runtime, as spec §7 has it). Copying
-the DLL into game prefixes is the launcher's, later (sub-project 5).
+`steam.exe` and its test helper into `build/bridge/arm64/` (one `steam.exe` per runtime, as spec §7 has it). The launcher
+copies the DLL into game prefixes.
 
 The `steam-bridge` step (before `dxmt`) runs `bridge/check.sh` in arm64 mode (no Steam needed), then
 `bridge/probe.sh` in arm64 mode: the x64 `steamprobe.exe` under FEX loads SMITE 2's `steam_api64.dll` in place, with
@@ -162,8 +161,7 @@ The patch files are applied to the pins in `build/wine-arm64-src/wine`, `fex` an
 4. `make wine-arm64-export` writes the commits back to `wine-arm64/patches/`.
 5. Commit the patches in this repo. A commit message says why the change exists, with the failure that made it necessary.
 
-DXMT works the same way. Its tree is `dxmt/pins`' `DXMT_COMMIT` (the Rosetta stack's pin; `build/dxmt-src/dxmt`, that
-stack's clone, is never touched) plus `patches/dxmt/`, built for ARM64X with DXMT's own `build-arm64ec.txt` against
+DXMT works the same way. Its tree is `dxmt/pins`' `DXMT_COMMIT` (the frozen reference's DXMT is not rebuilt from it) plus `patches/dxmt/`, built for ARM64X with DXMT's own `build-arm64ec.txt` against
 this Wine's build tree, with an arm64 LLVM 15 built once into `build/wine-arm64-src/llvm-arm64` by `dxmt/llvm.sh`.
 `make wine-arm64` also builds the arm64 `dxil-probe` and `dxil-translate` into `build/wine-arm64/`. A commit in
 `build/wine-arm64-src/dxmt` makes the build a development build, and DXMT's version token
@@ -193,6 +191,8 @@ re-clone; that is why they wait for the rebase.
 - Re-check the toggle layout that patch 0019 checks (`brk #1` at `os_set_custom_x18_abi_enabled` + 0x58 and + 0x78)
   on the macOS in use. When it doesn't match, the `ERR` line comes from `signal_init_process`, so it prints from every
   Wine process; once per run would be enough.
+- Re-check DXMT patch 0002 (`winemetal.so` loads the MetalFX presenter, `libmacneutron-present.dylib`, in a constructor)
+  against DXMT's `winemetal` sources.
 - Keep patch 0014 even if it looks unneeded: a missing dylib then falls back silently instead of crashing
   (`docs/research/2026-10-04-ship-base/brief.md`).
 
@@ -221,8 +221,8 @@ re-clone; that is why they wait for the rebase.
 - **lsteamclient** is Steamworks-SDK-derived: Valve's Steamworks SDK licence (its `LICENSE`), except `cxx.h`, which is
   LGPL-2.1+ (CodeWeavers, from Wine); the bundle carries both in `licenses/lsteamclient/` (`LICENSE`, `NOTE`). Its
   patches are dappermint/winecx's three Mac fixes by millia ampora (`8d188ec0db`, `dada36ebab`, `6cfbd169a5`), each
-  naming its source commit, author kept. Whether a release bundle may include it is decided in sub-project 5; until
-  then MacNeutron doesn't redistribute it (local builds only). This is not legal advice.
+  naming its source commit, author kept. It ships in the release bundle by the maintainer's decision of 2026-10-04, under Valve's
+  Steamworks SDK licence. This is not legal advice.
 - **FEX** is MIT, and so are our patches to it.
   - 0001: the macOS unixlib helpers, from dappermint's FEX fork, commit `4efc3abc8a`. MIT: the file it patches,
     `Source/Windows/UnixLib/FEXUnixLib.cpp`, keeps its `SPDX-License-Identifier: MIT` header, and the fork carries

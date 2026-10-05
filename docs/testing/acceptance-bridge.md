@@ -1,5 +1,7 @@
 # Steam bridge acceptance
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Spec: `docs/superpowers/specs/2026-09-28-macneutron-steam-bridge-design.md`. Personal data (SteamIDs, account IDs,
 persona names) is never recorded here: "printed (redacted)".
 

@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-28
 - **Status:** Approved 2026-09-28; amended the same day (see "Amendment")
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-09-27-macproton-runtime-design.md` (architecture, runtime, launcher) and `2026-09-27-macneutron-app-design.md` (app, Steam Play mode).
 - **Scope:**
   - **In:** our own `steam.exe`; wiring the runtime's Steam client bridge into every prefix; launcher integration; getting `steam.exe` from the app into the tool folder; a developer probe; acceptance.

@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-28
 - **Status:** Draft for review
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-09-27-macproton-runtime-design.md` (graphics backends, tool folder), `2026-09-28-macneutron-steam-bridge-design.md` (install at app start).
 - **Scope:**
   - **In:** the roadmap to a Metal-native "DXVK for Metal", and the full design of sub-project 1:

@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-28
 - **Status:** Draft for review
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-09-27-macproton-runtime-design.md` (launcher, tool folder), `2026-09-27-macneutron-app-design.md` (per-game settings, Games window), `2026-09-28-macneutron-steam-bridge-design.md` (tool-file install at app start).
 - **Replaces:** the temporal DLSS→MetalFX path in `2026-09-28-macneutron-metalfx-design.md`, which stopped at its feasibility gate.
 - **Scope:**

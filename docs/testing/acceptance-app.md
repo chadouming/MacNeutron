@@ -1,5 +1,7 @@
 # App acceptance test (sub-project 3a)
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Manual, on a Mac with at least one installed Mac-only game (Timberborn here) and GPTK available.
 Record results at the bottom.
 

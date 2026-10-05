@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-30
 - **Status:** Draft for review
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:**
   - `2026-09-28-macneutron-dxmt-fork-design.md`: roadmap §2 item 4 (performance); the fork, `make dxmt`, `make dxmt-check`, capture mode.
   - `2026-09-29-macneutron-dxil-translator-design.md`: DXIL shaders through airconv (`SM50Initialize`/`SM50Compile`).

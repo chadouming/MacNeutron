@@ -1,5 +1,7 @@
 # GPU efficiency acceptance test (DXMT fork, sub-project 4, third slice)
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Spec: `docs/superpowers/specs/2026-10-02-macneutron-gpu-efficiency-design.md`. Manual, once per milestone, on a Mac with
 SMITE 2 installed. Record results at the bottom.
 

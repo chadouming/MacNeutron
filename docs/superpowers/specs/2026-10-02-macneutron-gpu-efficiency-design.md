@@ -2,6 +2,7 @@
 
 - **Date:** 2026-10-02
 - **Status:** approved order (user, 2026-10-02): E1 → E2 → E3 → E4 → E5, then E6 → E7 → E8 → E9
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-10-01-macneutron-gpu-overlap-design.md` (M1–M5 done: the GPU idles 0.3 ms per frame in SMITE 2, so frame time is GPU work), `2026-09-28-macneutron-dxmt-fork-design.md` (`make dxmt-check`, capture mode).
 - **Scope:** the GPU work our D3D12 path asks for, against what D3DMetal asks for, with no added input latency: no frame generation, no deeper frame queues.
 - **Out:** the translation-layer redesigns (research 2026-10-02: no frame-time gain on GPU-bound games; Rosetta stays per the user's assumption), D3D11, game settings.
