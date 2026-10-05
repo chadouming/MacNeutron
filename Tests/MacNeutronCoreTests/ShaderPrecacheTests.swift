@@ -159,17 +159,22 @@ private let game = ["waitforexitandrun", "/g/Game.exe"]
     let precache = ShaderPrecache(context: try CompatContext(environment: steamEnvironment(dataPath: data, appID: "42")),
                                   layout: layout, osBuild: "26A1")
     try write("rec", to: precache.folder.appending(path: "Game.exe.pipelines"))
-    // A replay of 20 pipelines that prints its progress as it goes, as dxmt-replay.exe does.
+    // A replay of 20 pipelines that appends its progress as it goes, as dxmt-replay.exe does. After each of the first
+    // three lines it waits (up to 5 s) for that quarter's message, so a late poll can't skip one.
+    let messages = Messages()
     let runner = FakeRunner { call in
-        guard let output = call.output else { return 0 }
-        for text in ["replay progress 5/20\r\n", "replay progress 10/20\r\n", "replay progress 15/20\r\n",
-                     "replay progress 20/20\r\nreplay: 20 pipelines (20 graphics, 0 compute), 20 created, 0 failed, 0 bad records, 9 ms\r\n"] {
-            try? text.write(to: output, atomically: true, encoding: .utf8)
-            Thread.sleep(forTimeInterval: 0.25)
+        guard let output = call.output,
+              FileManager.default.createFile(atPath: output.path(percentEncoded: false), contents: nil),
+              let handle = try? FileHandle(forWritingTo: output) else { return 1 }
+        defer { try? handle.close() }
+        for (i, text) in ["replay progress 5/20\r\n", "replay progress 10/20\r\n", "replay progress 15/20\r\n",
+                          "replay progress 20/20\r\nreplay: 20 pipelines (20 graphics, 0 compute), 20 created, 0 failed, 0 bad records, 9 ms\r\n"].enumerated() {
+            try? handle.write(contentsOf: Data(text.utf8))
+            let deadline = Date(timeIntervalSinceNow: 5)
+            while i < 3, messages.all.count <= i, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         }
         return 0
     }
-    let messages = Messages()
     let lines = precache.replay(layout: layout, runner: runner, environment: [:], progress: { messages.add($0) },
                                 pollInterval: 0.05)
     #expect(messages.all == ["Preparing shaders: 25% (5 of 20)", "Preparing shaders: 50% (10 of 20)",
