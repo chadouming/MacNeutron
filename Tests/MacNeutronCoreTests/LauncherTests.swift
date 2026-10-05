@@ -311,6 +311,24 @@ private func i386Exe(named name: String) throws -> String {
     #expect(game?["SteamUser"] == "fakelogin" && game?["SteamAppUser"] == "fakeapplogin")  // only the header hides them
 }
 
+@Test func gameLogsHideSecretLookingVariables() throws {
+    // Steam started from a terminal passes that shell's environment on, API tokens included. (Fake values.)
+    let f = try makeFixture()
+    var env = f.env
+    env["MACNEUTRON_LOG"] = "1"
+    let secrets = ["GITHUB_TOKEN": "fake-gh", "SOME_API_KEY": "fake-api", "AWS_SECRET_ACCESS_KEY": "fake-aws",
+                   "DB_PASSWORD": "fake-pw", "SSH_AUTH_SOCK": "/tmp/fake-sock", "Session_Token": "fake-lower"]
+    env.merge(secrets) { $1 }
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    let log = try String(contentsOf: f.launcher.log.gameLog(appID: "42"), encoding: .utf8)
+    for (key, value) in secrets {
+        #expect(log.contains("\(key)=<redacted>\n"), "\(key)")
+        #expect(!log.contains(value), "\(key)")
+    }
+    #expect(log.contains("MACNEUTRON_LOG=1\n"))  // ordinary variables stay readable
+    #expect(f.runner.calls.last?.environment["GITHUB_TOKEN"] == "fake-gh")  // only the header hides them
+}
+
 @Test func presenterIsAskedForByDefault() throws {
     let f = try makeFixture(bridge: true)
     _ = f.launcher.launch(["waitforexitandrun", "/g/Game.exe"], environment: f.env)

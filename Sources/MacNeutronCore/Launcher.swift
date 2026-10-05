@@ -189,10 +189,19 @@ public struct Launcher: Sendable {
     /// account's login name as SteamUser and SteamAppUser.
     static let redactedKeys: Set<String> = ["MACNEUTRON_STEAM_ACCOUNT", "SteamUser", "SteamAppUser"]
 
+    /// The rest of the environment comes from whatever started Steam (a terminal's shell can carry API tokens):
+    /// any name that reads like a secret is hidden too.
+    static func isRedacted(_ key: String) -> Bool {
+        let name = key.uppercased()
+        return redactedKeys.contains(key)
+            || ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "APIKEY", "API_KEY", "AUTH"].contains { name.contains($0) }
+            || name.hasSuffix("_KEY")
+    }
+
     private func writeHeader(to gameLog: URL, request: LaunchRequest, environment: [String: String]) {
         var text = "=== \(Date().formatted(.iso8601)) \(request.verb.rawValue) \(request.target) \(request.arguments)\n"
         for key in environment.keys.sorted() {
-            text += "\(key)=\(Self.redactedKeys.contains(key) ? "<redacted>" : environment[key]!)\n"
+            text += "\(key)=\(Self.isRedacted(key) ? "<redacted>" : environment[key]!)\n"
         }
         append(text, to: gameLog)
     }
