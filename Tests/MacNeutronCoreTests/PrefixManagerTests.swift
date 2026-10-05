@@ -6,7 +6,7 @@ private func makeManager(_ runner: FakeRunner) throws -> (PrefixManager, [String
     let layout = try makeToolLayout()
     let env = steamEnvironment(dataPath: try makeTempDir().appending(path: "compatdata/42"))
     let context = try CompatContext(environment: env)
-    let wineEnv = LaunchEnvironment.build(base: env, context: context, backend: .dxmt, layout: layout, logging: false)
+    let wineEnv = LaunchEnvironment.build(base: env, context: context, backend: .dxmt, logging: false)
     return (PrefixManager(context: context, layout: layout, runtimeVersion: "runtime-test", runner: runner), wineEnv)
 }
 
@@ -65,15 +65,12 @@ private let disableCrashDialog = ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, 
     let syswow64 = manager.context.prefix.appending(path: "drive_c/windows/syswow64/d3d11.dll")
     #expect(try String(contentsOf: system32, encoding: .utf8) == "dxmt x64 d3d11.dll")
     #expect(try String(contentsOf: syswow64, encoding: .utf8) == "dxmt x32 d3d11.dll")
-    try manager.prepare(backend: .dxvk, environment: env)
-    #expect(try String(contentsOf: system32, encoding: .utf8) == "dxvk x64 d3d11.dll")
 }
 
 @Test func missingRuntimeDLLIsAnError() throws {
-    // Silently skipping it once left DXMT's dxgi in place under DXVK.
     let (manager, env) = try makeManager(winebootCreatingPrefix())
-    try FileManager.default.removeItem(at: manager.layout.dxvk.appending(path: "x64/d3d11.dll"))
-    #expect(throws: PrefixError.self) { try manager.prepare(backend: .dxvk, environment: env) }
+    try FileManager.default.removeItem(at: manager.layout.dxmt.appending(path: "x64/d3d11.dll"))
+    #expect(throws: PrefixError.self) { try manager.prepare(backend: .dxmt, environment: env) }
 }
 
 @Test func concurrentLaunchesRunWinebootOnce() async throws {

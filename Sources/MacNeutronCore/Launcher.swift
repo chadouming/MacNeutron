@@ -55,11 +55,9 @@ public struct Launcher: Sendable {
             return fail(error.description, argv: argv, notify: true)
         }
 
-        let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"],
-                                                     gptkImported: layout.gptkImported)
+        let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"])
         let logging = environment["MACNEUTRON_LOG"] == "1"
-        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, layout: layout,
-                                          logging: logging)
+        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
         let steamBridge = usesSteamBridge(request.verb, env)
         if steamBridge { addSteamClient(to: &env) }
         if request.verb == .run || request.verb == .waitforexitandrun { addPresenter(to: &env) }
@@ -85,7 +83,7 @@ public struct Launcher: Sendable {
                 if !steamBridge { try prefix.removeSteamBridge() }
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
                 // Shader pre-caching: after a DXMT or macOS update, rebuild the recorded pipelines before the game.
-                let precache = ShaderPrecache.enabled(backend: backend, layout: layout, environment: env)
+                let precache = ShaderPrecache.enabled(backend: backend, environment: env)
                     ? ShaderPrecache(context: context, layout: layout) : nil
                 if let precache, precache.needsReplay {
                     notifier.post(title: "MacNeutron", message: "Preparing shaders for this game (DXMT or macOS changed)")

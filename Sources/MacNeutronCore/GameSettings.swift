@@ -4,16 +4,13 @@ import Foundation
 public struct GameSettings: Codable, Equatable, Sendable {
     public var graphics: String?
     public var log: Bool?
-    public var avx: Bool?
     public var msync: Bool?
     public var runAs: RunAs?
     public var metalFX: Bool?
 
-    public init(graphics: String? = nil, log: Bool? = nil, avx: Bool? = nil, msync: Bool? = nil, runAs: RunAs? = nil,
-                metalFX: Bool? = nil) {
+    public init(graphics: String? = nil, log: Bool? = nil, msync: Bool? = nil, runAs: RunAs? = nil, metalFX: Bool? = nil) {
         self.graphics = graphics
         self.log = log
-        self.avx = avx
         self.msync = msync
         self.runAs = runAs
         self.metalFX = metalFX
@@ -24,7 +21,6 @@ public struct GameSettings: Codable, Equatable, Sendable {
         var env: [String: String] = [:]
         if let graphics { env["MACNEUTRON_GRAPHICS"] = graphics }
         if log == true { env["MACNEUTRON_LOG"] = "1" }
-        if avx == false { env["MACNEUTRON_NO_AVX"] = "1" }
         if msync == false { env["MACNEUTRON_NO_MSYNC"] = "1" }
         if metalFX == false { env["MACNEUTRON_NO_METALFX"] = "1" }
         return env

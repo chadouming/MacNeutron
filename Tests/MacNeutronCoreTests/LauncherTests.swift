@@ -143,7 +143,7 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
 
 @Test func gameSettingsApplyUnderneathLaunchOptions() throws {
     let f = try makeFixture()
-    try f.launcher.settings.save(GameSettings(graphics: "dxvk", log: true, msync: false), for: "42")
+    try f.launcher.settings.save(GameSettings(graphics: "wined3d", log: true, msync: false), for: "42")
     var env = f.env
     env["MACNEUTRON_GRAPHICS"] = "dxmt"  // typed into Steam's launch options: wins
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
@@ -151,6 +151,16 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(wine["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)  // dxmt
     #expect(wine["WINEDEBUG"] == "+err,+warn,+loaddll,+steamclient")
     #expect(wine["WINEMSYNC"] == nil)
+}
+
+@Test func oldGraphicsValueRunsDXMTWithANote() throws {
+    let f = try makeFixture()
+    try f.launcher.settings.save(GameSettings(graphics: "dxvk"), for: "42")
+    #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
+    #expect(f.runner.calls.last?.environment["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)
+    let line = try #require(f.launcherLog.split(separator: "\n").last { $0.contains(" verb=run ") })
+    #expect(line.contains("backend=dxmt"))
+    #expect(line.contains("'dxvk' was removed in 0.1, using dxmt"))
 }
 
 @Test func unreadableGameSettingsAreIgnored() throws {
