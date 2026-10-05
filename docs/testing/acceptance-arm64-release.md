@@ -221,7 +221,7 @@ one included: both stand-ins set `VER_`), `make smoke` 15/15, `dxmt/check.sh` (x
 ## msync shm pages (Task M1)
 
 2026-10-05. A benchmark creating 1,500 threads after a D3D12 device (`allocbench` x64, through the launcher, `env -i`,
-msync on, 60 s watchdog per run) hung in 7 of 42 runs on the dev `wine.app` with patches through 0022. Each hang
+msync on, 60 s watchdog per run) hung in 7 of 41 runs on the dev `wine.app` with patches through 0022. Each hang
 printed `msync: error: mach_vm_map failed with 3: (os/kern) no space available`, then `wineserver crashed`: the
 server's `get_shm()` mapped a new shm page with `VM_FLAGS_ANYWHERE` from an uninitialized address (the kernel searches
 from it), and its memset then wrote through that address. 0.1.0 has the same code. Wine patch 0023 starts the search
