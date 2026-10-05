@@ -205,8 +205,8 @@ the ARM64X module) that report the device unsupported; the launcher loads them (
 `MACNEUTRON_XESS=1` (spec §14, amending §§3.6-3.7).
 
 SMITE 2, each run in a fresh scratch compat folder (no settings carried), Steam bridge on (`Result=Success`), `env -i`,
-tool folder from `macneutron install` with the new `wine.app`; lobby FPS over the 60 s window from 20 s after the
-lobby's `LoadMap` (`fps4.py`):
+tool folder from `macneutron install` with the new `wine.app`; lobby FPS from 20 s after the lobby's
+`LoadMap` (`fps4.py`; its windows, bounded by the log's lines, were 51.4 s and 53.8 s):
 
 | Run | Hemingway.log | Upscaler | Lobby FPS |
 | --- | --- | --- | --- |
@@ -217,3 +217,17 @@ lobby's `LoadMap` (`fps4.py`):
 `make test` (236 passed), `wine-arm64: up to date` after the rebuild, `bundle.sh`'s assertions (the version-resource
 one included: both stand-ins set `VER_`), `make smoke` 15/15, `dxmt/check.sh` (x64 lane) 200 ok 0 FAIL,
 `make bridge-check` 15 ok.
+
+## msync shm pages (Task M1)
+
+2026-10-05. A benchmark creating 1,500 threads after a D3D12 device (`allocbench` x64, through the launcher, `env -i`,
+msync on, 60 s watchdog per run) hung in 7 of 42 runs on the dev `wine.app` with patches through 0022. Each hang
+printed `msync: error: mach_vm_map failed with 3: (os/kern) no space available`, then `wineserver crashed`: the
+server's `get_shm()` mapped a new shm page with `VM_FLAGS_ANYWHERE` from an uninitialized address (the kernel searches
+from it), and its memset then wrote through that address. 0.1.0 has the same code. Wine patch 0023 starts the search
+at 0 and ends the server with a message naming the page if a mapping still fails; on the client side, a failed or empty
+reply is never mapped or released, and a page that can't be mapped ends the process instead of handing out NULL plus
+an offset. With it, msync on, none of 82 runs hung or printed `mach_vm_map failed` (60 on the development build of
+the patch, 20 on the build of the commit that adds it, plus each prefix's first run). Also run on that build:
+`wine-arm64: up to date`, `check.sh boot fex g1-threads g1-seh msync x18 dxmt` all PASS, `make smoke` 15/15,
+`dxmt/check.sh` (x64 lane) 200 ok 0 FAIL, `make bridge-check` 15 ok.
