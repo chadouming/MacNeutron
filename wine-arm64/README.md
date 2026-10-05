@@ -28,7 +28,9 @@ every game on it. A build needs the Developer ID setup below; there is no ad-hoc
   `/opt/homebrew`, `/usr/local` or `/opt/local`, or if Wine's configure found a dlopened library other than FreeType,
   gnutls and libodbc.
 - Xcode's Metal Toolchain, for DXMT's shaders (`xcodebuild -downloadComponent MetalToolchain`).
-- Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once.
+- Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once (again when
+  `dxmt/pins` names another one). Objects already built keep the old compiler's output: after a toolchain pin bump,
+  remove `build/wine-arm64-src` (or its `wine-build`, `fex-ec`, `fex-unixlib` and `dxmt-build` folders) for a clean build.
 - The first build downloads the four tarballs of `deps.pins` (15 MB, checked by SHA-256) and a sparse checkout of
   Proton's `lsteamclient/` folder from GitHub (18 MB of source, about 10 s here); later builds reuse them.
 - **A Developer ID with the "Cross-architecture Compatibility Framework" capability** (`com.apple.developer.cross-architecture-support`)

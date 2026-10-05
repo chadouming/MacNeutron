@@ -263,8 +263,9 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
     try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
     for file in [layout.launcherBinary, layout.steamHelper] {
-        #expect(getxattr(file.path(percentEncoded: false), "com.apple.quarantine", nil, 0, 0, 0) == -1, "\(file.lastPathComponent)")
-        #expect(errno == ENOATTR)
+        let rc = getxattr(file.path(percentEncoded: false), "com.apple.quarantine", nil, 0, 0, 0)
+        let err = errno  // read before anything else can change it
+        #expect(rc == -1 && err == ENOATTR, "\(file.lastPathComponent)")
     }
     #expect(getxattr(launcher.path(percentEncoded: false), "com.apple.quarantine", nil, 0, 0, 0) > 0)  // the source keeps it
 }

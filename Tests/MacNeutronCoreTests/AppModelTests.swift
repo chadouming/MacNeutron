@@ -274,3 +274,13 @@ private func makeModel(steamRunning: Bool = false,
     await model.restartSteam()
     #expect(model.status == .on)
 }
+
+@MainActor @Test func replacingThePassthroughScriptWhileSteamRunsAsksForARestart() async throws {
+    // The Mac-game tool's old entry point is `passthrough.sh`; installNativeTool removes it after the install.
+    let (model, mode, _) = try await makeModel(steamRunning: true, wineAppSource: try makeToolLayout().wineApp,
+                                               installer: ScriptedInstaller(.unchanged, .installed))
+    #expect(model.status == .on)
+    try write("#!/bin/sh\n", to: mode.tools.appending(path: "\(SteamPlayMode.nativeToolName)/passthrough.sh"), executable: true)
+    await model.installRuntime()
+    #expect(model.status == .restartNeeded(1))
+}
