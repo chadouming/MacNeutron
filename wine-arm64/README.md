@@ -222,6 +222,8 @@ re-clone; that is why they wait for the rebase.
     is ours and stays local: it isn't proposed upstream.
   - 0022 (`dlls/libxess` and `dlls/libxess_dx11`, stand-ins for Intel's XeSS libraries: the same exports, every
     device reported unsupported) is ours and stays local. The launcher loads them unless `MACNEUTRON_XESS=1`.
+  - 0023 (msync's shm pages mapped from a zero hint; a failed mapping ends the wineserver or the process with a
+    message instead of being used) is ours and stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
