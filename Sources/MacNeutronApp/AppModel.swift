@@ -26,7 +26,7 @@ struct LoginItem: Sendable {
 /// leftover prefixes can take a while; checking Steam spawns a process).
 struct Snapshot: Sendable {
     var runtimeVersion: String?
-    var gptkVersion: String?
+    var runtimeIdentity: String?
     var apps: [AppInfo]
     var appInfoError: String?
     var installed: Set<UInt32>
@@ -45,7 +45,7 @@ final class AppModel {
     let loginItem: LoginItem
 
     private(set) var runtimeVersion: String?
-    private(set) var gptkVersion: String?
+    private(set) var runtimeIdentity: String?
     private(set) var status: SteamPlayStatus = .off
     private(set) var games: [GameRow] = []
     private(set) var orphans: [OrphanPrefix] = []
@@ -72,7 +72,6 @@ final class AppModel {
         if mode.isWanted { try? mode.installNativeTool() }
         // Read now, not in the first refresh: the scene decides at launch whether to open the setup window.
         runtimeVersion = layout.runtimeVersion
-        gptkVersion = layout.gptkVersion
         Task { await refresh() }
         startWatchingSteam()
     }
@@ -102,7 +101,7 @@ final class AppModel {
     func apply(_ snapshot: Snapshot, generation mine: Int) {
         guard mine == generation else { return }
         runtimeVersion = snapshot.runtimeVersion
-        gptkVersion = snapshot.gptkVersion
+        runtimeIdentity = snapshot.runtimeIdentity
         apps = snapshot.apps
         appInfoError = snapshot.appInfoError
         games = snapshot.apps
@@ -123,7 +122,7 @@ final class AppModel {
         var appInfoError: String?
         do { apps = try AppInfoReader.read(steam.appInfo) } catch { appInfoError = "\(error)" }
         let plan = MappingPlanner.plan(apps: apps, runAs: store.runAsOverrides())
-        return Snapshot(runtimeVersion: layout.runtimeVersion, gptkVersion: layout.gptkVersion, apps: apps,
+        return Snapshot(runtimeVersion: layout.runtimeVersion, runtimeIdentity: layout.identity, apps: apps,
                         appInfoError: appInfoError, installed: steam.installedAppIDs(), settings: store.all(),
                         orphans: OrphanPrefixes.find(in: steam), status: mode.status(plan: plan))
     }

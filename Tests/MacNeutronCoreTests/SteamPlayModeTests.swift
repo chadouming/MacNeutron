@@ -145,20 +145,6 @@ func verifiesCompatLogSessions(log: String, problem: String?) {
     #expect(try String(contentsOf: out, encoding: .utf8) == "a b\n")
 }
 
-@Test(.enabled(if: FileManager.default.fileExists(atPath: Preflight.rosettaRuntime.path(percentEncoded: false))))
-func passthroughPrefersTheAppleSiliconBuild() async throws {
-    // Steam starts tools preferring x86_64; without an override a universal game would run under Rosetta.
-    let (mode, _) = try makeMode()
-    try await mode.enable(plan: samplePlan)
-    let out = try makeTempDir().appending(path: "arch.txt")
-    let script = mode.link("macneutron-native").appending(path: "passthrough.sh").path(percentEncoded: false)
-    let status = try SystemProcessRunner().run(URL(filePath: "/usr/bin/arch"),
-                                               ["-x86_64", "/bin/sh", script, "waitforexitandrun", "/usr/bin/uname", "-m"],
-                                               environment: [:], output: out)
-    #expect(status == 0)
-    #expect(try String(contentsOf: out, encoding: .utf8) == "arm64\n")
-}
-
 @Test func syncRefusesToDropMacGameProtection() async throws {
     // An unreadable app list must never turn into "no Mac games" while Steam stays in Linux mode.
     let (mode, fake) = try makeMode()

@@ -82,7 +82,7 @@ private func makeModel(steamRunning: Bool = false,
 
 @MainActor @Test func setupWindowStaysClosedOnceSetUp() async throws {
     let (model, mode, _) = try await makeModel()
-    try write("runtime-v4.7.3", to: model.layout.runtimeVersionFile)
+    #expect(model.layout.runtimeVersion == "test")  // the fake wine.app's CFBundleShortVersionString
     let relaunched = AppModel(steam: mode.steam, layout: model.layout, mode: mode, store: model.store,
                               loginItem: model.loginItem)
     #expect(relaunched.setupComplete)  // the scene reads it before any refresh finishes

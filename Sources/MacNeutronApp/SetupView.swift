@@ -13,7 +13,7 @@ struct SetupView: View {
             Label("Set up MacNeutron", systemImage: "atom").font(.title2)
 
             Step(done: model.runtimeVersion != nil, title: "Runtime",
-                 detail: model.runtimeVersion.map { "Wine \($0) installed" } ?? "Not installed.") { EmptyView() }
+                 detail: model.runtimeVersion.map { "Runtime \($0) installed" } ?? "Not installed.") { EmptyView() }
 
             Step(done: model.mode.isWanted, title: "Turn on Steam Play mode",
                  detail: "Steam restarts. Your Mac games stay native and protected.") {

@@ -31,19 +31,4 @@ public enum GraphicsBackend: String, Sendable, CaseIterable {
         case .wined3d: "dxgi,d3d9,d3d10,d3d10core,d3d11,d3d12=b"
         }
     }
-
-    /// Native DLLs copied into the prefix: runtime file → path inside the prefix. wined3d needs none.
-    // ponytail: still the Rosetta-era layout; Task 6c moves DXMT deployment into PrefixManager on wine.app.
-    public func prefixDLLs(layout: ToolLayout) -> [(source: URL, destination: String)] {
-        guard self == .dxmt else { return [] }
-        let dlls = ["d3d11.dll", "d3d10core.dll", "dxgi.dll"].flatMap { name in
-            [
-                (layout.dxmt.appending(path: "x64/\(name)"), "drive_c/windows/system32/\(name)"),
-                (layout.dxmt.appending(path: "x32/\(name)"), "drive_c/windows/syswow64/\(name)"),
-            ]
-        }
-        // Our DXMT's Direct3D 12 is 64-bit only.
-        guard layout.dxmtHasD3D12 else { return dlls }
-        return dlls + [(layout.dxmtD3D12, "drive_c/windows/system32/d3d12.dll")]
-    }
 }

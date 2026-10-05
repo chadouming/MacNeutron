@@ -72,23 +72,26 @@ func winebootCreatingPrefix(status: Int32 = 0, delay: TimeInterval = 0) -> FakeR
     }
 }
 
-/// A tool folder with a fake runtime: executable wine/wineserver, DXMT and DXVK DLLs, runtime-version.
+/// A tool folder with a fake, unsigned `wine.app`: executable wine/wineserver, DXMT's DLLs, version and replayer,
+/// both halves of lsteamclient, and `CFBundleShortVersionString` `test`. Tests that launch inject the identity.
 func makeToolLayout() throws -> ToolLayout {
     let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron", directoryHint: .isDirectory))
     try write("#!/bin/sh\n", to: layout.wine, executable: true)
     try write("#!/bin/sh\n", to: layout.wineserver, executable: true)
-    for arch in ["x64", "x32"] {
-        for dll in ["d3d11.dll", "d3d10core.dll", "dxgi.dll"] {
-            try write("dxmt \(arch) \(dll)", to: layout.dxmt.appending(path: "\(arch)/\(dll)"))
-        }
-        // The pinned runtime's DXVK ships only these two; it relies on Wine's own dxgi.
-        for dll in ["d3d10core.dll", "d3d11.dll"] {
-            try write("dxvk \(arch) \(dll)", to: layout.dxvk.appending(path: "\(arch)/\(dll)"))
-        }
-    }
-    try write("runtime-test", to: layout.runtimeVersionFile)
+    let plist = ["CFBundleExecutable": "wine", "CFBundleShortVersionString": "test"]
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        .write(to: layout.wineApp.appending(path: "Contents/Info.plist"))
+    for dll in ToolLayout.dxmtDLLs { try write("dxmt \(dll)", to: layout.dxmt.appending(path: dll)) }
+    try write("dxmt replay", to: layout.dxmtReplay)
+    try write("dxmt-test\n", to: layout.dxmtVersionFile)
+    try write("lsteamclient aarch64", to: layout.lsteamclient)
+    try write("lsteamclient.so", to: layout.lsteamclientUnix)
     return layout
 }
+
+/// What launcher, prefix and precache tests use: no codesign, a fixed identity.
+let testIdentity = "0123456789abcdef0123456789abcdef01234567"
+let testPreflight = Preflight(systemSupported: { true }, identity: { _ in testIdentity })
 
 func steamEnvironment(dataPath: URL, appID: String = "3419430") -> [String: String] {
     ["STEAM_COMPAT_DATA_PATH": dataPath.path(percentEncoded: false), "SteamAppId": appID, "PATH": "/usr/bin:/bin"]
@@ -113,17 +116,19 @@ func loginUser(account: Int, timestamp: Int, mostRecent: Bool? = nil) -> String 
 
 func loginUsersFile(_ users: String...) -> String { "\"users\"\n{\n" + users.joined() + "}\n" }
 
-/// The files `ToolLayout.steamBridgeInstalled` looks for; `i386: false` leaves out the 32-bit client.
-func installFakeSteamBridge(in layout: ToolLayout, i386: Bool = true) throws {
+/// `steam.exe` in the tool folder: with the fake wine.app's lsteamclient, the bridge counts as installed.
+func installFakeSteamBridge(in layout: ToolLayout) throws {
     try write("steam.exe", to: layout.steamHelper)
-    try write("lsteamclient.so", to: layout.lsteamclientUnix)
-    try write("lsteamclient x86_64", to: layout.lsteamclient64)
-    if i386 { try write("lsteamclient i386", to: layout.lsteamclient32) }
 }
 
-/// A stand-in for the MetalFX presenter library in the tool folder.
-func installFakePresenter(in layout: ToolLayout) throws {
-    try write("presenter", to: layout.presenterLibrary)
+/// A minimal PE: 64-byte DOS header with `e_lfanew` 0x80, padding, `PE\0\0`, then the COFF machine.
+func peBytes(machine: UInt16) -> Data {
+    var bytes = [UInt8](repeating: 0, count: 0x86)
+    bytes[0] = 0x4D; bytes[1] = 0x5A
+    bytes[0x3C] = 0x80
+    bytes[0x80] = 0x50; bytes[0x81] = 0x45
+    bytes[0x84] = UInt8(machine & 0xFF); bytes[0x85] = UInt8(machine >> 8)
+    return Data(bytes)
 }
 
 /// An ad-hoc-signed `dir/wine.app` whose `Contents/MacOS/wine` is a copy of `loader` (never run). Sign it last:

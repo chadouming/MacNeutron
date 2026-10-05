@@ -2,16 +2,6 @@ import Foundation
 import Testing
 @testable import MacNeutronCore
 
-/// A minimal PE: 64-byte DOS header with `e_lfanew` 0x80, padding, `PE\0\0`, then the COFF machine.
-private func peBytes(machine: UInt16) -> Data {
-    var bytes = [UInt8](repeating: 0, count: 0x86)
-    bytes[0] = 0x4D; bytes[1] = 0x5A
-    bytes[0x3C] = 0x80
-    bytes[0x80] = 0x50; bytes[0x81] = 0x45
-    bytes[0x84] = UInt8(machine & 0xFF); bytes[0x85] = UInt8(machine >> 8)
-    return Data(bytes)
-}
-
 @Test func amd64AndArm64AndI386MachinesAreRead() throws {
     let dir = try makeTempDir()
     for machine in [PEImage.amd64, PEImage.arm64, PEImage.i386, 0x01c4] {
