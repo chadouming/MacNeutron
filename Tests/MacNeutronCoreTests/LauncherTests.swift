@@ -292,15 +292,23 @@ private func i386Exe(named name: String) throws -> String {
 }
 
 @Test func gameLogsHideTheSteamAccount() throws {
-    // People post game logs in bug reports; the account ID leads straight to a Steam profile.
+    // People post game logs in bug reports; the account ID leads straight to a Steam profile, and Steam passes the
+    // account's login name as SteamUser and SteamAppUser. (Fake values.)
     let f = try makeFixture(bridge: true)
     var env = f.env
     env["MACNEUTRON_LOG"] = "1"
+    env["SteamUser"] = "fakelogin"
+    env["SteamAppUser"] = "fakeapplogin"
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
     let log = try String(contentsOf: f.launcher.log.gameLog(appID: "42"), encoding: .utf8)
     #expect(log.contains("MACNEUTRON_STEAM_ACCOUNT=<redacted>"))
     #expect(!log.contains("MACNEUTRON_STEAM_ACCOUNT=1\n"))
-    #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+    #expect(log.contains("SteamUser=<redacted>\n"))
+    #expect(log.contains("SteamAppUser=<redacted>\n"))
+    #expect(!log.contains("fakelogin") && !log.contains("fakeapplogin"))
+    let game = f.runner.calls.last?.environment
+    #expect(game?["MACNEUTRON_STEAM_ACCOUNT"] == "1")
+    #expect(game?["SteamUser"] == "fakelogin" && game?["SteamAppUser"] == "fakeapplogin")  // only the header hides them
 }
 
 @Test func presenterIsAskedForByDefault() throws {

@@ -120,8 +120,9 @@ Windows games talk to your running Mac Steam through the runtime's Steam client 
 built for arm64 by `wine.app`, and shipped under Valve's Steamworks SDK licence, see `licenses/lsteamclient/`). MacNeutron's `steam.exe` tells each game that Steam is running. Anti-cheat
 that needs a Windows kernel driver (Easy Anti-Cheat, BattlEye, Vanguard and others) still won't run.
 
-Game logs (`MACNEUTRON_LOG=1`) hide your Steam account ID, but Wine's `+steamclient` lines in them can
-still contain your SteamID or persona name: check before posting a log publicly.
+Game logs (`MACNEUTRON_LOG=1`) hide your Steam account ID and login name; they still contain file paths that name your
+macOS user, and Wine's `+steamclient` lines in them can contain your SteamID or persona name: check before posting a log
+publicly.
 
 ## Upscaling
 

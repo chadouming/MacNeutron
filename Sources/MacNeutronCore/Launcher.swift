@@ -185,11 +185,14 @@ public struct Launcher: Sendable {
         }
     }
 
+    /// People post game logs in bug reports: the account ID leads straight to a Steam profile, and Steam passes the
+    /// account's login name as SteamUser and SteamAppUser.
+    static let redactedKeys: Set<String> = ["MACNEUTRON_STEAM_ACCOUNT", "SteamUser", "SteamAppUser"]
+
     private func writeHeader(to gameLog: URL, request: LaunchRequest, environment: [String: String]) {
         var text = "=== \(Date().formatted(.iso8601)) \(request.verb.rawValue) \(request.target) \(request.arguments)\n"
-        // People post these logs in bug reports; the account ID leads straight to a Steam profile.
         for key in environment.keys.sorted() {
-            text += "\(key)=\(key == "MACNEUTRON_STEAM_ACCOUNT" ? "<redacted>" : environment[key]!)\n"
+            text += "\(key)=\(Self.redactedKeys.contains(key) ? "<redacted>" : environment[key]!)\n"
         }
         append(text, to: gameLog)
     }
