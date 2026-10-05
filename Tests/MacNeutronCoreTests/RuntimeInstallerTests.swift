@@ -78,17 +78,22 @@ private func fakeIdentity(_ bundle: URL) -> String? {
 }
 
 /// Runs the install against a fake source: `cp` copies with FileManager, `codesign` answers `codesignStatus`.
+/// `scans` answers the install's running-executables scans in turn (the last one repeats); `running` is one answer.
 private func installFake(_ source: URL, into layout: ToolLayout, launcher: URL? = nil, steamExe: URL? = nil,
-                         force: Bool = false, codesignStatus: Int32 = 0, running: [String] = [],
-                         log: LauncherLog? = nil) throws -> (RuntimeInstallOutcome, FakeRunner) {
+                         force: Bool = false, codesignStatus: Int32 = 0, cpStatus: Int32 = 0, running: [String] = [],
+                         scans: [[String]]? = nil, log: LauncherLog? = nil) throws -> (RuntimeInstallOutcome, FakeRunner) {
     let runner = FakeRunner { call in
-        if call.tool == "cp" { try? FileManager.default.copyItem(atPath: call.arguments[2], toPath: call.arguments[3]) }
+        if call.tool == "cp" {
+            guard cpStatus == 0 else { return cpStatus }
+            try? FileManager.default.copyItem(atPath: call.arguments[2], toPath: call.arguments[3])
+        }
         return call.tool == "codesign" ? codesignStatus : 0
     }
+    var answers = scans ?? [running]
     let outcome = try RuntimeInstaller.install(
         wineApp: source, layout: layout, launcherBinary: try launcher ?? makeEchoLauncher(), steamExe: steamExe,
-        force: force, runner: runner, runningExecutables: { running }, identity: fakeIdentity,
-        log: try log ?? LauncherLog(directory: makeTempDir()))
+        force: force, runner: runner, runningExecutables: { answers.count > 1 ? answers.removeFirst() : answers[0] },
+        identity: fakeIdentity, log: try log ?? LauncherLog(directory: makeTempDir()))
     return (outcome, runner)
 }
 
@@ -216,6 +221,52 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     #expect(fakeIdentity(layout.wineApp) == "A")
     #expect(exists(layout.wineserver))
     #expect(!exists(layout.root.appending(path: "wine.app.new")))
+}
+
+@Test func aGameStartedDuringTheCopyDefersTheSwap() throws {
+    // The copy and its signature check take seconds; a game started meanwhile runs from the old wine.app, which the
+    // swap would delete under it. The scan is repeated right before the swap.
+    let layout = try makeInstalledLayout(id: "A")
+    let log = LauncherLog(directory: try makeTempDir())
+    let server = try realPath(layout.wineserver)
+    let (outcome, runner) = try installFake(try makeFakeWineApp(at: makeTempDir(), id: "B"), into: layout,
+                                            scans: [[], ["/usr/bin/true", server]], log: log)
+    #expect(outcome == .deferred(server))
+    #expect(runner.calls.map(\.tool) == ["cp", "codesign"])
+    #expect(fakeIdentity(layout.wineApp) == "A")
+    #expect(exists(layout.wineserver))
+    #expect(!exists(layout.root.appending(path: "wine.app.new")))
+    #expect(try String(contentsOf: log.launcherLog, encoding: .utf8).contains("install deferred: \(server) is running"))
+}
+
+@Test func aFailedCopyNamesItsCause() throws {
+    let layout = try makeInstalledLayout(id: "A")
+    #expect(throws: RuntimeInstallError.copyFailed(1)) {
+        _ = try installFake(try makeFakeWineApp(at: makeTempDir(), id: "B"), into: layout, cpStatus: 1)
+    }
+    #expect(RuntimeInstallError.copyFailed(1).description
+        == "Couldn't copy the runtime into the tool folder (cp exit 1); check free disk space.")
+    #expect(fakeIdentity(layout.wineApp) == "A")
+    #expect(!exists(layout.root.appending(path: "wine.app.new")))
+}
+
+@Test func installedToolFilesAreNotQuarantined() throws {
+    // MacNeutron.app downloaded in a zip is quarantined, and so are the CLI and steam.exe inside it; Steam execs the
+    // CLI the install writes, which has no stapled ticket of its own.
+    let launcher = try makeEchoLauncher()
+    let steamExe = launcher.deletingLastPathComponent().appending(path: "steam.exe")
+    try write("steam.exe", to: steamExe)
+    let quarantine = "0083;66f00000;Safari;"
+    for file in [launcher, steamExe] {
+        #expect(setxattr(file.path(percentEncoded: false), "com.apple.quarantine", quarantine, quarantine.utf8.count, 0, 0) == 0)
+    }
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron"))
+    try RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: launcher)
+    for file in [layout.launcherBinary, layout.steamHelper] {
+        #expect(getxattr(file.path(percentEncoded: false), "com.apple.quarantine", nil, 0, 0, 0) == -1, "\(file.lastPathComponent)")
+        #expect(errno == ENOATTR)
+    }
+    #expect(getxattr(launcher.path(percentEncoded: false), "com.apple.quarantine", nil, 0, 0, 0) > 0)  // the source keeps it
 }
 
 @Test func aSourceWithoutTheLoaderIsNotAWineApp() throws {

@@ -14,6 +14,8 @@ public enum RuntimeInstallError: Error, Equatable, CustomStringConvertible {
     case signatureInvalid(Int32)
     /// `renamex_np`'s or `rename`'s errno.
     case swapFailed(Int32)
+    /// `cp -c -R`'s exit status (a full copy, outside an APFS clone, can run out of space).
+    case copyFailed(Int32)
 
     /// Shown by setup and printed by `macneutron install`.
     public var description: String {
@@ -21,6 +23,7 @@ public enum RuntimeInstallError: Error, Equatable, CustomStringConvertible {
         case .notAWineApp(let path): "\(path) isn't a runtime (it has no Contents/MacOS/wine)."
         case .signatureInvalid(let status): "The runtime's signature check failed (codesign exit \(status))."
         case .swapFailed(let error): "Couldn't put the new runtime in place: \(String(cString: strerror(error)))."
+        case .copyFailed(let status): "Couldn't copy the runtime into the tool folder (cp exit \(status)); check free disk space."
         }
     }
 }
@@ -70,10 +73,13 @@ public enum RuntimeInstaller {
         }
         // 1. The kernel reports real paths (/private/var/…), so compare against the folders' real paths.
         let watched = [layout.wineApp, layout.root.appending(path: "Libraries")].compactMap(realPath).map { $0 + "/" }
-        if let running = runningExecutables().first(where: { path in watched.contains { path.hasPrefix($0) } }) {
-            log.append("install deferred: \(running) is running")
-            return .deferred(running)
+        func running() -> String? {
+            guard let path = runningExecutables().first(where: { path in watched.contains { path.hasPrefix($0) } })
+            else { return nil }
+            log.append("install deferred: \(path) is running")
+            return path
         }
+        if let running = running() { return .deferred(running) }
         // 2. Leftovers of an interrupted install (`cp -R` into an existing folder would nest the source in it).
         // These paths have no trailing "/", for cp and rename(2).
         let new = layout.root.appending(path: "wine.app.new")
@@ -93,13 +99,18 @@ public enum RuntimeInstaller {
                                         environment: [:], output: nil)
             guard copied == 0 else {
                 try? fm.removeItem(at: new)
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: newPath])
+                throw RuntimeInstallError.copyFailed(copied)
             }
             let verified = try runner.run(URL(filePath: "/usr/bin/codesign"), ["--verify", "--strict", newPath],
                                           environment: [:], output: nil)
             guard verified == 0 else {
                 try? fm.removeItem(at: new)
                 throw RuntimeInstallError.signatureInvalid(verified)
+            }
+            // Again: the copy and its check take seconds, and a game started meanwhile runs from the old copy.
+            if let running = running() {
+                try? fm.removeItem(at: new)
+                return .deferred(running)
             }
             let target = layout.root.appending(path: "wine.app").path(percentEncoded: false)
             let swapped = fm.fileExists(atPath: target)
@@ -146,16 +157,22 @@ public enum RuntimeInstaller {
         }
     }
 
-    /// Copies `source` to `destination` through a temporary file and `rename(2)`, unless they already match.
+    /// Copies `source` to `destination` through a temporary file and `rename(2)`, unless they already match. The copy
+    /// carries no quarantine.
     static func installFile(_ source: URL, at destination: URL) throws {
         let fm = FileManager.default
         guard source.resolvingSymlinksInPath() != destination.resolvingSymlinksInPath() else { return }
         let contents = try Data(contentsOf: source)
-        if (try? Data(contentsOf: destination)) == contents { return }
+        if (try? Data(contentsOf: destination)) == contents {
+            removexattr(destination.path(percentEncoded: false), "com.apple.quarantine", 0)  // an earlier copy's
+            return
+        }
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         let temporary = destination.appendingPathExtension("new")
         try? fm.removeItem(at: temporary)
         try fm.copyItem(at: source, to: temporary)
+        // The copy keeps a downloaded app's quarantine, and Steam execs these files directly (no stapled ticket).
+        removexattr(temporary.path(percentEncoded: false), "com.apple.quarantine", 0)
         guard rename(temporary.path(percentEncoded: false), destination.path(percentEncoded: false)) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
