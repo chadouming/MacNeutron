@@ -101,9 +101,12 @@ deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/
 # A release ships no build path (arm64 release Ruling 20): the files under <dir> that contain, as bytes, the repository's
 # path, the build folder's (BUILD_DIR can move it outside the repository) or the home folder's. The first ten, relative
 # to <dir>. The caller sets ROOT.
-build_paths() {  # build_paths <dir>
-  LC_ALL=C /usr/bin/grep -rlaF -e "$ROOT" -e "${BUILD_DIR:-$ROOT/build}" -e "${HOME:?}/" "$1" | head -n 10 \
-    | while IFS= read -r _bp; do echo "${_bp#"$1"/}"; done
+build_paths() {  # build_paths <dir>; fails closed (no HOME, or grep can't read <dir>)
+  [ -n "${HOME:-}" ] || die "HOME is not set"
+  _bp_st=0
+  _bp_out=$(LC_ALL=C /usr/bin/grep -rlaF -e "$ROOT" -e "${BUILD_DIR:-$ROOT/build}" -e "$HOME/" "$1") || _bp_st=$?
+  [ "$_bp_st" -le 1 ] || die "grep failed ($_bp_st) on $1"
+  [ -z "$_bp_out" ] || printf '%s\n' "$_bp_out" | head -n 10 | while IFS= read -r _bp; do echo "${_bp#"$1"/}"; done
 }
 
 # The App ID the entitled loader is signed for; a provisioning profile has to be for it (spec §7.2).
