@@ -249,6 +249,11 @@ build_app() {
   for f in MacOS/MacNeutron Helpers/macneutron; do
     a=$(lipo -archs "$A/Contents/$f")
     [ "$a" = arm64 ] || die "Contents/$f is '$a', not arm64"
+    # No debug map: its OSO/SO entries name the build folder (signed below; the warning is that signature's loss).
+    strip -S "$A/Contents/$f" 2> /dev/null || die "can't strip Contents/$f"
+    n=$(nm -ap "$A/Contents/$f" | LC_ALL=C /usr/bin/grep -c ' OSO ' || true)
+    [ "$n" = 0 ] || die "Contents/$f still has $n OSO entries after strip -S"
+    ! LC_ALL=C /usr/bin/grep -aq /Users/ "$A/Contents/$f" || die "Contents/$f still names a path under /Users/"
   done
   ditto "$OUT/wine.app" "$A/Contents/Helpers/wine.app"
   cp "$STEAM_EXE" "$A/Contents/Resources/steam.exe"
