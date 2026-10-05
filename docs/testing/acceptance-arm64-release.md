@@ -159,8 +159,8 @@ passed, `make smoke` 15/15, `sh dxmt/check.sh` 200 `ok` (all passed), `make brid
 
 ## Gate S follow-up: loading time and the player's settings (Task P2)
 
-2026-10-05. With its settings back, SMITE 2 ran its lobby at ~59 FPS, but its engine took 31-97 s to initialise on
-0.1.0 against 16 s on the Rosetta-era runtime.
+2026-10-05. With its settings back, SMITE 2's frame rate recovered (from ~4 FPS), but its engine took 31-97 s to
+initialise on 0.1.0 against 16 s on the Rosetta-era runtime.
 
 **Loading.** Each `NtCreateThreadEx` maps a stack and thread data through `map_free_area` → `try_map_free_area`
 (`dlls/ntdll/unix/virtual.c`), which tries one fixed `mach_vm_map` per 64 KB step through every range the host owns
