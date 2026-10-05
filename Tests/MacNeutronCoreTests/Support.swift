@@ -141,3 +141,23 @@ func makeDXMTBuild(in folder: URL, unixFolder: URL? = nil, version: String = "ab
     guard let build = DXMTBuild(windows: folder, unix: unix) else { throw CocoaError(.fileNoSuchFile) }
     return build
 }
+
+/// An ad-hoc-signed `dir/wine.app` whose `Contents/MacOS/wine` is a copy of `loader` (never run). Sign it last:
+/// anything written into the bundle afterwards breaks `codesign --verify`.
+@discardableResult
+func makeSignedWineApp(at dir: URL, loader: URL = URL(filePath: "/usr/bin/true"), shortVersion: String = "test",
+                       bundleVersion: String = "1") throws -> URL {
+    let bundle = dir.appending(path: "wine.app", directoryHint: .isDirectory)
+    let macOS = bundle.appending(path: "Contents/MacOS", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    let plist: [String: String] = ["CFBundleExecutable": "wine", "CFBundleIdentifier": "test.wine",
+                                   "CFBundleShortVersionString": shortVersion, "CFBundleVersion": bundleVersion]
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        .write(to: bundle.appending(path: "Contents/Info.plist"))
+    try FileManager.default.copyItem(at: loader, to: macOS.appending(path: "wine"))
+    let status = try SystemProcessRunner().run(URL(filePath: "/usr/bin/codesign"),
+                                               ["-s", "-", "-f", bundle.path(percentEncoded: false)],
+                                               environment: [:], output: dir.appending(path: "codesign.log"))
+    guard status == 0 else { throw CocoaError(.executableLoad) }
+    return bundle
+}
