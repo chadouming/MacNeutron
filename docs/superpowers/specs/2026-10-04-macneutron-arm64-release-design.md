@@ -587,18 +587,26 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
 - **§3.3:** a target that is missing or unreadable is "not PE" and isn't checked. The macOS 27 / Apple Silicon check
   stays (it carries §10's text and is tested), but an arm64-only binary built for macOS 27 can't even load elsewhere.
   A failed FEX registration fails the preparation (the stamp stays `wine.app preparing`; the next launch retries).
-- **§3.4 step 1 (2026-10-05, Task P2):** a fresh prefix started SMITE 2 with its defaults (XeSS, ~4 FPS instead of
-  ~59), and local saves looked lost. After a rename, once step 7's `wineserver -w` has run and before the full stamp,
-  the fresh prefix gets the renamed one's player data, read-only: for each `drive_c/users/<name>` but `Public` (one old
-  user goes to the one new user whatever the names), the files under `AppData/Local`, `AppData/LocalLow`,
-  `AppData/Roaming`, `Documents` and `Saved Games` it doesn't have, cloned (`COPYFILE_CLONE`), never overwriting, without
-  `AppData/Local/Temp` and Wine's `AppData/Local/Microsoft` and `AppData/Roaming/Microsoft`, following no link either
-  way (Wine links `Documents` and others to the Mac's folders, which hold their data already); and the old `user.reg`'s
-  sections under `Software\<Vendor>`, for a vendor other than Wine, Microsoft, Classes, Policies and Valve, that the new
-  one has no section of, appended verbatim (atomically). It logs `note: carried the player's data from <name> (<n>
-  files, <n> registry keys)`; a failure logs `note: could not carry the player's data from <name>: <error>` and the
-  launch goes on. Not carried: other hives (`system.reg`), files elsewhere in `drive_c` (a game saving beside its exe
-  or in `ProgramData`), and a preparation stopped before the carry, which is retried in place without one.
+- **§3.4 step 1 (2026-10-05, Tasks P2 and P2b):** a fresh prefix started SMITE 2 with its defaults (XeSS, ~4 FPS;
+  with the player's settings the main lobby runs at ~36 FPS on both runtimes), and local saves looked lost. After a
+  rename, once step 7's `wineserver -w` has run and before the full stamp, the fresh prefix gets the renamed one's
+  player data, read-only. First the old `user.reg`'s sections under `Software\<Vendor>`, for a vendor other than Wine,
+  Microsoft, Classes, Policies and Valve, that the new one has no section of, appended verbatim (atomically). Then, for
+  each `drive_c/users/<name>` but `Public` (one old user goes to the one new user whatever the names), the files under
+  `AppData/Local`, `AppData/LocalLow`, `AppData/Roaming`, `Documents` and `Saved Games` it doesn't have, cloned
+  (`COPYFILE_CLONE`), never overwriting, without `AppData/Local/Temp` and Wine's `AppData/Local/Microsoft` and
+  `AppData/Roaming/Microsoft`. Every path is looked at with `lstat`, component by component from the prefix on both
+  sides, so no link is followed or written through at any level, the user folders and `AppData` included (Wine links
+  `Documents` and others to the Mac's folders, which hold their data already). An item that can't be carried is
+  skipped and counted and the carry goes on: the registry (`user.reg` unreadable or not writable), an entry of
+  `drive_c/users` that isn't a real folder, one of the five folders when it or a folder above it is a link on either
+  side (counted once per folder), a folder that can't be listed or made, a file that can't be read or cloned or
+  vanished, and a link or special file inside the folders. It logs `note: carried the player's data from <name>: <n>
+  files, <k> registry keys[, <m> not carried]` and the launch goes on. A preparation stopped after the rename (the
+  stamp reads `wine.app preparing`) carries on its in-place retry, from the highest-numbered `pfx.rosetta…` in the
+  compat folder, once: `player-data-carried` in the compat folder, written after every carry, stops a later retry from
+  carrying again. Not carried: other hives (`system.reg`) and files elsewhere in `drive_c` (a game saving beside its
+  exe or in `ProgramData`).
 - **§3.7:** `MACNEUTRON_PRESENT=1` goes only to the game's processes (`run`, `waitforexitandrun`), as the presenter
   does today.
 - **§3.9:** the install is `RuntimeInstaller.install(wineApp:layout:launcherBinary:steamExe:force:) ->

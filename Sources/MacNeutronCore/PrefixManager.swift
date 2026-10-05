@@ -40,6 +40,8 @@ public struct PrefixManager: Sendable {
     public static func stamp(identity: String, msync: Bool) -> String { "wine.app \(identity) msync=\(msync ? 1 : 0)" }
     /// Written before wineboot, so a failed or stopped preparation is retried in place, never renamed.
     static let preparingStamp = "wine.app preparing"
+    /// In the compat folder, written after the player's data was carried (or that failed): a retry carries no more.
+    static let carriedMarker = "player-data-carried"
 
     /// Prepares the prefix when it is missing or another `wine.app` prepared it; stops a wineserver left in the other
     /// msync mode; then, when asked, installs the Steam bridge. Holds the prefix lock only for this, never while the
@@ -64,12 +66,18 @@ public struct PrefixManager: Sendable {
                 try want.write(to: context.versionFile, atomically: true, encoding: .utf8)
             } else {
                 // An arm64 Wine doesn't adopt an x86_64 Wine's prefix.
-                var renamed: String?
-                if exists, recorded?.hasPrefix("wine.app ") != true { renamed = try renameRosettaPrefix() }
+                var carryFrom: String?
+                if exists, recorded?.hasPrefix("wine.app ") != true {
+                    carryFrom = try renameRosettaPrefix()
+                } else if recorded == Self.preparingStamp,
+                          !fm.fileExists(atPath: context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false)) {
+                    // A first preparation stopped after the rename, before the carry.
+                    carryFrom = newestRosettaPrefix()
+                }
                 try Self.preparingStamp.write(to: context.versionFile, atomically: true, encoding: .utf8)
                 try prepareNew(environment: environment)
                 // After prepareNew's `wineserver -w`: no server runs to rewrite user.reg.
-                if let renamed { carryPlayerData(from: renamed) }
+                if let carryFrom { carryPlayerData(from: carryFrom) }
                 try want.write(to: context.versionFile, atomically: true, encoding: .utf8)
             }
             if steamBridge { try deploySteamBridge() }
@@ -119,16 +127,28 @@ public struct PrefixManager: Sendable {
         return name
     }
 
-    /// The fresh prefix gets the renamed one's settings and local saves (spec §14, amending §3.4 step 1). A failure
-    /// only costs the player those: the old prefix is still there, untouched.
+    /// The last name `renameRosettaPrefix` took: the highest-numbered `pfx.rosetta…`.
+    /// ponytail: the rename takes the first free number, so after the player deletes a lower one the highest isn't the
+    /// newest; record the name at the rename if that ever matters.
+    private func newestRosettaPrefix() -> String? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: context.dataPath.path(percentEncoded: false))) ?? []
+        return names.compactMap { name -> (Int, String)? in
+            if name == "pfx.rosetta" { return (1, name) }
+            guard name.hasPrefix("pfx.rosetta-"), let number = Int(name.dropFirst("pfx.rosetta-".count)) else { return nil }
+            return (number, name)
+        }.max { $0.0 < $1.0 }?.1
+    }
+
+    /// The fresh prefix gets the renamed one's settings and local saves (spec §14, amending §3.4 step 1). What isn't
+    /// carried only costs the player that: the old prefix is still there, untouched.
     private func carryPlayerData(from name: String) {
-        do {
-            let (files, keys) = try PlayerData.carry(from: context.dataPath.appending(path: name, directoryHint: .isDirectory),
-                                                     to: context.prefix)
-            log.append("note: carried the player's data from \(name) (\(files) files, \(keys) registry keys)")
-        } catch {
-            log.append("note: could not carry the player's data from \(name): \(error.localizedDescription)")
-        }
+        let carried = PlayerData.carry(from: context.dataPath.appending(path: name, directoryHint: .isDirectory),
+                                       to: context.prefix)
+        log.append("note: carried the player's data from \(name): \(carried.files) files, \(carried.keys) registry keys"
+                   + (carried.failed > 0 ? ", \(carried.failed) not carried" : ""))
+        // ponytail: if the marker can't be written, a later retry carries again, which never overwrites.
+        _ = FileManager.default.createFile(atPath: context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false),
+                                           contents: nil)
     }
 
     /// Every launch: prefixes made before the bridge existed get it too, and a runtime update replaces it.

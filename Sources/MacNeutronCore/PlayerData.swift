@@ -10,71 +10,110 @@ enum PlayerData {
     /// `HKCU\Software\<Vendor>` keys that are Wine's, Windows' or Steam's, not a game's.
     static let systemVendors: Set = ["wine", "microsoft", "classes", "policies", "valve"]
 
-    /// Clones the user folders' files the new prefix doesn't have yet, then appends the game-owned `user.reg` sections
-    /// it has no section of. Call only while no wineserver runs: it reads `user.reg` when it starts and rewrites it.
-    static func carry(from old: URL, to new: URL) throws -> (files: Int, keys: Int) {
-        var files = 0
-        let oldUsers = try users(in: old), newUsers = try users(in: new)
+    /// What a carry did: files cloned, registry sections appended, and items left behind (one that couldn't be read or
+    /// copied, a link, or what's under a link in the way).
+    struct Carried { var files = 0, keys = 0, failed = 0 }
+
+    /// Appends the game-owned `user.reg` sections the new prefix has no section of, then clones the user folders' files
+    /// it doesn't have yet. A bad item is skipped and counted, never ends the carry. Call only while no wineserver runs:
+    /// it reads `user.reg` when it starts and rewrites it.
+    static func carry(from old: URL, to new: URL) -> Carried {
+        var result = Carried()
+        do { result.keys = try carryRegistry(from: old.appending(path: "user.reg"), to: new.appending(path: "user.reg")) }
+        catch { result.failed += 1 }
+        let (oldUsers, skippedUsers) = users(in: old), newUsers = users(in: new).names
+        result.failed += skippedUsers
         for user in oldUsers {
             // wineboot names the user after $USER: one old user goes to the one new user, whatever the names.
             let target = oldUsers.count == 1 && newUsers.count == 1 ? newUsers[0] : user
             for folder in folders {
-                files += try copyTree(old.appending(path: "drive_c/users/\(user)/\(folder)"),
-                                      to: new.appending(path: "drive_c/users/\(target)/\(folder)"), relative: folder)
+                switch kind(old, "drive_c/users/\(user)/\(folder)") {
+                case .missing: continue
+                case .other: result.failed += 1
+                case .directory:
+                    let destination = "drive_c/users/\(target)/\(folder)"
+                    guard makeDirectory(new, destination) else { result.failed += 1; continue }
+                    copyTree(old.appending(path: "drive_c/users/\(user)/\(folder)"), to: new.appending(path: destination),
+                             relative: folder, &result)
+                }
             }
         }
-        return (files, try carryRegistry(from: old.appending(path: "user.reg"), to: new.appending(path: "user.reg")))
+        return result
     }
 
-    /// The real folders in `drive_c/users`, `Public` aside.
-    private static func users(in prefix: URL) throws -> [String] {
+    /// The real folders in `drive_c/users`, `Public` aside, and how many entries there aren't (links, unreadable).
+    private static func users(in prefix: URL) -> (names: [String], skipped: Int) {
         let dir = prefix.appending(path: "drive_c/users")
-        guard isDirectory(dir) else { return [] }
-        return try FileManager.default.contentsOfDirectory(atPath: dir.path(percentEncoded: false))
-            .filter { $0 != "Public" && isDirectory(dir.appending(path: $0)) }.sorted()
+        switch kind(prefix, "drive_c/users") {
+        case .missing: return ([], 0)
+        case .other: return ([], 1)
+        case .directory: break
+        }
+        guard let all = try? FileManager.default.contentsOfDirectory(atPath: dir.path(percentEncoded: false)) else {
+            return ([], 1)
+        }
+        let names = all.filter { $0 != "Public" }
+        let real = names.filter { kind(dir, $0) == .directory }.sorted()
+        return (real, names.count - real.count)
     }
 
-    /// A directory, not a link to one: Wine links `Documents` and others to the Mac's folders, which are never read
-    /// through (the data is already there) nor written through.
-    private static func isDirectory(_ url: URL) -> Bool {
-        var info = stat()
-        return lstat(url.path(percentEncoded: false), &info) == 0 && info.st_mode & S_IFMT == S_IFDIR
-    }
+    private enum Kind { case directory, missing, other }
 
-    /// Clones every regular file under `source` that `destination` lacks; returns how many.
-    private static func copyTree(_ source: URL, to destination: URL, relative: String) throws -> Int {
-        guard !skipped.contains(relative), isDirectory(source), makeDirectory(destination) else { return 0 }
-        var count = 0
-        for name in try FileManager.default.contentsOfDirectory(atPath: source.path(percentEncoded: false)) {
-            let from = source.appending(path: name), to = destination.appending(path: name)
+    /// What `base/relative` is, looked at with lstat component by component: a link anywhere on the way is `other`.
+    /// Wine links `Documents` and others to the Mac's folders, which are never read through (the data is already
+    /// there) nor written through.
+    private static func kind(_ base: URL, _ relative: String) -> Kind {
+        var url = base
+        for part in relative.split(separator: "/") {
+            url.append(path: String(part))
             var info = stat()
-            guard lstat(from.path(percentEncoded: false), &info) == 0 else { continue }
+            guard lstat(url.path(percentEncoded: false), &info) == 0 else { return errno == ENOENT ? .missing : .other }
+            guard info.st_mode & S_IFMT == S_IFDIR else { return .other }
+        }
+        return .directory
+    }
+
+    /// True when `base/relative` is a real directory now, made where missing; false when a component is a link or a
+    /// file, which is never followed or replaced.
+    private static func makeDirectory(_ base: URL, _ relative: String) -> Bool {
+        var url = base
+        for part in relative.split(separator: "/") {
+            url.append(path: String(part))
+            var info = stat()
+            if lstat(url.path(percentEncoded: false), &info) == 0 {
+                guard info.st_mode & S_IFMT == S_IFDIR else { return false }
+            } else if mkdir(url.path(percentEncoded: false), 0o755) != 0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Clones every regular file under `source` that `destination` lacks (both real directories) and counts.
+    private static func copyTree(_ source: URL, to destination: URL, relative: String, _ result: inout Carried) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: source.path(percentEncoded: false)) else {
+            result.failed += 1
+            return
+        }
+        for name in names {
+            let from = source.appending(path: name), to = destination.appending(path: name), path = "\(relative)/\(name)"
+            var info = stat()
+            guard lstat(from.path(percentEncoded: false), &info) == 0 else { result.failed += 1; continue }  // vanished
             switch info.st_mode & S_IFMT {
-            case S_IFDIR: count += try copyTree(from, to: to, relative: "\(relative)/\(name)")
+            case S_IFDIR:
+                guard !skipped.contains(path) else { continue }
+                guard makeDirectory(destination, name) else { result.failed += 1; continue }
+                copyTree(from, to: to, relative: path, &result)
             case S_IFREG:
                 var existing = stat()
                 guard lstat(to.path(percentEncoded: false), &existing) != 0 else { continue }  // never overwritten
                 // COPYFILE_CLONE: an APFS clone, else a copy; it includes COPYFILE_EXCL.
                 guard copyfile(from.path(percentEncoded: false), to.path(percentEncoded: false), nil,
-                               copyfile_flags_t(COPYFILE_CLONE)) == 0 else {
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-                }
-                count += 1
-            default: continue  // links and the rest stay behind
+                               copyfile_flags_t(COPYFILE_CLONE)) == 0 else { result.failed += 1; continue }
+                result.files += 1
+            default: result.failed += 1  // a link, never followed, or a special file
             }
         }
-        return count
-    }
-
-    /// True when `url` is a directory now, made with its missing parents; false when it or a parent is a link or a
-    /// file, which is never followed or replaced.
-    private static func makeDirectory(_ url: URL) -> Bool {
-        if isDirectory(url) { return true }
-        var info = stat()
-        guard lstat(url.path(percentEncoded: false), &info) != 0, makeDirectory(url.deletingLastPathComponent()) else {
-            return false
-        }
-        return mkdir(url.path(percentEncoded: false), 0o755) == 0
     }
 
     /// Appends the old `user.reg`'s sections under `Software\<Vendor>` (a game's vendor) that the new one has no
