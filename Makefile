@@ -92,8 +92,10 @@ app: build bridge wine-arm64
 	codesign --force --sign - $(APP)
 
 # The release: notarized MacNeutron.app, its zip and the source archive (spec §6.3). VERSION=x.y.z; needs the
-# signing and notary variables and the network.
-release: build bridge wine-arm64
+# signing and notary variables and the network. A bad VERSION stops it before anything is built.
+release:
+	@sh release/release.sh --check-version "$(VERSION)"
+	$(MAKE) build bridge wine-arm64
 	sh release/release.sh "$(VERSION)"
 
 # Native arm64 Wine 11.19 with our patches, FEX for x64 code and our DXMT for ARM64X

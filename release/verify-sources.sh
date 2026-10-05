@@ -6,7 +6,8 @@
 # - in the build trees (build/wine-arm64-src), <applied>~<patch count> is SOURCE's *_COMMIT, which is also the archived
 #   pins'; the patch count is the archived patch folder's;
 # - each *_SERIES recomputed from the archived pins and patches, with the archived lib.sh's tree_series;
-# - the submodules' tars against SOURCE's FEX_SUBMODULE_* and DXMT_SUBMODULE_*, one for one;
+# - each submodule's tar against the gitlink its tree records at the tree's applied commit, and against SOURCE's
+#   FEX_SUBMODULE_* and DXMT_SUBMODULE_*, one for one;
 # - each tarball's SHA-256 against SOURCE's *_SHA256;
 # - LLVM_TAG and LLVM_MINGW_SHA256 cited only: present in SOURCE, equal to the archived dxmt/pins.
 # Read-only. BUILD_DIR replaces build/.
@@ -56,7 +57,11 @@ while read -r tree pinned applied n file; do
         || bad "${K}_SERIES isn't the archived pins and patches' (${s:-none})"
       ;;
     fex/* | dxmt/*)
-      [ "$pinned" = "$applied" ] || bad "$tree is $applied, not the recorded $pinned"
+      p=${tree%%/*}
+      pa=$(awk -v p="$p" '$1 == p { print $3 }' "$D/SOURCES.txt")
+      g=$(git -C "$S/$p" ls-tree "$pa" -- "${tree#*/}" 2> /dev/null | awk '$2 == "commit" { print $3 }')
+      [ -n "$g" ] && [ "$pinned" = "$g" ] && [ "$applied" = "$g" ] \
+        || bad "$tree is $applied, not the commit $p records at ${pa:-no applied commit} (${g:-none})"
       K=$(echo "${tree%%/*}" | tr '[:lower:]' '[:upper:]')
       subs="$subs${K}_SUBMODULE_${tree##*/}=$applied
 " ;;

@@ -103,8 +103,8 @@ mkdir "$TOOL/wine.app.new"
 out=$(install_tool) && st=0 || st=$?
 row "leftovers are cleaned" "$([ "$st" -eq 0 ] && [ ! -e "$TOOL/wine.app.new" ] && echo 1 || echo 0)" "exit $st, $out"
 
-name="notarized copy installs and stays accepted"
 N="$ROOT/build/release/r0/wine.app"
+name="notarized copy installs and stays accepted ($N)"
 if [ -d "$N" ]; then
   T="$WORK/notarized tool"
   "$CLI" install --tool-dir "$T" --wine-app "$N" > /dev/null && st=0 || st=$?
@@ -113,6 +113,6 @@ if [ -d "$N" ]; then
   ok=0; [ "$st:$staple" = "0:0" ] && case $gk in *accepted*) ok=1;; esac
   row "$name" $ok "install exit $st, stapler exit $staple, spctl: $gk"
 else
-  echo "SKIP $name: no $N (release/r0.sh)"
+  echo "SKIP $name: no such bundle (release/r0.sh)"
 fi
 exit $fail

@@ -4,12 +4,14 @@
 # row on an installed copy); builds MacNeutron.app around it, checks its licences (R4), notarizes it (R2) and zips it;
 # builds the source archive and checks it against the bundle's SOURCE (R5); writes SHA256SUMS and SIZES.txt and prints
 # the tag and gh release commands. It never tags, pushes or uploads.
-#   make release VERSION=X.Y.Z    make builds the CLI, steam.exe and wine.app first
+#   make release VERSION=X.Y.Z    make checks the version, builds the CLI, steam.exe and wine.app, then runs:
 #   release.sh X.Y.Z
 #   release.sh --rehearse X.Y.Z   the same into build/release/rehearse-X.Y.Z/ (with a REHEARSAL file), without the
-#                                 clean-tree and origin/main refusals and without notarization: nothing goes to Apple,
-#                                 and no tag commands are printed
+#                                 clean-tree, origin/main and origin tag refusals and without notarization: nothing
+#                                 goes to Apple, and no tag commands are printed
+#   release.sh --check-version X.Y.Z   the version refusal alone (exit 0, or 2 saying why)
 #   release.sh --self-test        each refusal on prepared bad inputs (gate R1)
+# Any other arguments print the usage and exit 2.
 # Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE, the network (origin, the DXMT fork, Apple's
 # timestamps) and, for a release, MACNEUTRON_NOTARY_PROFILE (default macneutron). R3 needs Steam running and logged in
 # and a game's steam_api64.dll: MACNEUTRON_STEAM_API, by default SMITE 2's.
@@ -17,11 +19,13 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/wine-arm64/lib.sh"
 . "$ROOT/release/lib.sh"  # after wine-arm64/lib.sh: its die says release:
+usage="release: usage: make release VERSION=X.Y.Z (or release.sh X.Y.Z | --rehearse X.Y.Z | --check-version X.Y.Z |\
+ --self-test)"
 
 # The refusals (§6.3 step 1). Each takes its inputs as arguments, says what is wrong on stderr and returns 1.
-check_version() {  # check_version <repo> <version>: MAJOR.MINOR.PATCH, not yet a tag
+check_version() {  # check_version <repo> <version>: MAJOR.MINOR.PATCH without leading zeros, not yet a tag
   case $2 in
-    *[!0-9.]* | .* | *. | *..*) f=1 ;;
+    *[!0-9.]* | .* | *. | *..* | 0[0-9]* | *.0[0-9]*) f=1 ;;
     *) if [ "$(printf %s "$2" | tr -cd .)" = .. ]; then f=; else f=1; fi ;;
   esac
   [ -z "$f" ] || { echo "release: VERSION $2 is not MAJOR.MINOR.PATCH" >&2; return 1; }
@@ -52,6 +56,10 @@ check_published() {  # check_published <repo>: HEAD is in origin/main, fetched n
   h=$(git -C "$1" rev-parse HEAD)
   git -C "$1" merge-base --is-ancestor "$h" origin/main 2> /dev/null \
     || { echo "release: HEAD $h is not in origin/main" >&2; return 1; }
+}
+check_origin_tag() {  # check_origin_tag <repo> <version>: not a tag on origin either (check_version sees local tags only)
+  t=$(git -C "$1" ls-remote --tags origin "refs/tags/v$2") || { echo "release: can't list origin's tags" >&2; return 1; }
+  [ -z "$t" ] || { echo "release: v$2 is already a tag on origin" >&2; return 1; }
 }
 check_trees() {  # check_trees: the four trees in build/wine-arm64-src are applied (the patches are the truth)
   r=0
@@ -113,9 +121,24 @@ self_test() {
   git -C "$T/repo" tag v0.0.0
   refused "a version that is already a tag" "release: v0.0.0 is already a tag" check_version "$T/repo" 0.0.0
   passes "a new version" check_version "$T/repo" 0.0.1
-  out=$(sh "$ROOT/release/release.sh" 0.0.1-rc 2>&1) && st=0 || st=$?
-  if [ "$st:$out" = "2:release: VERSION 0.0.1-rc is not MAJOR.MINOR.PATCH" ]; then ok "a bad version exits 2 alone"
-  else bad "a bad version exits 2 alone" "exit $st: [$out]"; fi
+  for v in 01.0.0 0.00.1; do
+    refused "a version with a leading zero ($v)" "release: VERSION $v is not MAJOR.MINOR.PATCH" check_version "$T/repo" $v
+  done
+  passes "a version with zeros (0.10.0)" check_version "$T/repo" 0.10.0
+  # exits <case> <status> <output> <release.sh args...>: release.sh says exactly <output> and exits <status>
+  exits() {
+    c=$1 w="$2:$3"; shift 3
+    out=$(sh "$ROOT/release/release.sh" "$@" 2>&1) && st=0 || st=$?
+    if [ "$st:$out" = "$w" ]; then ok "$c"; else bad "$c" "exit $st: [$out]"; fi
+  }
+  exits "a bad version exits 2 alone" 2 "release: VERSION 0.0.1-rc is not MAJOR.MINOR.PATCH" 0.0.1-rc
+  exits "--check-version refuses a bad version alone" 2 "release: VERSION 01.0.0 is not MAJOR.MINOR.PATCH" \
+    --check-version 01.0.0
+  exits "--check-version passes a new version" 0 "" --check-version 99.0.0
+  for a in "0.1.0 --rehearse" "--rehearse 0.1.0 x" "--self-test x" "--check-version" "--rehearse" "--bogus" ""; do
+    # shellcheck disable=SC2086  # a is the argument list
+    exits "the arguments [$a] are refused" 2 "$usage" $a
+  done
 
   # README strings left from the Rosetta era.
   passes "READMEs without the Rosetta-era strings" check_readmes "$T/repo"
@@ -139,6 +162,13 @@ self_test() {
     check_published "$T/repo"
   git -C "$T/repo" push -q -f origin HEAD:main
   passes "a HEAD in origin/main" check_published "$T/repo"
+  # A tag on origin only (pushed, then deleted here): check_version can't see it, check_origin_tag does.
+  git -C "$T/repo" tag v0.0.2
+  git -C "$T/repo" push -q origin v0.0.2
+  git -C "$T/repo" tag -d v0.0.2 > /dev/null
+  passes "a tag on origin only isn't a local tag" check_version "$T/repo" 0.0.2
+  refused "a version that is a tag on origin" "release: v0.0.2 is already a tag on origin" check_origin_tag "$T/repo" 0.0.2
+  passes "a version that isn't a tag on origin" check_origin_tag "$T/repo" 0.0.1
 
   # The trees: none built here, so each is named.
   no_build() { BUILD_DIR="$T/no-build"; check_trees; }  # run in refused's subshell
@@ -288,16 +318,18 @@ EOF
   echo "PASS R4"
 }
 
-# The entry points: --self-test, or a version (released or rehearsed).
-case "${1:-}" in
-  --self-test) self_test; exit ;;
-  --rehearse) mode=rehearse V=${2:-} ;;
-  -*) V= ;;
-  *) mode=release V=$1 ;;
+# The entry points: --self-test, --check-version, or a version (released or rehearsed). Any other arguments: usage.
+case "$#:${1:-}" in
+  1:--self-test) self_test; exit ;;
+  2:--check-version) V=$2 mode=check ;;
+  2:--rehearse) V=$2 mode=rehearse ;;
+  1:-*) V= ;;
+  1:*) V=$1 mode=release ;;
+  *) V= ;;
 esac
-[ -n "$V" ] || { echo "release: usage: make release VERSION=X.Y.Z (or release.sh --rehearse X.Y.Z | --self-test)" >&2
-  exit 2; }
+[ -n "$V" ] || { echo "$usage" >&2; exit 2; }
 check_version "$ROOT" "$V" || exit 2
+[ $mode != check ] || exit 0
 
 # 1. Refusals: every failing one is named before stopping. Then make wine-arm64 must have nothing left to do.
 failed=0
@@ -305,9 +337,10 @@ check_readmes "$ROOT" || failed=1
 if [ $mode = release ]; then
   check_clean "$ROOT" || failed=1
   check_published "$ROOT" || failed=1
+  check_origin_tag "$ROOT" "$V" || failed=1
 fi
 check_trees || failed=1
-check_dxmt "$ROOT/build/wine-arm64-src/dxmt" "$(. "$ROOT/dxmt/pins"; echo "$DXMT_COMMIT")" || failed=1
+check_dxmt "${BUILD_DIR:-$ROOT/build}/wine-arm64-src/dxmt" "$(. "$ROOT/dxmt/pins"; echo "$DXMT_COMMIT")" || failed=1
 [ $failed = 0 ] || exit 1
 check_up_to_date || exit 1
 HEAD=$(git -C "$ROOT" rev-parse HEAD)
@@ -362,7 +395,7 @@ if [ $mode = release ]; then
   c=$(awk '$1 == "MacNeutron" { print $3 }' "$OUT/SOURCES.txt")
   echo "release: MacNeutron $V is ready in $OUT. To publish it:"
   echo "  git tag v$V $c"
-  echo "  gh release create v$V --target $c --title 'MacNeutron $V' $OUT/$ZIP $OUT/$TGZ $OUT/SHA256SUMS"
+  echo "  gh release create v$V --target $c --title 'MacNeutron $V' '$OUT/$ZIP' '$OUT/$TGZ' '$OUT/SHA256SUMS'"
 else
   echo "release: rehearsal of $V done in $OUT (not notarized: nothing to publish)"
 fi
