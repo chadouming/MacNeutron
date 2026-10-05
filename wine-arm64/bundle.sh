@@ -136,8 +136,10 @@ cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" \
   -c "Add :CFBundleVersion string $VERSION" "$APP/Contents/Info.plist" > /dev/null \
   || die "can't write the version into Info.plist"
-# Without its extended attributes: a downloaded profile carries the download's URL and quarantine record.
+# Without its extended attributes: a downloaded profile carries the download's URL and quarantine record. macOS gives
+# the copy the source's quarantine again even with -X, so that one goes explicitly.
 cp -X "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+xattr -d com.apple.quarantine "$APP/Contents/embedded.provisionprofile" 2> /dev/null || true
 out=$(xattr "$APP/Contents/embedded.provisionprofile") || die "can't list embedded.provisionprofile's attributes"
 out=$(printf '%s\n' "$out" | LC_ALL=C /usr/bin/grep -xE 'com\.apple\.(metadata:kMDItemWhereFroms|quarantine)' || true)
 [ -z "$out" ] || die "embedded.provisionprofile kept $(echo "$out" | tr '\n' ' ')"
