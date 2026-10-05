@@ -52,13 +52,13 @@ make wine-arm64        # fetch Wine, FEX and DXMT at the pins, patch, build, sig
                        # a cold first build includes the arm64 LLVM (about 2 min here) and the deps (about 3 min)
 make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, D2-D4 and S1-S7 (about 16 min)
 
-make build bridge wine-arm64-tests dxmt-tests-arm64ec presenter  # what check.sh needs besides the runtime
+make build bridge wine-arm64-tests dxmt-tests dxmt-tests-arm64ec presenter  # what check.sh needs besides the runtime
 sh wine-arm64/check.sh g2-litmus   # named steps only (and the steps they need); see STEPS in check.sh
 ```
 
 `make wine-arm64-check` builds the launcher (`make build`), the Steam bridge (`make bridge`: `steam-bridge` needs
 `build/bridge/arm64/steam.exe` and `build/bridge/steamprobe.exe`), the test programs (`make wine-arm64-tests`) and what the
-DXMT steps run (`make dxmt-tests-arm64ec presenter`: the x64 and ARM64EC D3D test programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
+DXMT steps run (`make dxmt-tests dxmt-tests-arm64ec presenter`: the x64 and ARM64EC D3D test programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
 runs the launcher). Gate G4's Rosetta baseline runs the frozen reference tool (`tools/freeze-rosetta-reference.sh` makes it from the
 last Rosetta-era tool folder; `MACNEUTRON_REFERENCE` names another). Each run starts from a clean prefix under `build/wine-arm64 check/`, and ends by checking that
 no process of either runtime is left. Every run sees `WINEMSYNC=1`, as the launcher does: a client and its
@@ -237,5 +237,5 @@ re-clone; that is why they wait for the rebase.
     the date before importing another. This is not legal advice.
 - Each patch taken or derived from another tree names its source in its message (0006's is given above, since its message
   doesn't). Patch files keep their original authors.
-- **DXMT** is LGPL-2.1+; our patches to it are too. 0001 is ours.
+- **DXMT** is LGPL-2.1+; our patches to it are too. 0001 and 0002 are ours.
 - Upstream FEX and DXMT refuse AI-authored contributions: no patches go upstream (issue reports only).

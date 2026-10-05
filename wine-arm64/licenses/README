@@ -75,9 +75,9 @@ steamclient.dylib)
   wine-arm64/deps.pins), with the patches in the repository's wine-arm64/patches/lsteamclient (dappermint/winecx's
   three Mac fixes).
 
-MacNeutron (libmacneutron-present.dylib, the MetalFX presenter; the Wine, DXMT and FEX patch files)
+MacNeutron (libmacneutron-present.dylib, the MetalFX presenter)
   Licence: MIT, macneutron/LICENSE.
-  Source: the repository at MACNEUTRON_COMMIT: presenter/present.m, and the patches in wine-arm64/patches/wine,
-  wine-arm64/patches/dxmt and wine-arm64/patches/fex.
+  Source: the repository at MACNEUTRON_COMMIT: presenter/present.m. The patch files in wine-arm64/patches keep the
+  licence of the tree they patch (Wine and DXMT: LGPL-2.1-or-later; FEX: MIT; lsteamclient: Valve's terms).
 
 FreeType: Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.
