@@ -9,7 +9,6 @@ func makeMode(session: String = okSession, config: String = steamConfigFixture,
                          intentFile: root.appending(path: "steam-play-enabled"))
     var mode = SteamPlayMode(steam: steam, root: root, process: fake)
     mode.verifyTimeout = .seconds(2)
-    mode.rosettaAvailable = { true }
     return (mode, fake)
 }
 
@@ -103,16 +102,6 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     #expect(fake.launchesWithDevConfig == [true, false])
 }
 
-@Test func passthroughRunsTheMacGameItself() async throws {
-    let (mode, _) = try makeMode()
-    try await mode.enable(plan: samplePlan)
-    let out = try makeTempDir().appending(path: "out.txt")
-    let status = try SystemProcessRunner().run(mode.link("macneutron-native").appending(path: "passthrough.sh"),
-                                               ["waitforexitandrun", "/bin/echo", "a b"], environment: [:], output: out)
-    #expect(status == 0)
-    #expect(try String(contentsOf: out, encoding: .utf8) == "a b\n")
-}
-
 @Test(arguments: [
     (okSession, nil),
     (macModeSession, "Steam started as a Mac client and ignored MacNeutron"),
@@ -129,36 +118,6 @@ func verifiesCompatLogSessions(log: String, problem: String?) {
     #expect(SteamPlayMode.verify(log: SteamPlayMode.lastSession(of: okSession + macModeSession)) != nil)
 }
 
-
-@Test func passthroughLaunchesAppBundles() async throws {
-    // Steam's launch entry for many Mac games is the .app folder itself (Timberborn's is).
-    let (mode, _) = try makeMode()
-    try await mode.enable(plan: samplePlan)
-    let app = try makeTempDir().appending(path: "My Game.app", directoryHint: .isDirectory)
-    try write("#!/bin/sh\necho \"$@\"\n", to: app.appending(path: "Contents/MacOS/Game Binary"), executable: true)
-    let info = try PropertyListSerialization.data(fromPropertyList: ["CFBundleExecutable": "Game Binary"], format: .xml, options: 0)
-    try info.write(to: app.appending(path: "Contents/Info.plist"))
-    let out = try makeTempDir().appending(path: "out.txt")
-    let status = try SystemProcessRunner().run(mode.link("macneutron-native").appending(path: "passthrough.sh"),
-                                               ["waitforexitandrun", app.path(percentEncoded: false), "a b"],
-                                               environment: [:], output: out)
-    #expect(status == 0)
-    #expect(try String(contentsOf: out, encoding: .utf8) == "a b\n")
-}
-
-@Test(.enabled(if: FileManager.default.fileExists(atPath: Preflight.rosettaRuntime.path(percentEncoded: false))))
-func passthroughPrefersTheAppleSiliconBuild() async throws {
-    // Steam starts tools preferring x86_64; without an override a universal game would run under Rosetta.
-    let (mode, _) = try makeMode()
-    try await mode.enable(plan: samplePlan)
-    let out = try makeTempDir().appending(path: "arch.txt")
-    let script = mode.link("macneutron-native").appending(path: "passthrough.sh").path(percentEncoded: false)
-    let status = try SystemProcessRunner().run(URL(filePath: "/usr/bin/arch"),
-                                               ["-x86_64", "/bin/sh", script, "waitforexitandrun", "/usr/bin/uname", "-m"],
-                                               environment: [:], output: out)
-    #expect(status == 0)
-    #expect(try String(contentsOf: out, encoding: .utf8) == "arm64\n")
-}
 
 @Test func syncRefusesToDropMacGameProtection() async throws {
     // An unreadable app list must never turn into "no Mac games" while Steam stays in Linux mode.
@@ -220,13 +179,6 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     #expect(!FileManager.default.fileExists(atPath: mode.steam.steamDevConfig.path(percentEncoded: false)))
 }
 
-@Test func enableRequiresRosetta() async throws {
-    var (mode, fake) = try makeMode(running: true)
-    mode.rosettaAvailable = { false }
-    await #expect(throws: SteamPlayError.rosettaMissing) { try await mode.enable(plan: samplePlan) }
-    #expect(fake.isRunning())
-}
-
 @Test func verificationHandlesACompatLogThatStartsOver() async throws {
     // If Steam truncates its log at startup, the new session is shorter than the old file.
     let (steam, root) = try makeFakeSteam()
@@ -234,7 +186,6 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     let fake = FakeSteam(steam: steam, replaceLogOnLaunch: true)
     var mode = SteamPlayMode(steam: steam, root: root, process: fake)
     mode.verifyTimeout = .seconds(2)
-    mode.rosettaAvailable = { true }
     try await mode.enable(plan: samplePlan)
     #expect(mode.isWanted)
 }
@@ -246,7 +197,6 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
     let fake = FakeSteam(steam: steam, replaceLogOnLaunch: true)
     var mode = SteamPlayMode(steam: steam, root: root, process: fake)
     mode.verifyTimeout = .seconds(2)
-    mode.rosettaAvailable = { true }
     try await mode.enable(plan: samplePlan)
     #expect(mode.isWanted)
 }
@@ -260,4 +210,24 @@ func passthroughPrefersTheAppleSiliconBuild() async throws {
         return
     }
     #expect(message.contains("couldn't be read"))
+}
+
+@Test func nativeToolRunsTheCLIPassthrough() async throws {
+    // R0b: Steam launches a thin arm64 tool binary, so the Mac-game tool runs a copy of the CLI.
+    let (mode, _) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    let native = mode.link("macneutron-native")
+    let manifest = try String(contentsOf: native.appending(path: "toolmanifest.vdf"), encoding: .utf8)
+    #expect(manifest.contains("\"commandline\" \"/bin/macneutron passthrough %verb%\""))
+    let cli = native.appending(path: "bin/macneutron")
+    #expect(try Data(contentsOf: cli) == Data(contentsOf: mode.runtimeTool.appending(path: "bin/macneutron")))
+    #expect(FileManager.default.isExecutableFile(atPath: cli.path(percentEncoded: false)))
+}
+
+@Test func staleScriptIsRemoved() throws {
+    let (mode, _) = try makeMode()
+    let script = mode.nativeTool.appending(path: "passthrough.sh")
+    try write("#!/bin/sh\n", to: script, executable: true)
+    try mode.installNativeTool()
+    #expect(!FileManager.default.fileExists(atPath: script.path(percentEncoded: false)))
 }

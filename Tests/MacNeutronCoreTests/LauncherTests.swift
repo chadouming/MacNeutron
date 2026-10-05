@@ -17,16 +17,15 @@ private struct Fixture {
     var launcherLog: String { (try? String(contentsOf: launcher.log.launcherLog, encoding: .utf8)) ?? "" }
 }
 
-private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta: Bool = true,
-                         bridge: Bool = false, presenter: Bool = false) throws -> Fixture {
+private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), identity: String? = testIdentity,
+                         bridge: Bool = false) throws -> Fixture {
     let notifier = RecordingNotifier()
     let layout = try makeToolLayout()
     if bridge { try installFakeSteamBridge(in: layout) }
-    if presenter { try installFakePresenter(in: layout) }
     let steam = try makeSteamLocation(loginUsers: loginUsersFile(loginUser(account: 1, timestamp: 100, mostRecent: true)))
     let launcher = Launcher(layout: layout, runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
-                            notifier: notifier, preflight: Preflight(rosettaAvailable: { rosetta }),
+                            notifier: notifier, preflight: Preflight(systemSupported: { true }, identity: { _ in identity }),
                             settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")),
                             steam: steam)
     let env = steamEnvironment(dataPath: try makeTempDir().appending(path: "compatdata/42"), appID: "42")
@@ -47,7 +46,9 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(status == 7)
     #expect(runner.calls.map { [$0.tool] + $0.arguments } == [
         ["wine", "wineboot", "-u"],
+        ["wine", "reg", "add", #"HKLM\Software\Microsoft\Wow64\amd64"#, "/ve", "/d", "libarm64ecfex.dll", "/f"],
         ["wine", "reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog", "/t", "REG_DWORD", "/d", "0", "/f"],
+        ["wineserver", "-w"],
         ["wineserver", "-w"],
         ["wine", "/g/Game.exe", "-windowed"],
         ["wineserver", "-w"],
@@ -56,9 +57,10 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
 
 @Test func runDoesNotWaitForWineserver() throws {
     let f = try makeFixture()
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)  // prepares the prefix (its own `-w` included)
+    let prepared = f.runner.calls.count
     #expect(f.launcher.launch(["run", "/g/iscriptevaluator.exe", "--get-current-step", "42"], environment: f.env) == 0)
-    #expect(!f.runner.calls.contains { $0.tool == "wineserver" })
-    #expect(f.runner.calls.last?.arguments == ["/g/iscriptevaluator.exe", "--get-current-step", "42"])
+    #expect(f.runner.calls.dropFirst(prepared).map(\.arguments) == [["/g/iscriptevaluator.exe", "--get-current-step", "42"]])
 }
 
 @Test func runInPrefixSkipsPreparation() throws {
@@ -103,11 +105,45 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(logged.contains("note=unknown MACNEUTRON_GRAPHICS 'vulkan'"))
 }
 
-@Test func missingRosettaNotifiesAndFails() throws {
-    let f = try makeFixture(rosetta: false)
+@Test func missingRuntimeNotifiesAndFails() throws {
+    let f = try makeFixture(identity: nil)
     #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 1)
     #expect(f.runner.calls.isEmpty)
-    #expect(f.notifier.posted.first?.contains("softwareupdate --install-rosetta") == true)
+    #expect(f.notifier.posted == ["MacNeutron's runtime is missing or damaged. Open MacNeutron to repair it."])
+    #expect(FileManager.default.fileExists(atPath: f.launcher.layout.runtimeDamagedMarker.path(percentEncoded: false)))
+}
+
+private let thirtyTwoBitText = "This game is 32-bit. MacNeutron 0.1 runs 64-bit games only; 32-bit support is planned."
+
+private func i386Exe(named name: String) throws -> String {
+    let url = try makeTempDir().appending(path: name)
+    try peBytes(machine: PEImage.i386).write(to: url)
+    return url.path(percentEncoded: false)
+}
+
+@Test func thirtyTwoBitGameIsRefusedWithItsMessage() throws {
+    let f = try makeFixture()
+    #expect(f.launcher.launch(["waitforexitandrun", try i386Exe(named: "Game.exe")], environment: f.env) == 1)
+    #expect(f.runner.calls.isEmpty)
+    #expect(f.notifier.posted == [thirtyTwoBitText])
+    #expect(f.launcherLog.contains("error: \(thirtyTwoBitText)"))
+}
+
+@Test func runSkipsA32BitInstaller() throws {
+    // Steam's install scripts start redistributable installers with `run`; a 32-bit one can't run, and isn't the game.
+    let f = try makeFixture()
+    #expect(f.launcher.launch(["run", try i386Exe(named: "Setup.exe"), "/quiet"], environment: f.env) == 0)
+    #expect(f.runner.calls.isEmpty)
+    #expect(f.notifier.posted.isEmpty)
+    #expect(f.launcherLog.contains("skipped 32-bit installer Setup.exe"))
+}
+
+@Test func failureMessagesReachTheGameLog() throws {
+    let f = try makeFixture()
+    var env = f.env
+    env["MACNEUTRON_LOG"] = "1"
+    #expect(f.launcher.launch(["waitforexitandrun", try i386Exe(named: "Game.exe")], environment: env) == 1)
+    #expect(try String(contentsOf: f.launcher.log.gameLog(appID: "42"), encoding: .utf8).contains(thirtyTwoBitText))
 }
 
 @Test func failedPrefixSetupNotifiesAndSkipsGame() throws {
@@ -131,19 +167,25 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     let f = try makeFixture()
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
     let line = try String(contentsOf: f.launcher.log.launcherLog, encoding: .utf8)
-    #expect(line.contains("verb=run appid=42 backend=dxmt runtime=runtime-test gptk=none exit=0"))
+    #expect(line.hasSuffix("verb=run appid=42 backend=dxmt runtime=test (0123456789ab) exit=0\n"))
 }
 
-@Test func terminateKillsThePrefixWineserver() throws {
+@Test func terminateKillsThePrefixWineserverUnderTheGamesMsync() throws {
+    // The server runs with the game's WINEMSYNC; a client in the other mode can't talk to it.
     let f = try makeFixture()
     f.launcher.terminate(environment: f.env)
     #expect(f.runner.calls.map { [$0.tool] + $0.arguments } == [["wineserver", "-k"]])
     #expect(f.runner.calls[0].environment["WINEPREFIX"]?.hasSuffix("compatdata/42/pfx/") == true)
+    #expect(f.runner.calls[0].environment["WINEMSYNC"] == "1")
+    try f.launcher.settings.save(GameSettings(msync: false), for: "42")
+    f.launcher.terminate(environment: f.env)
+    #expect(f.runner.calls.count == 2)
+    #expect(f.runner.calls[1].environment["WINEMSYNC"] == nil)
 }
 
 @Test func gameSettingsApplyUnderneathLaunchOptions() throws {
     let f = try makeFixture()
-    try f.launcher.settings.save(GameSettings(graphics: "dxvk", log: true, msync: false), for: "42")
+    try f.launcher.settings.save(GameSettings(graphics: "wined3d", log: true, msync: false), for: "42")
     var env = f.env
     env["MACNEUTRON_GRAPHICS"] = "dxmt"  // typed into Steam's launch options: wins
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
@@ -151,6 +193,16 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(wine["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)  // dxmt
     #expect(wine["WINEDEBUG"] == "+err,+warn,+loaddll,+steamclient")
     #expect(wine["WINEMSYNC"] == nil)
+}
+
+@Test func oldGraphicsValueRunsDXMTWithANote() throws {
+    let f = try makeFixture()
+    try f.launcher.settings.save(GameSettings(graphics: "dxvk"), for: "42")
+    #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
+    #expect(f.runner.calls.last?.environment["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)
+    let line = try #require(f.launcherLog.split(separator: "\n").last { $0.contains(" verb=run ") })
+    #expect(line.contains("backend=dxmt"))
+    #expect(line.contains("'dxvk' was removed in 0.1, using dxmt"))
 }
 
 @Test func unreadableGameSettingsAreIgnored() throws {
@@ -251,59 +303,29 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), rosetta:
     #expect(f.runner.calls.last?.environment["MACNEUTRON_STEAM_ACCOUNT"] == "1")
 }
 
-@Test func presenterIsInjectedByDefault() throws {
-    let f = try makeFixture(presenter: true)
+@Test func presenterIsAskedForByDefault() throws {
+    let f = try makeFixture(bridge: true)
     _ = f.launcher.launch(["waitforexitandrun", "/g/Game.exe"], environment: f.env)
-    let game = try #require(f.runner.calls.first { $0.arguments == ["/g/Game.exe"] })
-    #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
-}
-
-@Test func presenterComesAfterTheUsersOwnLibraries() throws {
-    let f = try makeFixture(presenter: true)
-    var env = f.env
-    env["DYLD_INSERT_LIBRARIES"] = "/opt/mine.dylib"
-    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
-    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"]
-        == "/opt/mine.dylib:" + f.launcher.layout.presenterLibrary.path(percentEncoded: false))
-}
-
-@Test func optingOutLeavesThePresenterOut() throws {
-    let f = try makeFixture(presenter: true)
-    var env = f.env
-    env["MACNEUTRON_NO_METALFX"] = "1"
-    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
-    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
-    try f.launcher.settings.save(GameSettings(metalFX: false), for: "42")
-    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
-    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
-}
-
-@Test func missingPresenterIsNoted() throws {
-    let f = try makeFixture()
-    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
-    #expect(f.runner.calls.last?.environment["DYLD_INSERT_LIBRARIES"] == nil)
-    #expect(f.launcherLog.contains("note: MetalFX presenter not installed"))
-}
-
-@Test func toolCommandsGetNoPresenter() throws {
-    let f = try makeFixture(presenter: true)
-    _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)
-    _ = f.launcher.launch(["getcompatpath", "/g/save"], environment: f.env)
+    let game = try #require(f.runner.calls.first { $0.arguments.first == SteamBridge.steamExe })
+    #expect(game.environment["MACNEUTRON_PRESENT"] == "1")
     #expect(f.runner.calls.allSatisfy { $0.environment["DYLD_INSERT_LIBRARIES"] == nil })
 }
 
-@Test func presenterAndSteamBridgeTravelTogether() throws {
-    let f = try makeFixture(bridge: true, presenter: true)
+@Test func optingOutLeavesThePresenterOff() throws {
+    let f = try makeFixture()
+    var env = f.env
+    env["MACNEUTRON_NO_METALFX"] = "1"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_PRESENT"] == nil)
+    try f.launcher.settings.save(GameSettings(metalFX: false), for: "42")
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
-    let game = try #require(f.runner.calls.last)
-    #expect(game.arguments.first == SteamBridge.steamExe)
-    #expect(game.environment["DYLD_INSERT_LIBRARIES"] == f.launcher.layout.presenterLibrary.path(percentEncoded: false))
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_PRESENT"] == nil)
 }
 
-@Test func defaultBackendIsDXMTEvenWithGPTKImported() throws {
+@Test func toolCommandsGetNoPresenter() throws {
     let f = try makeFixture()
-    try write(#"{"version": "4.0b2"}"#, to: f.launcher.layout.gptkManifest)
-    #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
-    #expect(f.launcherLog.contains("backend=dxmt"))
-    #expect(f.launcherLog.contains("gptk=4.0b2"))
+    _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)
+    _ = f.launcher.launch(["getcompatpath", "/g/save"], environment: f.env)
+    #expect(!f.runner.calls.isEmpty)
+    #expect(f.runner.calls.allSatisfy { $0.environment["MACNEUTRON_PRESENT"] == nil })
 }

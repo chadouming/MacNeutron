@@ -14,13 +14,11 @@ private struct PrecacheFixture {
     var launcherLog: String { (try? String(contentsOf: launcher.log.launcherLog, encoding: .utf8)) ?? "" }
 }
 
-/// A launcher whose tool folder has our DXMT with Direct3D 12 and the replayer. The fake dxmt-replay.exe writes a
+/// A launcher on the fake wine.app (DXMT `fork123` and its replayer). The fake dxmt-replay.exe writes a
 /// result line to its output and returns `replayStatus`.
 private func makePrecacheFixture(replayStatus: Int32 = 0,
                                  onReplay: (@Sendable (FakeRunner.Call) -> Void)? = nil) throws -> PrecacheFixture {
     let layout = try makeToolLayout()
-    try write("ours d3d12", to: layout.dxmtD3D12)
-    try write("ours replay", to: layout.dxmtReplay)
     try write("fork123\n", to: layout.dxmtVersionFile)
     let runner = FakeRunner { call in
         if call.arguments.first == "wineboot", let prefix = call.environment["WINEPREFIX"] {
@@ -38,7 +36,7 @@ private func makePrecacheFixture(replayStatus: Int32 = 0,
     let data = try makeTempDir().appending(path: "compatdata/42", directoryHint: .isDirectory)
     let launcher = Launcher(layout: layout, runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
-                            notifier: notifier, preflight: Preflight(rosettaAvailable: { true }),
+                            notifier: notifier, preflight: testPreflight,
                             settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")),
                             steam: try makeSteamLocation())
     let env = steamEnvironment(dataPath: data, appID: "42")

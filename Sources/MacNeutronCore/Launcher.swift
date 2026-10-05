@@ -44,29 +44,35 @@ public struct Launcher: Sendable {
             return fail("\(error)", argv: argv, notify: false)
         }
         do {
-            // Per-game settings from the app sit underneath; variables from Steam launch options win.
-            environment = try settings.load(context.appID).environment.merging(environment) { _, launchOption in launchOption }
+            environment = try withSettings(environment, appID: context.appID)
         } catch {
             log.append("note: ignoring unreadable game settings for \(context.appID): \(error)")
         }
+        let logging = environment["MACNEUTRON_LOG"] == "1"
+        let gameLog = logging ? log.gameLog(appID: context.appID) : nil
+        let identity: String
         do {
-            try preflight.check(layout)
+            identity = try preflight.check(layout, request: request)
         } catch {
-            return fail(error.description, argv: argv, notify: true)
+            return fail(error.description, argv: argv, notify: true, gameLog: gameLog)
+        }
+        // Steam's install scripts start redistributable installers with `run`; a 32-bit one can't run here.
+        if request.verb == .run, PEImage.machine(of: URL(filePath: request.target)) == PEImage.i386 {
+            log.append("skipped 32-bit installer \(URL(filePath: request.target).lastPathComponent)")
+            return 0
         }
 
-        let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"],
-                                                     gptkImported: layout.gptkImported)
-        let logging = environment["MACNEUTRON_LOG"] == "1"
-        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, layout: layout,
-                                          logging: logging)
+        let (backend, note) = GraphicsBackend.select(requested: environment["MACNEUTRON_GRAPHICS"])
+        var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
         let steamBridge = usesSteamBridge(request.verb, env)
         if steamBridge { addSteamClient(to: &env) }
-        if request.verb == .run || request.verb == .waitforexitandrun { addPresenter(to: &env) }
-        let gameLog = logging ? log.gameLog(appID: context.appID) : nil
+        // The MetalFX presenter inside wine.app reads this; only the game's verbs ask for it.
+        if request.verb == .run || request.verb == .waitforexitandrun, env["MACNEUTRON_NO_METALFX"] != "1",
+           env["MACNEUTRON_PRESENT"] == nil {
+            env["MACNEUTRON_PRESENT"] = "1"
+        }
         if let gameLog { writeHeader(to: gameLog, request: request, environment: env) }
-        let prefix = PrefixManager(context: context, layout: layout, runtimeVersion: layout.runtimeVersion ?? "unknown",
-                                   runner: runner)
+        let prefix = PrefixManager(context: context, layout: layout, identity: identity, runner: runner, log: log)
 
         do {
             let status: Int32
@@ -74,18 +80,18 @@ public struct Launcher: Sendable {
             case .runinprefix:
                 status = try runGame(request, env, gameLog, throughSteam: false)
             case .run:
-                try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
+                try prefix.prepare(environment: env, steamBridge: steamBridge)
                 if !steamBridge { try prefix.removeSteamBridge() }
                 status = try runGame(request, env, gameLog, throughSteam: steamBridge)
             case .waitforexitandrun:
                 // Prepare first (Proton's order): a launch queued on the prefix lock behind
                 // `run iscriptevaluator.exe` then finds that session's wineserver alive, and
                 // `-w` waits for the redistributable installers to finish.
-                try prefix.prepare(backend: backend, environment: env, steamBridge: steamBridge)
+                try prefix.prepare(environment: env, steamBridge: steamBridge)
                 if !steamBridge { try prefix.removeSteamBridge() }
                 _ = try runner.run(layout.wineserver, ["-w"], environment: env, output: nil)
                 // Shader pre-caching: after a DXMT or macOS update, rebuild the recorded pipelines before the game.
-                let precache = ShaderPrecache.enabled(backend: backend, layout: layout, environment: env)
+                let precache = ShaderPrecache.enabled(backend: backend, environment: env)
                     ? ShaderPrecache(context: context, layout: layout) : nil
                 if let precache, precache.needsReplay {
                     notifier.post(title: "MacNeutron", message: "Preparing shaders for this game (DXMT or macOS changed)")
@@ -109,26 +115,34 @@ public struct Launcher: Sendable {
                     precache?.writeStampIfMissing()
                 }
             case .getcompatpath, .getnativepath:
-                try prefix.prepare(backend: backend, environment: env)
+                try prefix.prepare(environment: env)
                 let flag = request.verb == .getcompatpath ? "-w" : "-u"
                 status = try runner.run(layout.wine, ["winepath.exe", flag, request.target], environment: env, output: nil)
             }
             var line = "verb=\(request.verb.rawValue) appid=\(context.appID) backend=\(backend.rawValue)"
-                + " runtime=\(layout.runtimeVersion ?? "unknown") gptk=\(layout.gptkVersion ?? "none") exit=\(status)"
+                + " runtime=\(ToolLayout.runtimeLabel(version: layout.runtimeVersion, identity: identity)) exit=\(status)"
             if let note { line += " note=\(note)" }
             log.append(line)
             return status
         } catch {
-            return fail("\(error)", argv: argv, notify: true)
+            return fail("\(error)", argv: argv, notify: true, gameLog: gameLog)
         }
     }
 
-    /// Steam's Stop button sends SIGTERM: kill every Wine process in the game's prefix.
+    /// Per-game settings from the app sit underneath; variables from Steam launch options win.
+    private func withSettings(_ environment: [String: String], appID: String) throws -> [String: String] {
+        try settings.load(appID).environment.merging(environment) { _, launchOption in launchOption }
+    }
+
+    /// Steam's Stop button sends SIGTERM: kill every Wine process in the game's prefix, in the environment the
+    /// launch built (the server only talks to a client in its own msync mode).
     public func terminate(environment: [String: String]) {
         stopRequested.set()
         guard let context = try? CompatContext(environment: environment) else { return }
-        var env = environment
-        env["WINEPREFIX"] = context.prefix.path(percentEncoded: false)
+        let merged = (try? withSettings(environment, appID: context.appID)) ?? environment
+        let env = LaunchEnvironment.build(base: merged, context: context,
+                                          backend: GraphicsBackend.select(requested: merged["MACNEUTRON_GRAPHICS"]).backend,
+                                          logging: false)
         _ = try? runner.run(layout.wineserver, ["-k"], environment: env, output: nil)
     }
 
@@ -154,18 +168,6 @@ public struct Launcher: Sendable {
         return true
     }
 
-    /// Loads the MetalFX presenter into the game's Wine processes, after any libraries the player set,
-    /// unless the game opts out.
-    private func addPresenter(to env: inout [String: String]) {
-        guard env["MACNEUTRON_NO_METALFX"] != "1" else { return }
-        guard layout.presenterInstalled else {
-            log.append("note: MetalFX presenter not installed")
-            return
-        }
-        let libraries = [env["DYLD_INSERT_LIBRARIES"], layout.presenterLibrary.path(percentEncoded: false)]
-        env["DYLD_INSERT_LIBRARIES"] = libraries.compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ":")
-    }
-
     /// Tells the runtime's lsteamclient where macOS Steam's client library is, and steam.exe who is logged in.
     private func addSteamClient(to env: inout [String: String]) {
         let passed = env["STEAM_COMPAT_CLIENT_INSTALL_PATH"]
@@ -189,6 +191,10 @@ public struct Launcher: Sendable {
         for key in environment.keys.sorted() {
             text += "\(key)=\(key == "MACNEUTRON_STEAM_ACCOUNT" ? "<redacted>" : environment[key]!)\n"
         }
+        append(text, to: gameLog)
+    }
+
+    private func append(_ text: String, to gameLog: URL) {
         if let handle = try? FileHandle(forWritingTo: gameLog) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
@@ -198,8 +204,9 @@ public struct Launcher: Sendable {
         }
     }
 
-    private func fail(_ message: String, argv: [String], notify: Bool) -> Int32 {
+    private func fail(_ message: String, argv: [String], notify: Bool, gameLog: URL? = nil) -> Int32 {
         log.append("error: \(message) argv=\(argv)")
+        if let gameLog { append("macneutron: \(message)\n", to: gameLog) }
         FileHandle.standardError.write(Data("macneutron: \(message)\n".utf8))
         if notify { notifier.post(title: "MacNeutron", message: message) }
         return 1

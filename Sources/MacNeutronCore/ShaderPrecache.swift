@@ -15,9 +15,9 @@ public struct ShaderPrecache: Sendable {
 
     public static func folder(for context: CompatContext) -> URL { context.dataPath.appending(path: "dxmt-pipelines") }
 
-    /// Recording and replay need our DXMT's Direct3D 12; `MACNEUTRON_PRECACHE=0` turns both off.
-    public static func enabled(backend: GraphicsBackend, layout: ToolLayout, environment: [String: String]) -> Bool {
-        backend == .dxmt && layout.dxmtHasD3D12 && environment["MACNEUTRON_PRECACHE"] != "0"
+    /// Recording and replay are DXMT's; `MACNEUTRON_PRECACHE=0` turns both off.
+    public static func enabled(backend: GraphicsBackend, environment: [String: String]) -> Bool {
+        backend == .dxmt && environment["MACNEUTRON_PRECACHE"] != "0"
     }
 
     public var stampFile: URL { folder.appending(path: "replayed") }

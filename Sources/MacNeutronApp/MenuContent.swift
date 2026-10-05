@@ -8,7 +8,7 @@ struct MenuContent: View {
 
     var body: some View {
         Text(model.status.menuTitle)
-        Text("Runtime \(model.runtimeVersion ?? "not installed") · D3DMetal \(model.gptkVersion ?? "not imported")")
+        Text(model.runtime.map { "Runtime \($0.label)" } ?? "Runtime not installed")
         if let busy = model.busy { Text(busy) }
         if let error = model.errorMessage {
             Text(error)
