@@ -220,9 +220,11 @@ r3() {
   "$@" getcompatpath "$W" > /dev/null 2>&1 || die "R3: the launcher didn't prepare $R3C/draw/pfx"  # untimed
   "$@" waitforexitandrun "$W/present_loop.exe" 1280 720 0 0 120 0 > "$W/draw.out" 2>&1 &
   pid=$!  # the launcher itself (env execs it), so the watchdog stops it
-  ( sleep 120; kill "$pid" 2> /dev/null ) & dog=$!
+  # A watchdog that ends by itself within a second of the launcher, so nothing is left to kill.
+  ( i=0; while [ $i -lt 120 ] && kill -0 "$pid" 2> /dev/null; do sleep 1; i=$((i + 1)); done
+    kill "$pid" 2> /dev/null || true ) & dog=$!
   wait "$pid" || true
-  kill "$dog" 2> /dev/null || true
+  wait "$dog" || true
   line=$(tr -d '\r' < "$W/draw.out" | LC_ALL=C /usr/bin/grep -m 1 'avg frame' || true)
   [ -n "$line" ] || die "R3: present_loop.exe on DXMT printed no 'avg frame' line; see $W/draw.out"
   echo "PASS R3 draw: $line"
@@ -275,7 +277,8 @@ EOF
   cd2=$(codesign -dvvv "$A/Contents/Helpers/wine.app" 2>&1 | sed -n 's/^CDHash=//p')
   [ -n "$cd1" ] && [ "$cd1" = "$cd2" ] || die "the app's wine.app isn't the release wine.app ($cd2, not $cd1)"
   out=$(sh "$ROOT/wine-arm64/tests/licences_test.sh" --app "$A") || die "R4: $out"
-  echo "PASS R4 $out"
+  printf '%s\n' "$out"
+  echo "PASS R4"
 }
 
 # The entry points: --self-test, or a version (released or rehearsed).
