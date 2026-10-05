@@ -1,6 +1,6 @@
 #!/bin/sh
 # The DXMT tooling that outlived dxmt/build.sh, without network or a real build: dxmt/published.sh (the release's
-# LGPL check), the pinned Clang and dxmt/llvm.sh's reuse of a finished LLVM.
+# LGPL check), the pinned Clang and the reuse of a finished LLVM and llvm-mingw only when they match the pins.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T="${TMPDIR:-/tmp}/macneutron dxmt-build-test"
@@ -26,12 +26,32 @@ bin=$(sh "$ROOT/dxmt/toolchain.sh")
 expect "the Windows compiler is Clang" "$("$bin/x86_64-w64-mingw32-gcc" --version | head -1 | LC_ALL=C /usr/bin/grep -c clang)" 1
 expect "make uses it" "$(make -s -C "$ROOT" -n bridge | LC_ALL=C /usr/bin/grep -c "$bin/x86_64-w64-mingw32-clang")" 1
 
-# dxmt/llvm.sh reuses a finished LLVM install: with .complete present, nothing is cloned or built (stub cmake/git fail).
+# dxmt/llvm.sh reuses a finished LLVM install built from the pinned LLVM_TAG (its .complete names it): nothing is
+# cloned or built (stub cmake/git fail, curl too). One from before the tag was recorded (an empty .complete) is
+# adopted; one built from another tag is built again.
+. "$ROOT/dxmt/pins"
 mkdir -p "$T/llvm/install" "$T/bin3"; touch "$T/llvm/install/.complete"
-printf '#!/bin/sh\necho called >> "%s/called"; exit 1\n' "$T" > "$T/bin3/cmake"; cp "$T/bin3/cmake" "$T/bin3/git"
-chmod +x "$T/bin3/cmake" "$T/bin3/git"
-out=$(PATH="$T/bin3:/usr/bin:/bin" sh -c '. "$1/dxmt/pins"; die() { echo "$*"; exit 1; }; . "$1/dxmt/llvm.sh"
-  build_llvm arm64 "$2/llvm/install" "$2/llvm/project" && echo reused' sh "$ROOT" "$T" 2>&1) || true
-expect "a finished LLVM install is reused" "$out:$([ -f "$T/called" ] && echo called)" "reused:"
+printf '#!/bin/sh\necho called >> "%s/called"; exit 1\n' "$T" > "$T/bin3/cmake"
+for t in git curl; do cp "$T/bin3/cmake" "$T/bin3/$t"; done
+chmod +x "$T/bin3/cmake" "$T/bin3/git" "$T/bin3/curl"
+llvm() { PATH="$T/bin3:/usr/bin:/bin" sh -c '. "$1/dxmt/pins"; die() { echo "$*"; exit 1; }; . "$1/dxmt/llvm.sh"
+  build_llvm arm64 "$2/llvm/install" "$2/llvm/project" 2> /dev/null && echo reused' sh "$ROOT" "$T" || true; }
+expect "an LLVM install from before the tag was recorded is adopted" "$(llvm):$(cat "$T/llvm/install/.complete")" \
+  "reused:$LLVM_TAG"
+expect "a finished LLVM install of the pinned tag is reused" "$(llvm):$([ -f "$T/called" ] && echo called)" "reused:"
+echo llvmorg-0.0.0 > "$T/llvm/install/.complete"
+expect "an LLVM install of another tag is built again" "$(llvm):$([ -f "$T/called" ] && echo called)" \
+  "can't clone llvm-project $LLVM_TAG:called"
+rm -f "$T/called"
+
+# dxmt/toolchain.sh likewise: llvm-mingw from before its pin was recorded (no .pin) is adopted; another pin's is
+# fetched again (the stub curl fails, so the run stops there).
+M="$T/b/dxmt-src/llvm-mingw"
+mkdir -p "$M/bin"; printf '#!/bin/sh\n' > "$M/bin/x86_64-w64-mingw32-clang"; chmod +x "$M/bin/x86_64-w64-mingw32-clang"
+mingw() { BUILD_DIR="$T/b" PATH="$T/bin3:/usr/bin:/bin" sh "$ROOT/dxmt/toolchain.sh" 2> /dev/null || true; }
+expect "llvm-mingw from before its pin was recorded is adopted" "$(mingw):$(cat "$M/.pin")" "$M/bin:$LLVM_MINGW_SHA256"
+expect "llvm-mingw of the pin is reused" "$(mingw):$([ -f "$T/called" ] && echo called)" "$M/bin:"
+echo 0000 > "$M/.pin"
+expect "llvm-mingw of another pin is fetched again" "$(mingw):$([ -f "$T/called" ] && echo called)" ":called"
 
 exit $fail
