@@ -1,8 +1,8 @@
 #!/bin/sh
 # licences_test.sh [--self-test] <wine.app>: every notice the shipped binaries need is in the bundle (ship-base spec §4).
 # Prints MISSING <what> per gap, then PASS or FAIL. Read-only. BUILD_DIR replaces build/ (FEX's External list).
-# --app <MacNeutron.app> (arm64 release spec §7.1, gate R4): the app's own licences (MIT, llvm-mingw's for steam.exe, a
-# README pointing into wine.app), then the check above on its Contents/Helpers/wine.app.
+# --app <MacNeutron.app> (arm64 release spec §7.1, gate R4): the app's own licences (MIT, llvm-mingw's for steam.exe,
+# equal to wine.app's copies, a README pointing into wine.app), then the check above on its Contents/Helpers/wine.app.
 # --self-test proves it red on copies in $TMPDIR: a licence file deleted (FEX's, MacNeutron's), an extra FEX external.
 # ponytail: a flat path list, no manifest format; add one when a second bundle needs the same list.
 set -u
@@ -88,6 +88,10 @@ if [ "${1:-}" = --app ]; then
   done
   g -qF 'Contents/Helpers/wine.app/Contents/Resources/licenses/' "$AL/README" 2> /dev/null \
     || { echo "MISSING the README's pointer to Contents/Helpers/wine.app/Contents/Resources/licenses/"; abad=1; }
+  for f in LICENSE.TXT COPYING.MinGW-w64-runtime.txt; do  # steam.exe's: the same texts as wine.app's llvm-mingw/
+    cmp -s "$AL/$f" "$A/Contents/Helpers/wine.app/Contents/Resources/licenses/llvm-mingw/$f" \
+      || { echo "DIFFERENT Contents/Resources/licenses/$f from wine.app's licenses/llvm-mingw/$f"; abad=1; }
+  done
   check "$A/Contents/Helpers/wine.app" "$B" || abad=1
   if [ $abad = 0 ]; then echo "PASS licences_test --app"; else echo "FAIL licences_test --app"; exit 1; fi
   exit 0
