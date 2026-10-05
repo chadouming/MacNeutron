@@ -27,6 +27,9 @@ REF="${MACNEUTRON_REFERENCE:-$HOME/Library/Application Support/MacNeutron Refere
 RTOOL="$WORK/rosetta tool"
 RPFX="$WORK/prefix rosetta"
 RWINE="$RTOOL/Libraries/Wine/bin"
+# steam-bridge's tool folder, assembled with `macneutron install`, and the compat folder its launcher runs use.
+BTOOL="$WORK/steam-bridge tool"
+BCOMPAT="$WORK/steam-bridge launcher ü/compat"
 # msync (ship-base spec §6) is on, as on the Rosetta runtime: a client and its wineserver have to agree, so every run
 # sees WINEMSYNC=1, and the wineserver a run starts gets it too. Only the msync step, which starts its own, differs.
 export WINEMSYNC=1
@@ -45,12 +48,13 @@ NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync x18 g5-jit steam-bridge $NEEDS_DXMT g4
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the reference's
-# clones dxmt/check.sh makes in the dxmt-* steps' work folders; and the tool folders it assembles there.
+# clones dxmt/check.sh makes in the dxmt-* steps' work folders; and the tool folders it assembles there, and
+# steam-bridge's.
 runtime_pids() {
   for d in "$RTOOL" "$WORK"/dxmt-*/ref; do
     set -- "$@" "$d/bin/macneutron" "$d/Libraries/Wine/lib/wine/x86_64-unix/wine" "$d/Libraries/Wine/bin/wineserver"
   done
-  for d in "$WORK"/dxmt-*/ours; do
+  for d in "$WORK"/dxmt-*/ours "$BTOOL"; do
     set -- "$@" "$d/bin/macneutron" "$d/wine.app/Contents/MacOS/wine" "$d/wine.app/Contents/Resources/bin/wineserver"
   done
   for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver" \
@@ -63,7 +67,7 @@ runtime_pids() {
 # Stops the runtimes: their servers first (the clones' too), then whatever still runs one of the binaries.
 cleanup() {
   for pair in "$TOOL/Contents/Resources/bin/wineserver|$PFX" "$UNENT/Contents/Resources/bin/wineserver|$UPFX" \
-    "$RWINE/wineserver|$RPFX/pfx"; do
+    "$RWINE/wineserver|$RPFX/pfx" "$BTOOL/wine.app/Contents/Resources/bin/wineserver|$BCOMPAT/pfx"; do
     if [ -d "${pair#*|}" ] && [ -x "${pair%%|*}" ]; then
       WINEPREFIX="${pair#*|}" "${pair%%|*}" -k > /dev/null 2>&1 || true
     fi
@@ -372,9 +376,26 @@ fonts_tls_cmd() {
 # STEAM_COMPAT_CLIENT_INSTALL_PATH, passed through). PROBE_REDACT=1: the log never holds the SteamID or persona name.
 # The crash dialog is off, so a crash ends the run. The x18 hits in Valve's arm64 code (data after ret today) are
 # reported, not gated. The probe's redaction self-test runs first.
+# Gate L3 (release spec §9): then both again through the launcher of a tool folder assembled from this runtime with
+# `macneutron install`, in one compat folder (bridge/check.sh's launcher pass, then the probe as Steam starts a game).
 SMITE2_API="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Engine/Binaries/ThirdParty"
 SMITE2_API="$SMITE2_API/Steamworks/Steamv157/Win64/steam_api64.dll"
 MAC_STEAM="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS"
+# probe_rows <run>: the redacted probe output in $out (exit $rc) has every row, and an auth ticket of more than 0 bytes.
+probe_rows() {
+  echo "$out"
+  echo "info steam-bridge: $1 probe exit $rc"
+  has() { echo "$out" | LC_ALL=C /usr/bin/grep -qx "$1"; }
+  m=$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^init message: ' || true)
+  ! has 'init: FAIL' || { echo "FAIL steam-bridge: $1: SteamAPI_Init failed: is Steam running and logged in?${m:+ ($m)}"
+    return 1; }
+  for want in 'init: ok' 'steamid ok' 'persona ok' 'auth ticket: callback, result 1' 'fault: caught'; do
+    has "$want" || { echo "FAIL steam-bridge: $1: no '$want' line"; return 1; }
+  done
+  n=$(echo "$out" | sed -n 's/^auth ticket: handle [0-9]*, \([0-9]*\) bytes$/\1/p' | head -n 1)
+  [ "${n:-0}" -gt 0 ] || { echo "FAIL steam-bridge: $1: auth ticket of ${n:-no} bytes"; return 1; }
+  echo "info steam-bridge: $1: steamid ok, ticket $n bytes"
+}
 steam_bridge_cmd() {
   sh "$ROOT/bridge/probe.sh" --redact-self-test \
     || { echo "FAIL steam-bridge: the probe's redaction self-test failed"; return 1; }
@@ -389,17 +410,17 @@ steam_bridge_cmd() {
     || echo "$out" | tail -n 1)"; return 1; }
   out=$(PROBE_REDACT=1 STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" MACNEUTRON_ARM64_APP="$TOOL" \
     MACNEUTRON_ARM64_PREFIX="$PFX" sh "$ROOT/bridge/probe.sh" "$SMITE2_API" 2>&1) && rc=0 || rc=$?
+  probe_rows direct || return 1
+  "$ROOT/.build/release/macneutron" install --tool-dir "$BTOOL" --wine-app "$TOOL" \
+    --steam-exe "$ROOT/build/bridge/arm64/steam.exe" || return 1
+  out=$(BRIDGE_CHECK_WORK="${BCOMPAT%/compat}" MACNEUTRON_TOOL_DIR="$BTOOL" sh "$ROOT/bridge/check.sh" 2>&1) \
+    && rc=0 || rc=$?
   echo "$out"
-  echo "info steam-bridge: probe exit $rc"
-  has() { echo "$out" | LC_ALL=C /usr/bin/grep -qx "$1"; }
-  m=$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^init message: ' || true)
-  ! has 'init: FAIL' || { echo "FAIL steam-bridge: SteamAPI_Init failed: is Steam running and logged in?${m:+ ($m)}"; return 1; }
-  for want in 'init: ok' 'steamid ok' 'persona ok' 'auth ticket: callback, result 1' 'fault: caught'; do
-    has "$want" || { echo "FAIL steam-bridge: no '$want' line"; return 1; }
-  done
-  n=$(echo "$out" | sed -n 's/^auth ticket: handle [0-9]*, \([0-9]*\) bytes$/\1/p' | head -n 1)
-  [ "${n:-0}" -gt 0 ] || { echo "FAIL steam-bridge: auth ticket of ${n:-no} bytes"; return 1; }
-  echo "info steam-bridge: steamid ok, ticket $n bytes"
+  [ "$rc" = 0 ] || { echo "FAIL steam-bridge: bridge/check.sh through the launcher: $(echo "$out" \
+    | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' || echo "$out" | tail -n 1)"; return 1; }
+  out=$(PROBE_REDACT=1 STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" STEAM_COMPAT_DATA_PATH="$BCOMPAT" \
+    MACNEUTRON_TOOL_DIR="$BTOOL" sh "$ROOT/bridge/probe.sh" "$SMITE2_API" 2>&1) && rc=0 || rc=$?
+  probe_rows launcher || return 1
   if h=$(sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$client/steamclient.dylib"); then
     echo "info steam x18: $(echo "$h" | LC_ALL=C /usr/bin/grep -c . || true) hits"
   else

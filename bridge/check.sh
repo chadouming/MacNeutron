@@ -1,29 +1,39 @@
 #!/bin/sh
-# Runs steam.exe under the installed MacNeutron runtime: real Wine, no Steam needed (bridge spec §9).
-# Needs `make bridge` and an installed runtime; MACNEUTRON_TOOL overrides the default tool folder.
-# arm64 mode (ship-base spec §7), when MACNEUTRON_ARM64_APP names a wine.app: the aarch64 steam.exe and helper on that
-# runtime, in the booted prefix MACNEUTRON_ARM64_PREFIX (wine-arm64/check.sh's). BRIDGE_CHECK_WORK replaces the folder
-# the helper's files go in (and, on Rosetta, the prefix).
+# Runs steam.exe on wine.app: real Wine, no Steam needed (bridge spec §9, release spec §9 L3). Needs `make build bridge
+# wine-arm64`. Two modes:
+# - arm64 (ship-base spec §7), when MACNEUTRON_ARM64_APP names a wine.app: the aarch64 steam.exe and helper on that
+#   runtime, run directly in the booted prefix MACNEUTRON_ARM64_PREFIX (wine-arm64/check.sh's).
+# - a tool folder, MACNEUTRON_TOOL_DIR (assembled with `macneutron install … --steam-exe`), or else $WORK/tool,
+#   assembled here from build/wine-arm64/wine.app: the same rows directly in its prefix, then through its launcher.
+# BRIDGE_CHECK_WORK replaces the folder the helper's files (and, with a tool folder, the compat folder) go in.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${BRIDGE_CHECK_WORK:-${TMPDIR:-/tmp}/macneutron bridge ü}"   # a space and a non-ASCII letter on purpose
+B="$ROOT/build/bridge/arm64"
+mkdir -p "$WORK"
 if [ -n "${MACNEUTRON_ARM64_APP:-}" ]; then
-  B="$ROOT/build/bridge/arm64"
   TOOL="$MACNEUTRON_ARM64_APP"
   WINE="$TOOL/Contents/MacOS/wine"
   export WINEPREFIX="${MACNEUTRON_ARM64_PREFIX:?arm64 mode needs MACNEUTRON_ARM64_PREFIX}"
   [ -d "$WINEPREFIX" ] || { echo "check: no prefix at $WINEPREFIX" >&2; exit 1; }
 else
-  B="$ROOT/build/bridge"
-  TOOL="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
-  WINE="$TOOL/Libraries/Wine/bin/wine"
-  export WINEPREFIX="$WORK/pfx"
+  if [ -z "${MACNEUTRON_TOOL_DIR:-}" ]; then
+    MACNEUTRON_TOOL_DIR="$WORK/tool"
+    "$ROOT/.build/release/macneutron" install --tool-dir "$MACNEUTRON_TOOL_DIR" \
+      --wine-app "$ROOT/build/wine-arm64/wine.app" --steam-exe "$B/steam.exe" \
+      || { echo "check: assembling the tool folder failed" >&2; exit 1; }
+  fi
+  TOOL="$MACNEUTRON_TOOL_DIR"
+  WINE="$TOOL/wine.app/Contents/MacOS/wine"
+  COMPAT="$WORK/compat"
+  export WINEPREFIX="$COMPAT/pfx"
+  # The prefix, prepared by the launcher (getcompatpath installs no bridge: the direct rows copy steam.exe below).
+  env STEAM_COMPAT_DATA_PATH="$COMPAT" SteamAppId=0 "$TOOL/bin/macneutron" launch getcompatpath "$WORK" > /dev/null \
+    || { echo "check: the launcher didn't prepare $WINEPREFIX" >&2; exit 1; }
 fi
 export WINEDEBUG=-all WINEMSYNC=1
 
 [ -x "$WINE" ] || { echo "check: no runtime at $TOOL" >&2; exit 1; }
-mkdir -p "$WORK"   # Wine creates only the prefix folder itself
-[ -d "$WINEPREFIX" ] || "$WINE" wineboot -u >/dev/null 2>&1
 STEAM="$WINEPREFIX/drive_c/Program Files (x86)/Steam"
 mkdir -p "$STEAM" "$WORK/game dir"
 cp "$B/steam.exe" "$STEAM/steam.exe"
@@ -51,7 +61,29 @@ set +e; "$WINE" "$STEAMEXE" 'C:\missing.exe' >/dev/null 2>&1; got=$?; set -e
 expect "missing program exits 1" "$got" 1
 expect "launchers may start children outside the job" "$(steam breakaway)" "breakaway ok"
 
-# A second steam.exe in the prefix (a failed one, then a short one) must not end the first one's Steam.
+# The same rows through the tool folder's launcher, as Steam starts a game: the launcher copies steam.exe and starts
+# the game through it. A fake account ID: the launcher would fill in the real one, which steam.exe writes to the
+# prefix's registry. The helper goes as a macOS path; the launcher converts it.
+if [ -n "${COMPAT:-}" ]; then
+  GAME="$WORK/game dir/hélper.exe"
+  L() { env STEAM_COMPAT_DATA_PATH="$COMPAT" SteamAppId=0 MACNEUTRON_STEAM_ACCOUNT=12345 "$TOOL/bin/macneutron" launch "$@"; }
+  lsteam() { L waitforexitandrun "$GAME" "$@" 2>/dev/null | tr -d '\r'; }
+  set +e; L waitforexitandrun "$GAME" exit 7 >/dev/null 2>&1; got=$?; set -e
+  expect "launcher: exit code passes through" "$got" 7
+  expect "launcher: arguments arrive unchanged" "$(lsteam args 'a b' '--name="Player One"' '')" '[a b][--name="Player One"][]'
+  expect "launcher: registry names a live Steam" "$(lsteam steam)" \
+    'alive=1 user=12345 client64=C:\Program Files (x86)\Steam\steamclient64.dll'
+  rm -f "$WORK/late.txt"
+  lsteam spawn "$(winpath "$WORK/late.txt")" >/dev/null
+  expect "launcher: launcher-style child still sees Steam" "$(tr -d '\r' < "$WORK/late.txt" 2>/dev/null || true)" "alive=1"
+  expect "launcher: pid cleared afterwards" "$(L runinprefix "$GAME" pid 2>/dev/null | tr -d '\r')" 0
+  set +e; L waitforexitandrun 'C:\missing.exe' >/dev/null 2>&1; got=$?; set -e
+  expect "launcher: missing program exits 1" "$got" 1
+  expect "launcher: launchers may start children outside the job" "$(lsteam breakaway)" "breakaway ok"
+fi
+
+# A second steam.exe in the prefix (a failed one, then a short one) must not end the first one's Steam. Direct only: a
+# second `launch waitforexitandrun` would wait in `wineserver -w` for the first one's processes.
 rm -f "$WORK/late.txt"
 steam spawn "$(winpath "$WORK/late.txt")" >/dev/null &
 sleep 0.5
