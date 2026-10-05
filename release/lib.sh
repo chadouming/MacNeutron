@@ -5,11 +5,22 @@ die() { echo "release: $*" >&2; exit 1; }
 # syspolicy_check <mode> <bundle>, its report in <work-dir>/syspolicy-<mode>.txt. Fails on any finding that isn't a
 # warning, or on a failure with no findings (a tool error). Warnings are counted, not fatal: wine.app keeps its
 # Mach-Os under Resources/ (Wine's layout), which the check flags as warnings; Apple's verdict decides.
+# One exception, before submission only: an app that nests code Apple has already notarized (MacNeutron.app around the
+# notarized wine.app) gets a lone "Gatekeeper rejected this file" on its main executable while spctl gives the plain
+# pre-notarization verdict (with an un-notarized wine.app swapped in, the finding goes away). That one is expected;
+# the notary service decides, and `syspolicy distribution` after stapling is the gate.
 syspolicy() {  # syspolicy <mode> <bundle> <work-dir>
   report="$3/syspolicy-$1.txt"
-  /usr/bin/syspolicy_check "$1" "$2" > "$report" 2>&1 && return 0
+  "${SYSPOLICY_CHECK:-/usr/bin/syspolicy_check}" "$1" "$2" > "$report" 2>&1 && return 0
   errors=$(LC_ALL=C /usr/bin/grep 'Severity:' "$report" | LC_ALL=C /usr/bin/grep -cv 'Severity: Warning' || true)
   warnings=$(LC_ALL=C /usr/bin/grep -c 'Severity: Warning' "$report" || true)
+  if [ "$1" = notary-submission ] && [ "$errors" -eq 1 ] \
+    && LC_ALL=C /usr/bin/grep -q 'Full Error: Gatekeeper rejected this file' "$report" \
+    && spctl -a -vvv -t exec "$2" 2>&1 | LC_ALL=C /usr/bin/grep -qx 'source=Unnotarized Developer ID'; then
+    echo "syspolicy_check $1: $warnings warnings, and Gatekeeper's pre-notarization rejection (nested code already" \
+      "notarized): $report"
+    return 0
+  fi
   if [ "$errors" -gt 0 ] || [ "$warnings" -eq 0 ]; then cat "$report" >&2; die "syspolicy_check $1 failed for $2"; fi
   echo "syspolicy_check $1: $warnings warnings, no errors: $report"
 }

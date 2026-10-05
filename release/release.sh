@@ -230,6 +230,31 @@ EOF
   }
   staples "a staple that fails twice is retried" 2 0:3:2
   staples "a staple that keeps failing stops after six tries" 99 1:6:5
+  # syspolicy's one tolerated finding, with stand-ins for syspolicy_check (a canned report, exit 70) and spctl.
+  cat > "$T/shim/syspolicy_check" << 'EOF'
+#!/bin/sh
+for f in $SHIM_FINDINGS; do
+  case $f in
+    gk) printf 'Codesign Error\n    Severity: Fatal\n    Full Error: Gatekeeper rejected this file.\n' ;;
+    fatal) printf 'Codesign Error\n    Severity: Fatal\n    Full Error: The signature has no secure timestamp.\n' ;;
+    warn) printf 'Incorrect Bundle Structure\n    Severity: Warning\n    Full Error: Resources contains Mach-Os.\n' ;;
+  esac
+done
+exit 70
+EOF
+  printf '#!/bin/sh\necho "Some.app: rejected" >&2\necho "source=$SHIM_SOURCE" >&2\nexit 3\n' > "$T/shim/spctl"
+  chmod +x "$T/shim/syspolicy_check" "$T/shim/spctl"
+  checks() {  # checks <case> <mode> <findings> <spctl source> <want status>
+    out=$( (export SYSPOLICY_CHECK="$T/shim/syspolicy_check" SHIM_FINDINGS="$3" SHIM_SOURCE="$4"
+      shim syspolicy "$2" "$T/Some.app" "$T") 2>&1 ) && st=0 || st=$?
+    if [ "$st" = "$5" ]; then ok "$1"; else bad "$1" "status $st, want $5: $out"; fi
+  }
+  checks "a submission check with warnings only" notary-submission "warn warn" "Unnotarized Developer ID" 0
+  checks "Gatekeeper's lone pre-notarization rejection" notary-submission "gk" "Unnotarized Developer ID" 0
+  checks "that rejection with another verdict from spctl" notary-submission "gk" "no usable signature" 1
+  checks "that rejection beside another fatal finding" notary-submission "gk fatal warn" "Unnotarized Developer ID" 1
+  checks "that rejection after stapling (distribution)" distribution "gk" "Unnotarized Developer ID" 1
+  checks "a failure with no findings" notary-submission "" "Unnotarized Developer ID" 1
 
   if [ $fail = 0 ]; then echo "PASS release self-test"; else echo "FAIL release self-test"; fi
   return $fail
