@@ -608,6 +608,12 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   compat folder, once: `player-data-carried` in the compat folder, written after every carry, stops a later retry from
   carrying again; each rename removes it, so each rename carries once. Not carried: other hives (`system.reg`) and files elsewhere in `drive_c` (a game saving beside its
   exe or in `ProgramData`).
+- **§3.6, §3.7 (2026-10-05, Task X1):** `WINEDLLOVERRIDES` also names `libxess,libxess_dx11=b`, merged like the
+  backend's entries (a user's own entries for them win), unless `MACNEUTRON_XESS=1`. Wine patch 0022's builtins stand
+  in for Intel's XeSS libraries: they export the functions of the ones games ship (XeSS SDK 2.0.1), `xessGetVersion`
+  reports 2.0.1, and every context-creating or capability call returns `XESS_RESULT_ERROR_UNSUPPORTED_DEVICE`, so
+  games fall back to another upscaler. XeSS's path for other GPUs is built on DP4a, which Apple GPUs emulate: SMITE 2
+  ran at ~4 FPS with it on every translator, and a fresh prefix makes XeSS its default.
 - **§3.7:** `MACNEUTRON_PRESENT=1` goes only to the game's processes (`run`, `waitforexitandrun`), as the presenter
   does today.
 - **§3.9:** the install is `RuntimeInstaller.install(wineApp:layout:launcherBinary:steamExe:force:) ->

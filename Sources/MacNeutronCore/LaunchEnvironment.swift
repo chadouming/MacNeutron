@@ -7,7 +7,10 @@ public enum LaunchEnvironment {
                              logging: Bool) -> [String: String] {
         var env = base
         env["WINEPREFIX"] = context.prefix.path(percentEncoded: false)
-        env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides, user: base["WINEDLLOVERRIDES"])
+        // XeSS's path for non-Intel GPUs (DP4a) ran SMITE 2 at ~4 FPS: Wine's stand-ins report no XeSS device,
+        // so games pick another upscaler.
+        let xess = base["MACNEUTRON_XESS"] == "1" ? "" : ";libxess,libxess_dx11=b"
+        env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides + xess, user: base["WINEDLLOVERRIDES"])
         if base["WINEDEBUG"] == nil {
             env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll,+steamclient" : "-all"
         }
