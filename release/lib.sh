@@ -14,6 +14,9 @@ syspolicy() {  # syspolicy <mode> <bundle> <work-dir>
   echo "syspolicy_check $1: $warnings warnings, no errors: $report"
 }
 
+# Gatekeeper accepts <path> to run (spctl writes its verdict to stderr).
+accepted() { spctl -a -vvv -t exec "$1" 2>&1 | LC_ALL=C /usr/bin/grep -q ': accepted$'; }
+
 # Notarizes <bundle> and staples its ticket (spec §6.2/§6.3): the zip and the notary output go in <work-dir>.
 # Prints `submission <id>`. On a rejection, prints the notary log and fails.
 notarize_and_staple() {  # notarize_and_staple <bundle> <work-dir>
