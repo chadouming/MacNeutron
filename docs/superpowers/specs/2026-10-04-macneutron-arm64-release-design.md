@@ -595,11 +595,16 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   unchanged, 3 when deferred (printing `deferred: <path> is running`), 1 on an error. `--steam-exe` is for tool folders
   assembled from a dev build (`.build/release/` has no `steam.exe` beside the CLI). The app's poll also reinstalls when
   `runtime-damaged` appears.
+- **§3.9, §10:** step 1's scan is repeated right before the swap (after `codesign --verify`), and a hit defers the
+  install as step 1 does. After a FAILED install (an error, not a deferral) the app's poll doesn't retry, even when
+  `runtime-damaged` appears: it waits for Repair or the next start (re-copying a failing install every 3 s would thrash).
 - **§3.11:** setup's requirements step checks Steam only: macOS refuses to open the app below macOS 27 or on Intel
   (its minimum is 27.0 and it is arm64 only). The host build (`swift build -c release`) is already thin arm64 on Apple
   Silicon; `release.sh` asserts `lipo -archs` is `arm64`. AVX is a per-game toggle, not a column.
 - **§5.2:** release mode also deletes the `winecpp` and `wineg++` links (to `winegcc`). Stripping goes between the
-  layout and the signing; every assertion runs after signing, as today.
+  layout and the signing; every assertion runs after signing, as today, except the build-path check (no shipped file
+  names the repository, the build folder or `$HOME/`; release mode, and `release.sh` on the assembled app), which runs
+  between stripping and signing so a failure stops before anything is signed.
 - **§5.3:** `winemetal.so` has no initialisation today; patch 0002 adds a constructor.
 - **§6.3 step 1:** `release.sh` fetches `origin` first; it checks each tree with `lib.sh`'s `build_mode` (naming any
   tree not `applied`) and then requires `make wine-arm64` to say `up to date`; `dxmt/published.sh` runs on
@@ -607,6 +612,9 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
 - **§6.3 step 2:** `bundle.sh --release` writes the bundle's `licenses/SOURCE` itself (a `lib.sh` function shared with
   `build.sh`) with `MACNEUTRON_COMMIT` = HEAD: the staged dev `SOURCE` lags HEAD after commits that change no build
   input.
+- **§7.1:** the MacNeutron entry in `wine-arm64/licenses/README` names the presenter alone (MIT); the patch files keep
+  the licence of the tree they patch, as §1's decision says (Wine and DXMT: LGPL-2.1-or-later; FEX: MIT; lsteamclient:
+  Valve's terms), and the entry says so. `licences_test.sh` still requires it.
 - **§7.2:** lsteamclient's blob-less clone can't be `git archive`d offline; the archive tars its clean sparse worktree
   (exactly the files the build used) and records the commit. Each patched tree's tar names its applied commit
   (`<tree>.applied`), not the pin; the archive carries `SOURCES.txt` (tree, pin, applied commit, patch count). R5 checks

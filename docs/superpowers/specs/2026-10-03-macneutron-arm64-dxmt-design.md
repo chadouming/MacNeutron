@@ -2,6 +2,7 @@
 
 - **Date:** 2026-10-03 (revised the same day after an adversarial review)
 - **Status:** Implemented 2026-10-03; gates D1–D5 pass and D6 is measured: `docs/testing/acceptance-arm64-dxmt.md`. Written for autonomous execution: the maintainer asked to carry this sub-project through design, plan and implementation without approval stops ("keep going until it's working"); every decision taken on their behalf is in the decisions table. The plan's execution ledger was a git-ignored workspace and was not kept; its results are in `docs/testing/acceptance-arm64-dxmt.md`.
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:**
   - `2026-10-02-macneutron-native-arm64-design.md` (sub-project 1: the entitled, 4K-page `wine.app`, FEX, `wine-arm64/`)
   - `2026-09-28-macneutron-dxmt-fork-design.md` (our DXMT fork, `dxmt/` build, `dxmt/check.sh`)

@@ -1,13 +1,13 @@
 #!/bin/sh
 # The arm64 Wine runtime on the maintainer's Mac (native arm64 spec §7.3): `make wine-arm64-check`.
 # Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`, and the
-# dxmt steps `make dxmt dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench also needs MacNeutron's runtime-v4.7.3
-# installed (MACNEUTRON_TOOL names another tool folder), and the dxmt-* steps, for their D3DMetal reference, the same
-# with GPTK imported and its tarball cached. dxmt-x64's FSR 3 check needs SMITE 2 installed (Steam): its
-# amd_fidelityfx_dx12.dll, read from the game's install, never copied. steam-bridge needs `make bridge`, Steam running
-# and logged in, and SMITE 2 installed (its steam_api64.dll, read in place).
-# Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as
-# Sub-project 5 will install it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
+# dxmt steps `make dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench, for its Rosetta baseline, and the dxmt-* steps,
+# for their D3DMetal reference, need the frozen Rosetta reference (tools/freeze-rosetta-reference.sh;
+# MACNEUTRON_REFERENCE names another), run by its own launcher. dxmt-x64's FSR 3 check needs SMITE 2 installed
+# (Steam): its amd_fidelityfx_dx12.dll, read from the game's install, never copied. steam-bridge needs `make bridge`,
+# Steam running and logged in, and SMITE 2 installed (its steam_api64.dll, read in place).
+# Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as the
+# app installs it. A step that needs a prefix gets one from `boot`, which runs first if it isn't named.
 # Nothing of the runtime is left after the script exits, whatever the reason: the last line is PASS or FAIL orphans.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,12 +21,15 @@ PFX="$WORK/prefix arm64"
 # The `unentitled` step's loader: a clone of $TOOL re-signed without the entitlement, with a prefix of its own.
 UNENT="$WORK/unentitled.app"
 UPFX="$WORK/prefix unentitled"
-# Gate G4's baseline: a clone of the installed MacNeutron tool folder (x86_64 Wine under Rosetta), never the folder
-# itself, run by the launcher just built. RPFX is its STEAM_COMPAT_DATA_PATH; Wine's prefix is RPFX/pfx.
-RSRC="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
+# Gate G4's baseline: a clone of the frozen Rosetta reference (x86_64 Wine under Rosetta), never the reference itself,
+# run by its own launcher. RPFX is its STEAM_COMPAT_DATA_PATH; Wine's prefix is RPFX/pfx.
+REF="${MACNEUTRON_REFERENCE:-$HOME/Library/Application Support/MacNeutron Reference/rosetta-tool}"
 RTOOL="$WORK/rosetta tool"
 RPFX="$WORK/prefix rosetta"
 RWINE="$RTOOL/Libraries/Wine/bin"
+# steam-bridge's tool folder, assembled with `macneutron install`, and the compat folder its launcher runs use.
+BTOOL="$WORK/steam-bridge tool"
+BCOMPAT="$WORK/steam-bridge launcher ü/compat"
 # msync (ship-base spec §6) is on, as on the Rosetta runtime: a client and its wineserver have to agree, so every run
 # sees WINEMSYNC=1, and the wineserver a run starts gets it too. Only the msync step, which starts its own, differs.
 export WINEMSYNC=1
@@ -44,11 +47,15 @@ NEEDS_PREFIX="$NEEDS_PREFIX dxmt $NEEDS_DXMT g4-bench"
 NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync x18 g5-jit steam-bridge $NEEDS_DXMT g4-bench"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
-# knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the clones
-# dxmt/check.sh makes in the dxmt-* steps' work folders.
+# knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the reference's
+# clones dxmt/check.sh makes in the dxmt-* steps' work folders; and the tool folders it assembles there, and
+# steam-bridge's.
 runtime_pids() {
-  for d in "$RTOOL" "$WORK"/dxmt-*/stock "$WORK"/dxmt-*/ours; do
+  for d in "$RTOOL" "$WORK"/dxmt-*/ref; do
     set -- "$@" "$d/bin/macneutron" "$d/Libraries/Wine/lib/wine/x86_64-unix/wine" "$d/Libraries/Wine/bin/wineserver"
+  done
+  for d in "$WORK"/dxmt-*/ours "$BTOOL"; do
+    set -- "$@" "$d/bin/macneutron" "$d/wine.app/Contents/MacOS/wine" "$d/wine.app/Contents/Resources/bin/wineserver"
   done
   for f in "$TOOL/Contents/MacOS/wine" "$TOOL/Contents/Resources/bin/wineserver" \
     "$UNENT/Contents/MacOS/wine" "$UNENT/Contents/Resources/bin/wineserver" "$@"; do
@@ -60,7 +67,7 @@ runtime_pids() {
 # Stops the runtimes: their servers first (the clones' too), then whatever still runs one of the binaries.
 cleanup() {
   for pair in "$TOOL/Contents/Resources/bin/wineserver|$PFX" "$UNENT/Contents/Resources/bin/wineserver|$UPFX" \
-    "$RWINE/wineserver|$RPFX/pfx"; do
+    "$RWINE/wineserver|$RPFX/pfx" "$BTOOL/wine.app/Contents/Resources/bin/wineserver|$BCOMPAT/pfx"; do
     if [ -d "${pair#*|}" ] && [ -x "${pair%%|*}" ]; then
       WINEPREFIX="${pair#*|}" "${pair%%|*}" -k > /dev/null 2>&1 || true
     fi
@@ -369,9 +376,26 @@ fonts_tls_cmd() {
 # STEAM_COMPAT_CLIENT_INSTALL_PATH, passed through). PROBE_REDACT=1: the log never holds the SteamID or persona name.
 # The crash dialog is off, so a crash ends the run. The x18 hits in Valve's arm64 code (data after ret today) are
 # reported, not gated. The probe's redaction self-test runs first.
+# Gate L3 (release spec §9): then both again through the launcher of a tool folder assembled from this runtime with
+# `macneutron install`, in one compat folder (bridge/check.sh's launcher pass, then the probe as Steam starts a game).
 SMITE2_API="$HOME/Library/Application Support/Steam/steamapps/common/SMITE 2/Windows/Engine/Binaries/ThirdParty"
 SMITE2_API="$SMITE2_API/Steamworks/Steamv157/Win64/steam_api64.dll"
 MAC_STEAM="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS"
+# probe_rows <run>: the redacted probe output in $out (exit $rc) has every row, and an auth ticket of more than 0 bytes.
+probe_rows() {
+  echo "$out"
+  echo "info steam-bridge: $1 probe exit $rc"
+  has() { echo "$out" | LC_ALL=C /usr/bin/grep -qx "$1"; }
+  m=$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^init message: ' || true)
+  ! has 'init: FAIL' || { echo "FAIL steam-bridge: $1: SteamAPI_Init failed: is Steam running and logged in?${m:+ ($m)}"
+    return 1; }
+  for want in 'init: ok' 'steamid ok' 'persona ok' 'auth ticket: callback, result 1' 'fault: caught'; do
+    has "$want" || { echo "FAIL steam-bridge: $1: no '$want' line"; return 1; }
+  done
+  n=$(echo "$out" | sed -n 's/^auth ticket: handle [0-9]*, \([0-9]*\) bytes$/\1/p' | head -n 1)
+  [ "${n:-0}" -gt 0 ] || { echo "FAIL steam-bridge: $1: auth ticket of ${n:-no} bytes"; return 1; }
+  echo "info steam-bridge: $1: steamid ok, ticket $n bytes"
+}
 steam_bridge_cmd() {
   sh "$ROOT/bridge/probe.sh" --redact-self-test \
     || { echo "FAIL steam-bridge: the probe's redaction self-test failed"; return 1; }
@@ -386,17 +410,17 @@ steam_bridge_cmd() {
     || echo "$out" | tail -n 1)"; return 1; }
   out=$(PROBE_REDACT=1 STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" MACNEUTRON_ARM64_APP="$TOOL" \
     MACNEUTRON_ARM64_PREFIX="$PFX" sh "$ROOT/bridge/probe.sh" "$SMITE2_API" 2>&1) && rc=0 || rc=$?
+  probe_rows direct || return 1
+  "$ROOT/.build/release/macneutron" install --tool-dir "$BTOOL" --wine-app "$TOOL" \
+    --steam-exe "$ROOT/build/bridge/arm64/steam.exe" || return 1
+  out=$(BRIDGE_CHECK_WORK="${BCOMPAT%/compat}" MACNEUTRON_TOOL_DIR="$BTOOL" sh "$ROOT/bridge/check.sh" 2>&1) \
+    && rc=0 || rc=$?
   echo "$out"
-  echo "info steam-bridge: probe exit $rc"
-  has() { echo "$out" | LC_ALL=C /usr/bin/grep -qx "$1"; }
-  m=$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^init message: ' || true)
-  ! has 'init: FAIL' || { echo "FAIL steam-bridge: SteamAPI_Init failed: is Steam running and logged in?${m:+ ($m)}"; return 1; }
-  for want in 'init: ok' 'steamid ok' 'persona ok' 'auth ticket: callback, result 1' 'fault: caught'; do
-    has "$want" || { echo "FAIL steam-bridge: no '$want' line"; return 1; }
-  done
-  n=$(echo "$out" | sed -n 's/^auth ticket: handle [0-9]*, \([0-9]*\) bytes$/\1/p' | head -n 1)
-  [ "${n:-0}" -gt 0 ] || { echo "FAIL steam-bridge: auth ticket of ${n:-no} bytes"; return 1; }
-  echo "info steam-bridge: steamid ok, ticket $n bytes"
+  [ "$rc" = 0 ] || { echo "FAIL steam-bridge: bridge/check.sh through the launcher: $(echo "$out" \
+    | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' || echo "$out" | tail -n 1)"; return 1; }
+  out=$(PROBE_REDACT=1 STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" STEAM_COMPAT_DATA_PATH="$BCOMPAT" \
+    MACNEUTRON_TOOL_DIR="$BTOOL" sh "$ROOT/bridge/probe.sh" "$SMITE2_API" 2>&1) && rc=0 || rc=$?
+  probe_rows launcher || return 1
   if h=$(sh "$ROOT/wine-arm64/tools/x18scan.sh" -arch arm64 "$client/steamclient.dylib"); then
     echo "info steam x18: $(echo "$h" | LC_ALL=C /usr/bin/grep -c . || true) hits"
   else
@@ -422,8 +446,8 @@ g5_jit_cmd() {
 }
 
 # Gate G4 (spec §8), measured, not gated: x64-bench, five processes per side, the sides alternating so drift falls on
-# both alike. FEX: this stack, with FEX's defaults. Rosetta: the launcher just built, in a clone of the installed tool
-# folder (the pinned runtime-v4.7.3), with dxmt/check.sh's environment; the launcher adds ROSETTA_ADVERTISE_AVX=1 and
+# both alike. FEX: this stack, with FEX's defaults. Rosetta: the frozen reference's own launcher, in a clone of it (the
+# pinned runtime-v4.7.3), with dxmt/check.sh's environment; that launcher adds ROSETTA_ADVERTISE_AVX=1 and
 # WINEMSYNC=1. Both sides run with WINEDEBUG=-all, the launcher's default. Passes when every run printed every row;
 # bench_report.py's table (FEX time / Rosetta time per row) says how fast. Output in $WORK/bench.
 rosetta() {  # rosetta <launch verb> <args...>
@@ -431,12 +455,10 @@ rosetta() {  # rosetta <launch verb> <args...>
     "$RTOOL/bin/macneutron" launch "$@"
 }
 g4_bench_cmd() {
-  v=$(cat "$RSRC/runtime-version" 2> /dev/null || true)
-  [ "$v" = runtime-v4.7.3 ] || { echo "the tool folder at $RSRC holds ${v:-no runtime}, not runtime-v4.7.3"; return 1; }
-  # The folder itself, not a symlink to it: cp -R would copy the link, and the launcher copied next would land in the
-  # installed folder.
-  cp -cR "$(cd "$RSRC" && pwd -P)" "$RTOOL" || return 1
-  cp "$ROOT/.build/release/macneutron" "$RTOOL/bin/macneutron" || return 1
+  v=$(cat "$REF/runtime-version" 2> /dev/null || true)
+  [ "$v" = runtime-v4.7.3 ] || { echo "the reference at $REF holds ${v:-no runtime}, not runtime-v4.7.3"; return 1; }
+  # The folder itself, not a symlink to it: cp -R would copy the link, and the launches would run in the reference.
+  cp -cR "$(cd "$REF" && pwd -P)" "$RTOOL" || return 1
   rosetta getcompatpath "$WORK" > /dev/null || { echo "creating the Rosetta prefix failed"; return 1; }
   b="$WORK/bench"
   mkdir -p "$b/fex" "$b/rosetta"
@@ -533,18 +555,19 @@ dxmt_present_cmd() {
   echo "info $what: cycles 20 ok"
 }
 
-# dxmt/check.sh in arm64 mode (arm64 DXMT spec §7): our DXMT on this runtime, in clones of the prefix, against D3DMetal
-# on Rosetta. dxmt_lane_cmd <lane> <machine> <tests folder> <present_loop.exe> [line it must print]: passes when every
-# program is built for <machine> (ARM64EC or AMD64, as llvm-readobj reads the hybrid metadata: both lanes' headers say
-# 0x8664), the check ran in arm64 mode and all passed; else its last line gives the number of FAIL lines and the first
-# (none: the check's own), or, for a missing line, dxmt/check.sh's skip line for it (FSR 3: SMITE 2 isn't installed).
+# dxmt/check.sh (arm64 DXMT spec §7, arm64 release spec §8.2): our DXMT on this runtime, through the launcher in a tool
+# folder it assembles, against D3DMetal on the frozen reference. dxmt_lane_cmd <lane> <machine> <tests folder>
+# <present_loop.exe> [line it must print]: passes when every program is built for <machine> (ARM64EC or AMD64, as
+# llvm-readobj reads the hybrid metadata: both lanes' headers say 0x8664), the check ran in arm64 mode and all passed;
+# else its last line gives the number of FAIL lines and the first (none: the check's own), or, for a missing line,
+# dxmt/check.sh's skip line for it (FSR 3: SMITE 2 isn't installed).
 dxmt_lane_cmd() {
   l="$WORK/dxmt-$1.log" t0=$(date +%s) ro="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-readobj"
   for e in "$3"/*.exe "$4"; do
     "$ro" --file-headers "$e" | grep -q "Machine: IMAGE_FILE_MACHINE_$2 " || { echo "${e##*/} is not built for $2"; return 1; }
   done
-  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_PREFIX="$PFX" MACNEUTRON_ARM64_TESTS="$3" \
-    MACNEUTRON_ARM64_LOOP="$4" MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
+  DXMT_CHECK_WORK="$WORK/dxmt-$1" MACNEUTRON_ARM64_APP="$TOOL" MACNEUTRON_ARM64_TESTS="$3" MACNEUTRON_ARM64_LOOP="$4" \
+    MACNEUTRON_ARM64_TOOLS="$B/wine-arm64" sh "$ROOT/dxmt/check.sh" || true
   echo "info dxmt-$1: $(($(date +%s) - t0)) s"
   grep -q '^info arm64 mode: ' "$l" || { echo "dxmt/check.sh did not run in arm64 mode"; return 1; }
   n=$(grep -c '^FAIL' "$l" || true)

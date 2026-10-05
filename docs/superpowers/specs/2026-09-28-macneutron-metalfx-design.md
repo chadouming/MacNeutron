@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-28
 - **Status:** Approved 2026-09-28; stopped at the feasibility gate (§9) the same day — see `docs/testing/acceptance-metalfx.md`. Not implemented.
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-09-27-macproton-runtime-design.md` (GPTK import, graphics backends, launcher) and `2026-09-27-macneutron-app-design.md` (per-game settings, Games window).
 - **Scope:**
   - **In:** making Apple's DLSS→MetalFX bridge reachable in the runtime; per-game "MetalFX upscaling" and "Metal 4" settings with launch-option opt-outs; the prefix stubs they need; the Games window toggles; acceptance on SMITE 2.

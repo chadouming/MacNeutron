@@ -15,7 +15,7 @@ let macModeSession = """
 
     """
 
-/// A Steam install in a temp folder: app bundle, config.vdf, and MacNeutron's runtime tool.
+/// A Steam install in a temp folder: app bundle, config.vdf, and MacNeutron's runtime tool with a fake CLI.
 func makeFakeSteam(config: String = steamConfigFixture) throws -> (SteamLocation, URL) {
     let base = try makeTempDir()
     let steam = SteamLocation(root: base.appending(path: "Steam", directoryHint: .isDirectory))
@@ -23,6 +23,8 @@ func makeFakeSteam(config: String = steamConfigFixture) throws -> (SteamLocation
     try write(config, to: steam.configVDF)
     let root = base.appending(path: "MacNeutron", directoryHint: .isDirectory)
     try write("\"manifest\" {}", to: root.appending(path: "compatibilitytools.d/macneutron/toolmanifest.vdf"))
+    try write("#!/bin/sh\necho fake macneutron\n", to: root.appending(path: "compatibilitytools.d/macneutron/bin/macneutron"),
+              executable: true)
     return (steam, root)
 }
 

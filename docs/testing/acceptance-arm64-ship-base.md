@@ -1,5 +1,7 @@
 # Native arm64 ship-base Wine acceptance test (sub-project 3)
 
+Rosetta baselines now come from the frozen reference (`MACNEUTRON_REFERENCE`).
+
 Spec: `docs/superpowers/specs/2026-10-04-macneutron-ship-base-wine-design.md` §1, §10 and §12. Manual, on the
 maintainer's Mac, with:
 - the Developer ID identity and the provisioning profile for `net.authspot.macneutron.wine` (`wine-arm64/README.md`);

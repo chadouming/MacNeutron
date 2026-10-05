@@ -1,10 +1,20 @@
-# LLVM 15 and the host tools linked against it, by architecture, for dxmt/build.sh (x86_64) and wine-arm64/build.sh (arm64) (sourced).
+# LLVM 15 and the host tools linked against it, by architecture, for wine-arm64/build.sh (arm64) (sourced).
 # The caller defines die, ROOT and LLVM_TAG (dxmt/pins); this file sets no variables. Messages go to stderr.
 
 # LLVM 15: static, with DXMT's CI flags but no assertions (they slowed every pipeline's translation, which Unreal does
-# thousands of times a launch). Built once per install folder.
+# thousands of times a launch). Built once per install folder and LLVM_TAG: <install>/.complete names the tag it was
+# built from, and another tag's install, build folder and clone are started over.
 build_llvm() {  # build_llvm <arch> <install> <llvm-project>
-  if [ -f "$2/.complete" ]; then return 0; fi
+  if [ -f "$2/.complete" ]; then
+    # ponytail: an empty .complete predates the tag record; it was built from today's pin, so it's adopted, not rebuilt.
+    if [ ! -s "$2/.complete" ]; then
+      echo "$LLVM_TAG" > "$2/.complete"
+      echo "dxmt: recorded LLVM $LLVM_TAG for $2" >&2
+    fi
+    [ "$(cat "$2/.complete")" != "$LLVM_TAG" ] || return 0
+    echo "dxmt: $2 was built from LLVM $(cat "$2/.complete"), not $LLVM_TAG: building it again" >&2
+    rm -rf "$2" "$2-build" "$3"
+  fi
   if [ ! -d "$3/llvm" ]; then  # cloned aside and moved into place, so an interrupted clone isn't taken for a source tree
     rm -rf "$3.tmp"
     git clone -q --depth 1 --branch "$LLVM_TAG" https://github.com/llvm/llvm-project.git "$3.tmp" \
@@ -18,7 +28,7 @@ build_llvm() {  # build_llvm <arch> <install> <llvm-project>
       -DLLVM_BUILD_TOOLS=Off -DLLVM_VERSION_PRINTER_SHOW_HOST_TARGET_INFO=Off -DCMAKE_POLICY_VERSION_MINIMUM=3.5 &&
     cmake --build "$2-build" && cmake --install "$2-build"; } > "$2.log" 2>&1 \
     || die "LLVM build failed; see $2.log"
-  touch "$2/.complete"  # written last: an interrupted install is redone
+  echo "$LLVM_TAG" > "$2/.complete"  # written last: an interrupted install is redone
 }
 
 # The DXIL probe (spec §6), against the same LLVM. -fno-rtti matches LLVM's own build.

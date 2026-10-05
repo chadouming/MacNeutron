@@ -3,8 +3,8 @@
 `wine.app` contains code whose licence notice is in its source files, not in a licence file of its own. Each section
 names the component, the binaries it is compiled into, the file the notice is quoted from (in the source tree pinned in
 `SOURCE`), and the notice itself. The licence files of the components (`wine/`, `fex/`, `llvm/`, `llvm-mingw/`,
-`freetype/`, `gnutls/`, `nettle/`, `gmp/`, `lsteamclient/`, and `../DXMT/` for DXMT) are beside this file; `README` says
-where each component's source is.
+`freetype/`, `gnutls/`, `nettle/`, `gmp/`, `lsteamclient/`, `macneutron/`, and `../DXMT/` for DXMT) are beside this
+file; `README` says where each component's source is.
 
 ## SoftFloat-3e (in FEX: `libarm64ecfex.dll`)
 

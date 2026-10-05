@@ -1,5 +1,7 @@
 # Native arm64 DXMT acceptance test (sub-project 2)
 
+Rosetta baselines now come from the frozen reference (`MACNEUTRON_REFERENCE`).
+
 Spec: `docs/superpowers/specs/2026-10-03-macneutron-arm64-dxmt-design.md` §1, §8 and §10. Manual, on the
 maintainer's Mac, with:
 - the Developer ID identity and the provisioning profile for `net.authspot.macneutron.wine` (`wine-arm64/README.md`);

@@ -1,35 +1,34 @@
-import CryptoKit
 import Foundation
 
-/// The Wine runtime release MacNeutron is tested against.
-public struct RuntimePin: Equatable, Sendable {
-    public let version: String
-    public let url: URL
-    public let sha256: String
-
-    /// winecx-gptk: CrossOver 26.3 changes on Wine 11.17, with DXMT 0.80 and DXVK-macOS 1.10.3.
-    /// ponytail: upstream release; point `url` at the chadouming/winecx-gptk fork before the first public release.
-    public static let current = RuntimePin(
-        version: "runtime-v4.7.3",
-        url: URL(string: "https://github.com/dappermint/winecx-gptk/releases/download/runtime-v4.7.3/Libraries.tar.gz")!,
-        sha256: "a4b5d63493f80698cce5cad8e7212d9a51c8292037b00c478f4652636fcfd331")
+public enum RuntimeInstallOutcome: Equatable, Sendable {
+    case installed
+    case unchanged
+    /// A process runs from the installed runtime (its kernel path); nothing was changed.
+    case deferred(String)
 }
 
 public enum RuntimeInstallError: Error, Equatable, CustomStringConvertible {
-    case checksumMismatch(expected: String, actual: String)
-    case extractFailed(Int32)
-    case badArchive(String)
+    /// The source has no `Contents/MacOS/wine`.
+    case notAWineApp(String)
+    /// `codesign --verify --strict`'s exit status for the copy.
+    case signatureInvalid(Int32)
+    /// `renamex_np`'s or `rename`'s errno.
+    case swapFailed(Int32)
+    /// `cp -c -R`'s exit status (a full copy, outside an APFS clone, can run out of space).
+    case copyFailed(Int32)
 
+    /// Shown by setup and printed by `macneutron install`.
     public var description: String {
         switch self {
-        case .checksumMismatch(let expected, let actual): "runtime checksum mismatch: expected \(expected), got \(actual)"
-        case .extractFailed(let status): "extracting the runtime failed (tar exit \(status))"
-        case .badArchive(let detail): "the runtime archive is not a Wine runtime: \(detail)"
+        case .notAWineApp(let path): "\(path) isn't a runtime (it has no Contents/MacOS/wine)."
+        case .signatureInvalid(let status): "The runtime's signature check failed (codesign exit \(status))."
+        case .swapFailed(let error): "Couldn't put the new runtime in place: \(String(cString: strerror(error)))."
+        case .copyFailed(let status): "Couldn't copy the runtime into the tool folder (cp exit \(status)); check free disk space."
         }
     }
 }
 
-/// Installs the Wine runtime and the Steam-facing tool files into a `macneutron` tool folder.
+/// Installs `wine.app` and the Steam-facing tool files into a `macneutron` tool folder (spec §3.9).
 public enum RuntimeInstaller {
     static let compatibilityTool = """
         "compatibilitytools"
@@ -47,123 +46,135 @@ public enum RuntimeInstaller {
         }
 
         """
+    /// Steam runs the thin arm64 CLI directly (R0b passed); there's no `/bin/sh` stub in between.
     static let toolManifest = """
         "manifest"
         {
           "version" "2"
-          "commandline" "/proton %verb%"
+          "commandline" "/bin/macneutron launch %verb%"
         }
 
         """
-    static let protonStub = """
-        #!/bin/sh
-        exec "$(dirname "$0")/bin/macneutron" launch "$@"
 
-        """
-
-    public static func sha256(of file: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Verifies the tarball, extracts it to a staging folder, and only then replaces the old runtime.
-    /// Re-applies an imported GPTK, then MacNeutron's DXMT when one ships with the launcher, since the new Wine tree has neither.
-    public static func install(tarball: URL, pin: RuntimePin, layout: ToolLayout, launcherBinary: URL,
-                               runner: any ProcessRunner = SystemProcessRunner()) throws {
-        let actual = try sha256(of: tarball)
-        guard actual == pin.sha256 else {
-            throw RuntimeInstallError.checksumMismatch(expected: pin.sha256, actual: actual)
-        }
+    /// Installs `wineApp` into `layout`, unless a process runs from the installed runtime (a new client can't talk to
+    /// an older running wineserver). The copy is checked before it replaces the old one in a single swap, so there is
+    /// never a moment without a working `wine.app`. Tool files are written on every install that isn't deferred, so
+    /// the CLI and the runtime change together.
+    @discardableResult
+    public static func install(wineApp source: URL, layout: ToolLayout, launcherBinary: URL, steamExe: URL? = nil,
+                               force: Bool = false, runner: any ProcessRunner = SystemProcessRunner(),
+                               runningExecutables: () -> [String] = RunningProcesses.executablePaths,
+                               identity: (URL) -> String? = CodeIdentity.of,
+                               log: LauncherLog = .standard) throws -> RuntimeInstallOutcome {
         let fm = FileManager.default
-        try fm.createDirectory(at: layout.root, withIntermediateDirectories: true)
-        let staging = layout.root.appending(path: "runtime.staging", directoryHint: .isDirectory)
-        try? fm.removeItem(at: staging)
-        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: staging) }
-        let status = try runner.run(URL(filePath: "/usr/bin/tar"),
-                                    ["-xzf", tarball.path(percentEncoded: false), "-C", staging.path(percentEncoded: false)],
-                                    environment: [:], output: nil)
-        guard status == 0 else { throw RuntimeInstallError.extractFailed(status) }
-        let extracted = ToolLayout(root: staging)
-        for required in [extracted.wine, extracted.wineserver]
-        where !fm.isExecutableFile(atPath: required.path(percentEncoded: false)) {
-            throw RuntimeInstallError.badArchive("missing Libraries/Wine/bin/\(required.lastPathComponent)")
+        let sourcePath = source.path(percentEncoded: false)
+        guard fm.isExecutableFile(atPath: source.appending(path: "Contents/MacOS/wine").path(percentEncoded: false)) else {
+            throw RuntimeInstallError.notAWineApp(sourcePath)
         }
-        // Before the swap: the new runtime brings its own DXMT 0.80, and a swap that fails must not leave a claim either.
-        try? fm.removeItem(at: layout.dxmtVersionFile)
-        try? fm.removeItem(at: layout.libraries)
-        try fm.moveItem(at: extracted.libraries, to: layout.libraries)
-        try writeToolFiles(layout: layout, launcherBinary: launcherBinary)
-        try pin.version.write(to: layout.runtimeVersionFile, atomically: true, encoding: .utf8)
-        if fm.fileExists(atPath: layout.gptkStore.path(percentEncoded: false)) {
-            try GPTKImporter.applyOverlay(layout: layout, runner: runner)
+        // 1. The kernel reports real paths (/private/var/…), so compare against the folders' real paths.
+        let watched = [layout.wineApp, layout.root.appending(path: "Libraries")].compactMap(realPath).map { $0 + "/" }
+        func running() -> String? {
+            guard let path = runningExecutables().first(where: { path in watched.contains { path.hasPrefix($0) } })
+            else { return nil }
+            log.append("install deferred: \(path) is running")
+            return path
         }
-        try DXMTInstaller.installBundled(layout: layout, launcherBinary: launcherBinary)
+        if let running = running() { return .deferred(running) }
+        // 2. Leftovers of an interrupted install (`cp -R` into an existing folder would nest the source in it).
+        // These paths have no trailing "/", for cp and rename(2).
+        let new = layout.root.appending(path: "wine.app.new")
+        try? fm.removeItem(at: new)
+        try? fm.removeItem(at: layout.root.appending(path: "wine.app.old"))
+        // 3.
+        let damaged = fm.fileExists(atPath: layout.runtimeDamagedMarker.path(percentEncoded: false))
+        let installed = identity(layout.wineApp)
+        let outcome: RuntimeInstallOutcome
+        if !force, !damaged, let installed, installed == identity(source) {
+            outcome = .unchanged
+        } else {
+            // 4. An APFS clone on the same volume, a full copy otherwise.
+            try fm.createDirectory(at: layout.root, withIntermediateDirectories: true)
+            let newPath = new.path(percentEncoded: false)
+            let copied = try runner.run(URL(filePath: "/bin/cp"), ["-c", "-R", sourcePath, newPath],
+                                        environment: [:], output: nil)
+            guard copied == 0 else {
+                try? fm.removeItem(at: new)
+                throw RuntimeInstallError.copyFailed(copied)
+            }
+            let verified = try runner.run(URL(filePath: "/usr/bin/codesign"), ["--verify", "--strict", newPath],
+                                          environment: [:], output: nil)
+            guard verified == 0 else {
+                try? fm.removeItem(at: new)
+                throw RuntimeInstallError.signatureInvalid(verified)
+            }
+            // Again: the copy and its check take seconds, and a game started meanwhile runs from the old copy.
+            if let running = running() {
+                try? fm.removeItem(at: new)
+                return .deferred(running)
+            }
+            let target = layout.root.appending(path: "wine.app").path(percentEncoded: false)
+            let swapped = fm.fileExists(atPath: target)
+                ? renamex_np(newPath, target, UInt32(RENAME_SWAP)) : rename(newPath, target)
+            guard swapped == 0 else {
+                let error = errno
+                try? fm.removeItem(at: new)
+                throw RuntimeInstallError.swapFailed(error)
+            }
+            try? fm.removeItem(at: new)  // the old copy, after a swap
+            try? fm.removeItem(at: layout.runtimeDamagedMarker)
+            outcome = .installed
+        }
+        // 5.
+        try writeToolFiles(layout: layout, launcherBinary: launcherBinary, steamExe: steamExe)
+        // 6. The Rosetta-era runtime's entries, and its /bin/sh stub.
+        for name in ToolLayout.rosettaEraEntries + ["proton"] { try? fm.removeItem(at: layout.root.appending(path: name)) }
+        return outcome
     }
 
-    /// Writes Steam's tool files, then installs the launcher and, when it can find one, `steam.exe`.
-    /// Safe to repeat (the app calls it at every start): identical files are skipped, and new ones are
+    /// `realpath(3)`, or nil when `url` doesn't exist. (`URL.resolvingSymlinksInPath` strips `/private`.)
+    private static func realPath(_ url: URL) -> String? {
+        guard let resolved = realpath(url.path(percentEncoded: false), nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// Writes Steam's tool files, then installs the launcher and `steamExe`, or the `steam.exe` it finds beside the
+    /// launcher. Safe to repeat: identical files are skipped, and new ones are
     /// renamed into place, so a game Steam launches meanwhile never finds the launcher missing.
-    public static func writeToolFiles(layout: ToolLayout, launcherBinary: URL) throws {
+    public static func writeToolFiles(layout: ToolLayout, launcherBinary: URL, steamExe: URL? = nil) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: layout.root, withIntermediateDirectories: true)
+        try installFile(launcherBinary, at: layout.launcherBinary)  // before the manifest that runs it
         try compatibilityTool.write(to: layout.root.appending(path: "compatibilitytool.vdf"), atomically: true, encoding: .utf8)
         try toolManifest.write(to: layout.root.appending(path: "toolmanifest.vdf"), atomically: true, encoding: .utf8)
-        let stub = layout.root.appending(path: "proton")
-        try protonStub.write(to: stub, atomically: true, encoding: .utf8)
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path(percentEncoded: false))
-        try installFile(launcherBinary, at: layout.launcherBinary)
         // Next to the launcher, or in MacNeutron.app's Contents/Resources: steam.exe isn't Mach-O code,
         // so codesign won't accept it in Contents/Helpers.
         let helpers = launcherBinary.deletingLastPathComponent()
         let candidates = [helpers.appending(path: "steam.exe"),
                           helpers.deletingLastPathComponent().appending(path: "Resources/steam.exe")]
-        if let steamExe = candidates.first(where: { fm.fileExists(atPath: $0.path(percentEncoded: false)) }) {
+        if let steamExe = steamExe ?? candidates.first(where: { fm.fileExists(atPath: $0.path(percentEncoded: false)) }) {
             try installFile(steamExe, at: layout.steamHelper)
-        }
-        // The presenter is Mach-O code, so in MacNeutron.app it lives in Contents/Frameworks.
-        let presenters = [helpers.appending(path: "libmacneutron-present.dylib"),
-                          helpers.deletingLastPathComponent().appending(path: "Frameworks/libmacneutron-present.dylib")]
-        if let presenter = presenters.first(where: { fm.fileExists(atPath: $0.path(percentEncoded: false)) }) {
-            try installFile(presenter, at: layout.presenterLibrary)
         }
     }
 
-    /// Copies `source` to `destination` through a temporary file and `rename(2)`, unless they already match.
+    /// Copies `source` to `destination` through a temporary file and `rename(2)`, unless they already match. The copy
+    /// carries no quarantine.
     static func installFile(_ source: URL, at destination: URL) throws {
         let fm = FileManager.default
         guard source.resolvingSymlinksInPath() != destination.resolvingSymlinksInPath() else { return }
         let contents = try Data(contentsOf: source)
-        if (try? Data(contentsOf: destination)) == contents { return }
+        if (try? Data(contentsOf: destination)) == contents {
+            removexattr(destination.path(percentEncoded: false), "com.apple.quarantine", 0)  // an earlier copy's
+            return
+        }
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         let temporary = destination.appendingPathExtension("new")
         try? fm.removeItem(at: temporary)
         try fm.copyItem(at: source, to: temporary)
+        // The copy keeps a downloaded app's quarantine, and Steam execs these files directly (no stapled ticket).
+        removexattr(temporary.path(percentEncoded: false), "com.apple.quarantine", 0)
         guard rename(temporary.path(percentEncoded: false), destination.path(percentEncoded: false)) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-    }
-
-    /// The pinned tarball in `~/Library/Caches/MacNeutron`, downloading it on first use.
-    public static func cachedDownload(_ pin: RuntimePin) async throws -> URL {
-        let cache = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Caches/MacNeutron", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        let tarball = cache.appending(path: "\(pin.version).tar.gz")
-        if !FileManager.default.fileExists(atPath: tarball.path(percentEncoded: false)) {
-            try await download(pin, to: tarball)
-        }
-        return tarball
-    }
-
-    /// Downloads to a temporary file first, so an interrupted download never lands at `destination`.
-    public static func download(_ pin: RuntimePin, to destination: URL) async throws {
-        let (temporary, response) = try await URLSession.shared.download(from: pin.url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: temporary, to: destination)
     }
 }

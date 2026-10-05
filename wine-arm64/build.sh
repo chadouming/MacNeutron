@@ -102,17 +102,18 @@ fetch_lsteamclient() {
   git -C "$LSC.tmp" checkout -q -b macneutron FETCH_HEAD || die "can't check out lsteamclient/ from $LSTEAMCLIENT_REPO"
   patch_tree "$LSC.tmp" lsteamclient "$LSC_PATCHES" "$lsc_series" "$LSTEAMCLIENT_COMMIT"
 }
-wine_series=$(series_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch)
-fex_series=$(series_of "$ROOT/wine-arm64/pins" "$FEX_PATCHES"/*.patch)
-dxmt_series=$(series_of "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch)
-lsc_series=$(lsteamclient_series "$ROOT/wine-arm64/deps.pins" "$LSC_PATCHES"/*.patch)
+wine_series=$(tree_series wine)
+fex_series=$(tree_series fex)
+dxmt_series=$(tree_series dxmt)
+lsc_series=$(tree_series lsteamclient)
 # Every build input, once: the up-to-date check and the stamp written at the end must agree.
 stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.patch "$ROOT/wine-arm64/build.sh" \
   "$ROOT/wine-arm64/lib.sh" "$ROOT/wine-arm64/bundle.sh" "$ROOT/wine-arm64/wine.entitlements" \
   "$ROOT/wine-arm64/Info.plist" "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch "$ROOT/dxmt/llvm.sh" \
   "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
   "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh" "$ROOT/wine-arm64/deps.pins" \
-  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch)
+  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch \
+  "$ROOT/presenter/present.m" "$ROOT/LICENSE" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
@@ -141,8 +142,8 @@ ln -sfn ../../lsteamclient/lsteamclient "$W/dlls/lsteamclient"
 # The repository commit the bundle's SOURCE names (step 8). Dirty when anything the build reads from the repository
 # differs from that commit, a new file included.
 mac=$(git -C "$ROOT" rev-parse HEAD)
-[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile)" ] \
-  || mac="$mac+dirty"
+[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile presenter \
+  LICENSE)" ] || mac="$mac+dirty"
 # The build is a development build if any tree is.
 if [ "$wine_mode" = development ] || [ "$fex_mode" = development ] || [ "$dxmt_mode" = development ] \
   || [ "$lsteamclient_mode" = development ]; then
@@ -166,7 +167,6 @@ fi
 #    /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins, the configure options or the step's
 #    environment and commands change (their hash is deps/.complete); deps-src stays, bundle.sh copies the licence texts
 #    from it.
-deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"; }
 DEPS_TARS="gmp:$GMP_URL nettle:$NETTLE_URL gnutls:$GNUTLS_URL freetype:$FREETYPE_URL"  # <name>:<url>, build order
 fetch "$GMP_URL" "$SRC/${GMP_URL##*/}" "$GMP_SHA256"
 fetch "$NETTLE_URL" "$SRC/${NETTLE_URL##*/}" "$NETTLE_SHA256"
@@ -239,12 +239,15 @@ fi
 #    FreeType and gnutls (--with: missing is an error). FREETYPE_LIBS links only tools/sfnt2fon, which renders the
 #    bitmap fonts during the build and isn't installed: its rpath finds libfreetype's @rpath ID. Redone in a new build
 #    folder (a full Wine build) when the options or the deps change: both are recorded in wine-build/.configure-inputs.
+#    Both compilers (Apple clang for the unix side, llvm-mingw for the PE side) map $SRC/ away, so __FILE__ and the
+#    debug info name wine/dlls/..., not the build folder (arm64 release Ruling 20); otherwise Wine's default -g -O2.
 set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --without-x --without-wayland \
   --without-oss --without-alsa --without-pulse --without-sane --without-usb --without-v4l2 --without-pcap \
   --without-capi --without-opencl --without-cups --with-freetype --with-gnutls CC=/usr/bin/clang CXX=/usr/bin/clang++ \
   PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" FREETYPE_CFLAGS="-I$DEPS/include/freetype2" \
   FREETYPE_LIBS="-L$DEPS/lib -lfreetype -Wl,-rpath,$DEPS/lib" GNUTLS_CFLAGS="-I$DEPS/include" \
-  GNUTLS_LIBS="-L$DEPS/lib -lgnutls"
+  GNUTLS_LIBS="-L$DEPS/lib -lgnutls" CFLAGS="-g -O2 -ffile-prefix-map=$SRC/=" \
+  CROSSCFLAGS="-g -O2 -ffile-prefix-map=$SRC/="
 inputs=$(printf '%s\n' "$@"; cat "$DEPS/.complete")
 if [ -f "$SRC/wine-build/Makefile" ] && [ "$(cat "$SRC/wine-build/.configure-inputs" 2> /dev/null)" = "$inputs" ]; then
   echo "wine-arm64: Wine's configure is up to date" >&2
@@ -274,21 +277,26 @@ echo "wine-arm64: building (log: $SRC/make.log)" >&2
 make -C "$SRC/wine-build" -j"$(sysctl -n hw.ncpu)" > "$SRC/make.log" 2>&1 || die "make failed; see $SRC/make.log"
 
 # 6. FEX: the ARM64EC DLL with llvm-mingw's toolchain file (absolute path; TUNE_CPU=none, since the default reads
-#    /proc/cpuinfo), the unixlib with Apple clang. Each build folder is configured once.
+#    /proc/cpuinfo), the unixlib with Apple clang. Each build folder is configured again, from scratch, when its cmake
+#    arguments change (<folder>/.setup-inputs, as DXMT's); fetch_fex removes both.
 echo "wine-arm64: building FEX (log: $SRC/fex.log)" >&2
 : > "$SRC/fex.log"
-if [ ! -f "$SRC/fex-ec/build.ninja" ]; then
-  cmake -S "$F" -B "$SRC/fex-ec" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$F/Data/CMake/toolchain_mingw.cmake" \
-    -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False \
-    -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False \
-    >> "$SRC/fex.log" 2>&1 || { rm -rf "$SRC/fex-ec"; die "configuring FEX failed; see $SRC/fex.log"; }
-fi
+fex_setup() {  # fex_setup <what> <build folder> <cmake arguments...>
+  _fs_what=$1 _fs_dir=$2; shift 2
+  if [ ! -f "$_fs_dir/build.ninja" ] || [ "$(cat "$_fs_dir/.setup-inputs" 2> /dev/null)" != "$(printf '%s\n' "$@")" ]; then
+    echo "wine-arm64: configuring $_fs_what" >&2
+    rm -rf "$_fs_dir"
+    cmake -B "$_fs_dir" "$@" >> "$SRC/fex.log" 2>&1 \
+      || { rm -rf "$_fs_dir"; die "configuring $_fs_what failed; see $SRC/fex.log"; }
+    printf '%s\n' "$@" > "$_fs_dir/.setup-inputs"
+  fi
+}
+fex_setup FEX "$SRC/fex-ec" -S "$F" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$F/Data/CMake/toolchain_mingw.cmake" \
+  -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False \
+  -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False
 ninja -C "$SRC/fex-ec" arm64ecfex >> "$SRC/fex.log" 2>&1 || die "building libarm64ecfex.dll failed; see $SRC/fex.log"
-if [ ! -f "$SRC/fex-unixlib/build.ninja" ]; then
-  cmake -S "$F/Source/Windows/UnixLib" -B "$SRC/fex-unixlib" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OSX_DEPLOYMENT_TARGET=27.0 >> "$SRC/fex.log" 2>&1 \
-    || { rm -rf "$SRC/fex-unixlib"; die "configuring FEX's unixlib failed; see $SRC/fex.log"; }
-fi
+fex_setup "FEX's unixlib" "$SRC/fex-unixlib" -S "$F/Source/Windows/UnixLib" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OSX_DEPLOYMENT_TARGET=27.0
 ninja -C "$SRC/fex-unixlib" >> "$SRC/fex.log" 2>&1 || die "building FEX's unixlib failed; see $SRC/fex.log"
 # Wine loads it only as a builtin (it ignores other DLLs in its own directories). Spec §6.3: it imports ntdll.dll alone
 # and has no TLS directory (libc++ is linked statically).
@@ -301,18 +309,26 @@ fi
 [ "$(grep -c 'Wine builtin DLL' "$dll")" = 1 ] || die "libarm64ecfex.dll lacks Wine's builtin marker"
 
 # 7. DXMT (arm64 DXMT spec §4): ARM64X front ends and winemetal.dll from DXMT's own cross file, linked against this
-#    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). The build
-#    folder is configured once per tree (fetch_dxmt removes it): changing the options below needs
-#    rm -rf build/wine-arm64-src/dxmt-build. dxmt-install is redone every build.
+#    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). Its .metal
+#    files compile through tools/xcrun-metal.sh (a second cross file names it as xcrun), so the AIR modules embedded in
+#    winemetal.so name no build path. Set up again in a new build folder when the options or the wrapper change
+#    (dxmt-build/.setup-inputs); fetch_dxmt removes it too. dxmt-install is redone every build.
 build_llvm arm64 "$SRC/llvm-arm64" "$B/dxmt-src/llvm-project"
 echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 : > "$SRC/dxmt.log"
-if [ ! -f "$SRC/dxmt-build/build.ninja" ]; then
+# Rewritten only when its text changes: a newer cross file makes meson regenerate the build.
+printf "[binaries]\nxcrun = ['/bin/sh', '%s']\n" "$ROOT/wine-arm64/tools/xcrun-metal.sh" > "$SRC/dxmt-xcrun.txt.new"
+if cmp -s "$SRC/dxmt-xcrun.txt.new" "$SRC/dxmt-xcrun.txt"; then rm "$SRC/dxmt-xcrun.txt.new"
+else mv "$SRC/dxmt-xcrun.txt.new" "$SRC/dxmt-xcrun.txt"; fi
+set -- "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --cross-file "$SRC/dxmt-xcrun.txt" \
+  --buildtype release --strip --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true \
+  -Dnative_llvm_path="$SRC/llvm-arm64" -Dwine_build_path="$SRC/wine-build"
+inputs=$(printf '%s\n' "$@"; cat "$SRC/dxmt-xcrun.txt" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
+if [ ! -f "$SRC/dxmt-build/build.ninja" ] || [ "$(cat "$SRC/dxmt-build/.setup-inputs" 2> /dev/null)" != "$inputs" ]; then
   rm -rf "$SRC/dxmt-build"
-  meson setup "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --buildtype release --strip \
-    --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true -Dnative_llvm_path="$SRC/llvm-arm64" \
-    -Dwine_build_path="$SRC/wine-build" >> "$SRC/dxmt.log" 2>&1 \
+  meson setup "$@" >> "$SRC/dxmt.log" 2>&1 \
     || { rm -rf "$SRC/dxmt-build"; die "configuring DXMT failed; see $SRC/dxmt.log"; }
+  printf '%s\n' "$inputs" > "$SRC/dxmt-build/.setup-inputs"
 fi
 meson compile -C "$SRC/dxmt-build" >> "$SRC/dxmt.log" 2>&1 || die "building DXMT failed; see $SRC/dxmt.log"
 rm -rf "$SRC/dxmt-install"
@@ -327,27 +343,16 @@ fi
 mkdir -p "$OUT"
 build_probe arm64 "$SRC/llvm-arm64" "$OUT" "$SRC"
 build_translate arm64 "$SRC/llvm-arm64" "$D" "$SRC/dxmt-build" "$OUT" "$SRC"
+# The MetalFX presenter (arm64 release spec §5.3), which winemetal.so loads from beside itself (DXMT patch 0002).
+mkdir -p "$SRC/presenter"
+/usr/bin/clang -arch arm64 -mmacosx-version-min=27.0 -fobjc-arc -O2 -dynamiclib \
+  -install_name @rpath/libmacneutron-present.dylib -framework Foundation -framework AppKit -framework QuartzCore \
+  -framework Metal -framework MetalFX -o "$SRC/presenter/libmacneutron-present.dylib" "$ROOT/presenter/present.m" \
+  > "$SRC/presenter.log" 2>&1 || die "building the presenter failed; see $SRC/presenter.log"
 
 # 8. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
 #    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.
-series() { if [ "$1" = development ]; then echo dev; else echo "$2"; fi; }  # series <mode> <series hash>
-{
-  echo "MACNEUTRON_COMMIT=$mac"
-  echo "WINE_COMMIT=$WINE_COMMIT"
-  echo "WINE_SERIES=$(series "$wine_mode" "$wine_series")"
-  echo "FEX_COMMIT=$FEX_COMMIT"
-  echo "FEX_SERIES=$(series "$fex_mode" "$fex_series")"
-  # " <sha> <path> (<describe>)", the first character "+" or "-" when the checkout differs from FEX's record.
-  git -C "$F" submodule status | awk '{ c = $1; sub(/^[-+U]/, "", c); n = $2; sub(/.*\//, "", n) }
-    n ~ /^(fmt|range-v3|rpmalloc|unordered_dense|xxhash|cpp-optparse)$/ { print "FEX_SUBMODULE_" n "=" c }'
-  echo "DXMT_COMMIT=$DXMT_COMMIT"
-  echo "DXMT_SERIES=$(series "$dxmt_mode" "$dxmt_series")"
-  echo "LLVM_TAG=$LLVM_TAG"
-  echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
-  echo "LSTEAMCLIENT_COMMIT=$LSTEAMCLIENT_COMMIT"
-  echo "LSTEAMCLIENT_SERIES=$(series "$lsteamclient_mode" "$lsc_series")"
-  deps_pins  # the tarballs' <NAME>_URL and <NAME>_SHA256
-} > "$SRC/SOURCE"
+write_source "$SRC/SOURCE" "$mac"
 echo "wine-arm64: bundling (log: $OUT/install.log)" >&2
 sh "$ROOT/wine-arm64/bundle.sh"
 

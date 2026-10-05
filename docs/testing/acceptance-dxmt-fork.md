@@ -1,5 +1,7 @@
 # DXMT fork (sub-project 1) acceptance
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Spec: `docs/superpowers/specs/2026-09-28-macneutron-dxmt-fork-design.md`.
 
 ## make dxmt-check, 2026-09-29

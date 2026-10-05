@@ -16,12 +16,7 @@ public enum SteamBridge {
 
     /// What the launcher copies into a prefix: (source, destination relative to the prefix).
     static func prefixFiles(layout: ToolLayout) -> [(URL, String)] {
-        var files = [(layout.steamHelper, "\(prefixFolder)/steam.exe"),
-                     (layout.lsteamclient64, "\(prefixFolder)/steamclient64.dll")]
-        if FileManager.default.fileExists(atPath: layout.lsteamclient32.path(percentEncoded: false)) {
-            files.append((layout.lsteamclient32, "\(prefixFolder)/steamclient.dll"))
-        }
-        return files
+        [(layout.steamHelper, "\(prefixFolder)/steam.exe"), (layout.lsteamclient, "\(prefixFolder)/steamclient64.dll")]
     }
 
     /// Steam's `STEAM_COMPAT_CLIENT_INSTALL_PATH` when that folder holds `steamclient.dylib`,

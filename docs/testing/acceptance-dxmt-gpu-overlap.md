@@ -1,5 +1,7 @@
 # GPU work overlap acceptance test (DXMT fork, sub-project 4, second slice)
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Spec: `docs/superpowers/specs/2026-10-01-macneutron-gpu-overlap-design.md` §7. Manual, once per milestone, on a Mac
 with D3DMetal (GPTK imported) and SMITE 2 installed. Record results at the bottom.
 

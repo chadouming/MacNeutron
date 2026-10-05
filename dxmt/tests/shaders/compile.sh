@@ -1,18 +1,32 @@
 #!/bin/sh
-# Compiles the test shaders to DXIL with Microsoft's dxc.exe under the installed runtime's Wine (DXMT fork spec §6).
-# Needs `make dxmt`, which fetches DXC. The .dxil files are committed; rerun this after editing a shader.
+# Compiles the test shaders to DXIL with Microsoft's dxc.exe under the frozen Rosetta reference's Wine (DXMT fork spec
+# §6; tools/freeze-rosetta-reference.sh). Fetches DXC once into build/dxmt-src. The .dxil files are committed; rerun
+# this after editing a shader.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-TOOL="${MACNEUTRON_TOOL:-$HOME/Library/Application Support/MacNeutron/compatibilitytools.d/macneutron}"
-DXC="$ROOT/build/dxmt-src/dxc/bin/x64/dxc.exe"
+. "$ROOT/dxmt/pins"
+. "$ROOT/dxmt/lib.sh"
+REF="${MACNEUTRON_REFERENCE:-$HOME/Library/Application Support/MacNeutron Reference/rosetta-tool}"
+[ -f "$REF/../FROZEN" ] || die "no frozen Rosetta reference at $REF (run tools/freeze-rosetta-reference.sh)"
+SRC="$ROOT/build/dxmt-src"
+DXC="$SRC/dxc/bin/x64/dxc.exe"
+if [ ! -f "$DXC" ]; then
+  mkdir -p "$SRC"
+  fetch "$DXC_URL" "$SRC/dxc.zip" "$DXC_SHA256"
+  rm -rf "$SRC/dxc" "$SRC/dxc.tmp"
+  # Exit 1 is a warning: DXC's zip uses backslash separators, which unzip converts.
+  unzip -q "$SRC/dxc.zip" -d "$SRC/dxc.tmp" 2> /dev/null || [ $? -eq 1 ] || die "can't unpack dxc.zip"
+  mv "$SRC/dxc.tmp" "$SRC/dxc"
+fi
+WINE="$REF/Libraries/Wine/bin/wine"
 export WINEPREFIX="${TMPDIR:-/tmp}/macneutron dxc" WINEDEBUG=-all
 cd "$HERE"  # relative paths: dxc.exe would read a leading / as an option
 # Every dxc.exe runs at once; finish waits for them (set -e: a failed one stops the script). The first call, alone,
 # creates the Wine prefix.
-"$TOOL/Libraries/Wine/bin/wine" "$DXC" --version > /dev/null
+"$WINE" "$DXC" --version > /dev/null
 pids=""
-dxc() { "$TOOL/Libraries/Wine/bin/wine" "$DXC" "$@" & pids="$pids $!"; }
+dxc() { "$WINE" "$DXC" "$@" & pids="$pids $!"; }
 finish() { for p in $pids; do wait "$p"; done; pids=""; }
 dxc -T vs_6_0 -E vsmain -Fo triangle.vs.dxil triangle.hlsl
 dxc -T ps_6_0 -E psmain -Fo triangle.ps.dxil triangle.hlsl

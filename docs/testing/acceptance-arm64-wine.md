@@ -1,5 +1,7 @@
 # Native arm64 Wine and FEX acceptance test (sub-project 1)
 
+Rosetta baselines now come from the frozen reference (`MACNEUTRON_REFERENCE`).
+
 Spec: `docs/superpowers/specs/2026-10-02-macneutron-native-arm64-design.md` §1, §8 and §10. Manual, on the
 maintainer's Mac, with the Developer ID identity and the provisioning profile for `net.authspot.macneutron.wine`
 (`wine-arm64/README.md`), and MacNeutron's runtime-v4.7.3 installed (G4's Rosetta baseline). GPTK is imported for

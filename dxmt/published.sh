@@ -1,7 +1,7 @@
 #!/bin/sh
 # published.sh <fork clone> <commit>: fails unless <commit> is on the fork's published `macneutron` branch.
 # MacNeutron ships DXMT under the LGPL, so the exact source of what it ships must be public (DXMT fork spec §9).
-# `make app` runs it.
+# release/release.sh runs it on build/wine-arm64-src/dxmt.
 set -eu
 clone=$1 commit=$2
 git -C "$clone" fetch -q origin macneutron || { echo "dxmt: can't reach the fork to check that $commit is published" >&2; exit 1; }

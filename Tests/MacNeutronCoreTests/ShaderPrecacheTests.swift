@@ -14,13 +14,11 @@ private struct PrecacheFixture {
     var launcherLog: String { (try? String(contentsOf: launcher.log.launcherLog, encoding: .utf8)) ?? "" }
 }
 
-/// A launcher whose tool folder has our DXMT with Direct3D 12 and the replayer. The fake dxmt-replay.exe writes a
+/// A launcher on the fake wine.app (DXMT `fork123` and its replayer). The fake dxmt-replay.exe writes a
 /// result line to its output and returns `replayStatus`.
 private func makePrecacheFixture(replayStatus: Int32 = 0,
                                  onReplay: (@Sendable (FakeRunner.Call) -> Void)? = nil) throws -> PrecacheFixture {
     let layout = try makeToolLayout()
-    try write("ours d3d12", to: layout.dxmtD3D12)
-    try write("ours replay", to: layout.dxmtReplay)
     try write("fork123\n", to: layout.dxmtVersionFile)
     let runner = FakeRunner { call in
         if call.arguments.first == "wineboot", let prefix = call.environment["WINEPREFIX"] {
@@ -38,7 +36,7 @@ private func makePrecacheFixture(replayStatus: Int32 = 0,
     let data = try makeTempDir().appending(path: "compatdata/42", directoryHint: .isDirectory)
     let launcher = Launcher(layout: layout, runner: runner,
                             log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")),
-                            notifier: notifier, preflight: Preflight(rosettaAvailable: { true }),
+                            notifier: notifier, preflight: testPreflight,
                             settings: GameSettingsStore(directory: try makeTempDir().appending(path: "games")),
                             steam: try makeSteamLocation())
     let env = steamEnvironment(dataPath: data, appID: "42")
@@ -161,17 +159,22 @@ private let game = ["waitforexitandrun", "/g/Game.exe"]
     let precache = ShaderPrecache(context: try CompatContext(environment: steamEnvironment(dataPath: data, appID: "42")),
                                   layout: layout, osBuild: "26A1")
     try write("rec", to: precache.folder.appending(path: "Game.exe.pipelines"))
-    // A replay of 20 pipelines that prints its progress as it goes, as dxmt-replay.exe does.
+    // A replay of 20 pipelines that appends its progress as it goes, as dxmt-replay.exe does. After each of the first
+    // three lines it waits (up to 5 s) for that quarter's message, so a late poll can't skip one.
+    let messages = Messages()
     let runner = FakeRunner { call in
-        guard let output = call.output else { return 0 }
-        for text in ["replay progress 5/20\r\n", "replay progress 10/20\r\n", "replay progress 15/20\r\n",
-                     "replay progress 20/20\r\nreplay: 20 pipelines (20 graphics, 0 compute), 20 created, 0 failed, 0 bad records, 9 ms\r\n"] {
-            try? text.write(to: output, atomically: true, encoding: .utf8)
-            Thread.sleep(forTimeInterval: 0.25)
+        guard let output = call.output,
+              FileManager.default.createFile(atPath: output.path(percentEncoded: false), contents: nil),
+              let handle = try? FileHandle(forWritingTo: output) else { return 1 }
+        defer { try? handle.close() }
+        for (i, text) in ["replay progress 5/20\r\n", "replay progress 10/20\r\n", "replay progress 15/20\r\n",
+                          "replay progress 20/20\r\nreplay: 20 pipelines (20 graphics, 0 compute), 20 created, 0 failed, 0 bad records, 9 ms\r\n"].enumerated() {
+            try? handle.write(contentsOf: Data(text.utf8))
+            let deadline = Date(timeIntervalSinceNow: 5)
+            while i < 3, messages.all.count <= i, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         }
         return 0
     }
-    let messages = Messages()
     let lines = precache.replay(layout: layout, runner: runner, environment: [:], progress: { messages.add($0) },
                                 pollInterval: 0.05)
     #expect(messages.all == ["Preparing shaders: 25% (5 of 20)", "Preparing shaders: 50% (10 of 20)",

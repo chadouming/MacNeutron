@@ -35,12 +35,12 @@ struct GamesView: View {
                 TableColumn("Graphics") { row in
                     if row.runsWithMacNeutron {
                         Picker("", selection: Binding(
-                            get: { row.settings.graphics ?? "" },
+                            // A value from before 0.1 (d3dmetal, dxvk) runs DXMT, so it shows as the default.
+                            get: { row.settings.graphics.flatMap { GraphicsBackend(rawValue: $0)?.rawValue } ?? "" },
                             set: { value in Task { await model.update(row.id) { $0.graphics = value.isEmpty ? nil : value } } })) {
                             Text("Default (DXMT)").tag("")
-                            Text("D3DMetal").tag("d3dmetal")
                             Text("DXMT").tag("dxmt")
-                            Text(model.gptkVersion == nil ? "DXVK" : "DXVK (falls back to D3DMetal while GPTK is imported)").tag("dxvk")
+                            Text("wined3d (OpenGL)").tag("wined3d")
                         }
                         .labelsHidden()
                     } else {
@@ -52,7 +52,6 @@ struct GamesView: View {
                 HStack(spacing: 16) {
                     Text(row.name).bold()
                     Toggle("Log", isOn: binding(row, \.log, default: false))
-                    Toggle("AVX", isOn: binding(row, \.avx, default: true))
                     Toggle("msync", isOn: binding(row, \.msync, default: true))
                     Toggle("MetalFX upscaling", isOn: binding(row, \.metalFX, default: true))
                         .help("Upscales with Apple's MetalFX when the game renders below its window or the display's pixel density.")

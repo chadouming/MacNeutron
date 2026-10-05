@@ -4,20 +4,20 @@ public enum LaunchEnvironment {
     /// Wine's environment: Steam's (including the user's launch-option variables) plus ours.
     /// Anything the user set explicitly wins over our defaults.
     public static func build(base: [String: String], context: CompatContext, backend: GraphicsBackend,
-                             layout: ToolLayout, logging: Bool) -> [String: String] {
+                             logging: Bool) -> [String: String] {
         var env = base
         env["WINEPREFIX"] = context.prefix.path(percentEncoded: false)
-        env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides(layout: layout), user: base["WINEDLLOVERRIDES"])
+        env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides, user: base["WINEDLLOVERRIDES"])
         if base["WINEDEBUG"] == nil {
             env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll,+steamclient" : "-all"
         }
-        if base["MACNEUTRON_NO_AVX"] != "1", base["ROSETTA_ADVERTISE_AVX"] == nil {
-            env["ROSETTA_ADVERTISE_AVX"] = "1"
-        }
-        if base["MACNEUTRON_NO_MSYNC"] != "1", base["WINEMSYNC"] == nil {
+        // msync off means unset, whoever set it: Wine's client and server must agree on it.
+        if base["MACNEUTRON_NO_MSYNC"] == "1" {
+            env.removeValue(forKey: "WINEMSYNC")
+        } else if base["WINEMSYNC"] == nil {
             env["WINEMSYNC"] = "1"
         }
-        if ShaderPrecache.enabled(backend: backend, layout: layout, environment: base), base["DXMT_PIPELINE_RECORD"] == nil {
+        if ShaderPrecache.enabled(backend: backend, environment: base), base["DXMT_PIPELINE_RECORD"] == nil {
             env["DXMT_PIPELINE_RECORD"] = ShaderPrecache.folder(for: context).path(percentEncoded: false)
         }
         return env

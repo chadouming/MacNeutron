@@ -1,0 +1,82 @@
+#!/bin/sh
+# source-archive.sh <X.Y.Z> <out-dir>: <out-dir>/MacNeutron-<X.Y.Z>-source.tar.gz and <out-dir>/SOURCES.txt, the source
+# of everything the release ships (arm64 release spec §7.2, §14). One uncompressed tar per tree, as built:
+# - MacNeutron.tar: the repository at HEAD (git archive --prefix=MacNeutron/);
+# - wine.tar, fex.tar, dxmt.tar: git archive of each applied tree in build/wine-arm64-src (its HEAD, the pin with our
+#   patches on top: git get-tar-commit-id names that commit), and fex-<name>.tar, dxmt-<name>.tar for the submodules
+#   SOURCE lists, each archived from the submodule into its place in the tree (git archive leaves submodules empty);
+# - lsteamclient.tar: the files of its clean sparse worktree (its blob-less clone can't be git archived offline):
+#   Proton's lsteamclient/ without the Steamworks SDK folders and gen_wrapper.py, exactly what the build used;
+# - the four pinned tarballs (FreeType, gnutls, nettle, GMP) as downloaded;
+# - SOURCES.txt: tree, pin, applied commit, patch count, file. release/verify-sources.sh checks it all (R5).
+# release.sh calls it after its refusals: every tree applied, the repository clean. BUILD_DIR replaces build/.
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/release/lib.sh"
+[ $# -eq 2 ] || { echo "usage: source-archive.sh <X.Y.Z> <out-dir>" >&2; exit 2; }
+V=$1 OUT=$2
+S="${BUILD_DIR:-$ROOT/build}/wine-arm64-src"
+. "$ROOT/wine-arm64/pins"; . "$ROOT/dxmt/pins"; . "$ROOT/wine-arm64/deps.pins"
+export GIT_NO_LAZY_FETCH=1  # never fetch a blob from a promisor remote: the archive holds what is on disk
+N="MacNeutron-$V-source"
+W="$OUT/$N"
+rm -rf "$W" "$OUT/$N.tar.gz"
+mkdir -p "$W"
+trap 'rm -rf "$W"' EXIT
+echo "# tree pin applied patches file" > "$W/SOURCES.txt"
+row() { echo "$*" >> "$W/SOURCES.txt"; }  # row <tree> <pin> <applied> <patches> <file>
+
+h=$(git -C "$ROOT" rev-parse HEAD)
+git -C "$ROOT" archive --format=tar --prefix=MacNeutron/ -o "$W/MacNeutron.tar" HEAD
+row MacNeutron "$h" "$h" 0 MacNeutron.tar
+
+# applied <tree> <pin>: the tree's HEAD, checked to be what build.sh applied, clean, and <pin> plus the patches.
+applied() {
+  a=$(cat "$S/$1.applied") || die "no $S/$1.applied"
+  [ "$(git -C "$S/$1" rev-parse HEAD)" = "$a" ] || die "$S/$1 isn't at $1.applied"
+  [ -z "$(git -C "$S/$1" status --porcelain)" ] || die "$S/$1 has changes"
+  n=$(find "$ROOT/wine-arm64/patches/$1" -name '*.patch' | wc -l | tr -d ' ')
+  [ "$(git -C "$S/$1" rev-parse "$a~$n")" = "$2" ] || die "$S/$1 isn't $2 with $n patches"
+}
+tree() {  # tree <name> <pin>
+  applied "$1" "$2"
+  git -C "$S/$1" archive --format=tar --prefix="$1/" -o "$W/$1.tar" HEAD
+  row "$1" "$2" "$a" "$n" "$1.tar"
+}
+sub() {  # sub <tree> <path>: a submodule at the commit the tree records
+  c=$(git -C "$S/$1" ls-tree HEAD -- "$2" | awk '$2 == "commit" { print $3 }')
+  [ -n "$c" ] && [ "$(git -C "$S/$1/$2" rev-parse HEAD)" = "$c" ] || die "$S/$1/$2 isn't at the commit $1 records"
+  [ -z "$(git -C "$S/$1/$2" status --porcelain)" ] || die "$S/$1/$2 has changes"
+  f="$1-${2##*/}.tar"
+  git -C "$S/$1/$2" archive --format=tar --prefix="$1/$2/" -o "$W/$f" HEAD
+  row "$1/$2" "$c" "$c" 0 "$f"
+}
+tree wine "$WINE_COMMIT"
+tree fex "$FEX_COMMIT"
+for p in External/fmt External/range-v3 External/rpmalloc External/unordered_dense External/xxhash \
+  Source/Common/cpp-optparse; do sub fex "$p"; done
+tree dxmt "$DXMT_COMMIT"
+for p in external/nvapi include/native/directx; do sub dxmt "$p"; done
+
+applied lsteamclient "$LSTEAMCLIENT_COMMIT"
+git -C "$S/lsteamclient" -c core.quotePath=false ls-files -t | sed -n 's/^H //p' > "$W/lsteamclient.list"
+[ -s "$W/lsteamclient.list" ] || die "lsteamclient's worktree lists no files"
+if LC_ALL=C /usr/bin/grep -vE '^lsteamclient/' "$W/lsteamclient.list" \
+  || LC_ALL=C /usr/bin/grep -E '^lsteamclient/(steamworks_sdk_|gen_wrapper\.py$)' "$W/lsteamclient.list"; then
+  die "lsteamclient's worktree holds files outside the build's (above)"
+fi
+COPYFILE_DISABLE=1 tar -cf "$W/lsteamclient.tar" --no-mac-metadata --no-xattrs --no-acls --no-fflags --uid 0 --gid 0 \
+  --uname root --gname root -s ',^,lsteamclient/,' -C "$S/lsteamclient" -T "$W/lsteamclient.list" \
+  || die "can't tar lsteamclient's worktree"
+rm "$W/lsteamclient.list"
+row lsteamclient "$LSTEAMCLIENT_COMMIT" "$a" "$n" lsteamclient.tar
+
+for u in "$FREETYPE_URL" "$GNUTLS_URL" "$NETTLE_URL" "$GMP_URL"; do
+  cp -c "$S/${u##*/}" "$W/" || die "no ${u##*/} in $S"
+done
+
+cp "$W/SOURCES.txt" "$OUT/SOURCES.txt"
+COPYFILE_DISABLE=1 tar -czf "$OUT/$N.tar.gz.tmp" --no-mac-metadata --no-xattrs --no-acls --no-fflags --uid 0 --gid 0 \
+  --uname root --gname root -C "$OUT" "$N" || die "can't write $N.tar.gz"
+mv "$OUT/$N.tar.gz.tmp" "$OUT/$N.tar.gz"
+echo "release: wrote $OUT/$N.tar.gz" >&2

@@ -1,5 +1,7 @@
 # D3D12 stubs acceptance test (DXMT fork, sub-project 3, first slice)
 
+Historical: the Rosetta runtime was removed in 0.1.0; reproduce with the frozen reference (`tools/freeze-rosetta-reference.sh`).
+
 Spec: `docs/superpowers/specs/2026-09-29-macneutron-d3d12-stubs-design.md` §7. Manual, on a Mac with D3DMetal (GPTK
 imported) and SMITE 2 installed. Record results at the bottom.
 

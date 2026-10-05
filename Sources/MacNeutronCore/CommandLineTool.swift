@@ -1,3 +1,4 @@
+import Darwin
 import Dispatch
 import Foundation
 
@@ -5,55 +6,55 @@ import Foundation
 public enum CommandLineTool {
     public static let usage = """
         usage: macneutron launch <verb> <target> [args...]
-               macneutron import-gptk [--tool-dir <dir>] <GPTK volume | redist | redist/lib>
-               macneutron install-runtime [--tool-dir <dir>] [--tarball <Libraries.tar.gz>]
-               macneutron install-dxmt [--tool-dir <dir>] <build/dxmt>
+               macneutron install --tool-dir <dir> --wine-app <wine.app> [--steam-exe <steam.exe>] [--force]
+               macneutron passthrough <verb> <command> [args...]
         """
 
     public static func run(_ args: [String], environment: [String: String], executable: URL) async -> Int32 {
         guard let command = args.first else { return usageError() }
-        var rest = Array(args.dropFirst())
+        let rest = Array(args.dropFirst())
         switch command {
         case "launch":
             let launcher = Launcher(layout: ToolLayout(executable: executable))
             installTerminationHandlers(launcher, environment: environment)
             return launcher.launch(rest, environment: environment)
-        case "import-gptk":
-            let layout = toolLayout(option("--tool-dir", in: &rest))
-            guard rest.count == 1 else { return usageError() }
+        case "install":
+            var args = rest
+            let force = args.contains("--force")
+            args.removeAll { $0 == "--force" }
+            // Both required: the checks assemble their own tool folders, never the installed one.
+            guard let dir = option("--tool-dir", in: &args), let wineApp = option("--wine-app", in: &args) else {
+                return usageError()
+            }
+            let steamExe = option("--steam-exe", in: &args)
+            guard args.isEmpty else { return usageError() }
+            if let steamExe, !FileManager.default.fileExists(atPath: steamExe) {  // before the runtime changes
+                return failure(CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: steamExe]))
+            }
+            let layout = ToolLayout(root: URL(filePath: dir, directoryHint: .isDirectory))
             do {
-                let manifest = try GPTKImporter.importGPTK(from: URL(filePath: rest[0]), into: layout)
-                print("Imported D3DMetal \(manifest.version) into \(layout.root.path(percentEncoded: false))")
-                return 0
+                let outcome = try RuntimeInstaller.install(
+                    wineApp: URL(filePath: wineApp, directoryHint: .isDirectory), layout: layout,
+                    launcherBinary: executable, steamExe: steamExe.map { URL(filePath: $0) }, force: force)
+                print(installMessage(outcome, label: ToolLayout.runtimeLabel(version: layout.runtimeVersion,
+                                                                             identity: layout.identity)))
+                return installExitCode(outcome)
             } catch {
                 return failure(error)
             }
-        case "install-runtime":
-            let layout = toolLayout(option("--tool-dir", in: &rest))
-            let tarballPath = option("--tarball", in: &rest)
-            guard rest.isEmpty else { return usageError() }
+        case "passthrough":
+            // Steam's Mac-game tool: `<verb> <command> [args…]`. Replacing this process keeps Steam tracking its PID.
+            guard rest.count >= 2 else { return usageError() }
+            let target = passthroughTarget(rest[1])
             do {
-                if tarballPath == nil { print("Downloading \(RuntimePin.current.url.absoluteString) (first time only)") }
-                let tarball = if let tarballPath { URL(filePath: tarballPath) } else { try await RuntimeInstaller.cachedDownload(.current) }
-                try RuntimeInstaller.install(tarball: tarball, pin: .current, layout: layout, launcherBinary: executable)
-                print("Installed \(RuntimePin.current.version) into \(layout.root.path(percentEncoded: false))")
-                return 0
+                _ = try spawn(target, Array(rest.dropFirst(2)), environment: environment, replacingThisProcess: true)
+            } catch let error as POSIXError {
+                FileHandle.standardError.write(Data(
+                    "macneutron: can't run \(target.path(percentEncoded: false)): \(String(cString: strerror(error.code.rawValue)))\n".utf8))
             } catch {
                 return failure(error)
             }
-        case "install-dxmt":
-            let layout = toolLayout(option("--tool-dir", in: &rest))
-            guard rest.count == 1 else { return usageError() }
-            do {
-                guard let build = DXMTBuild(folder: URL(filePath: rest[0], directoryHint: .isDirectory)) else {
-                    throw DXMTInstallError.notABuild(rest[0])
-                }
-                try DXMTInstaller.install(layout: layout, from: build)
-                print("Installed DXMT \(build.version) into \(layout.root.path(percentEncoded: false))")
-                return 0
-            } catch {
-                return failure(error)
-            }
+            return 1  // a successful exec doesn't return
         default:
             return usageError()
         }
@@ -67,8 +68,66 @@ public enum CommandLineTool {
         return value
     }
 
-    static func toolLayout(_ dir: String?) -> ToolLayout {
-        ToolLayout(root: dir.map { URL(filePath: $0, directoryHint: .isDirectory) } ?? ToolLayout.defaultRoot)
+    /// 0 when installed or unchanged, 3 when deferred.
+    static func installExitCode(_ outcome: RuntimeInstallOutcome) -> Int32 {
+        if case .deferred = outcome { return 3 }
+        return 0
+    }
+
+    static func installMessage(_ outcome: RuntimeInstallOutcome, label: String) -> String {
+        switch outcome {
+        case .installed: "installed \(label)"
+        case .unchanged: "unchanged \(label)"
+        case .deferred(let path): "deferred: \(path) is running"
+        }
+    }
+
+    /// `<app>.app` → `<app>.app/Contents/MacOS/<CFBundleExecutable>`, as `passthrough.sh` did; anything else unchanged.
+    /// Wider than the script: a folder without a readable Info.plist resolves to its own name (the script exec'd the
+    /// folder, which fails).
+    static func passthroughTarget(_ path: String) -> URL {
+        let url = URL(filePath: path)
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue else { return url }
+        let plist = (try? Data(contentsOf: url.appending(path: "Contents/Info.plist")))
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        let name = plist?["CFBundleExecutable"] as? String ?? url.deletingPathExtension().lastPathComponent
+        return url.appending(path: "Contents/MacOS").appending(path: name)
+    }
+
+    /// arm64e, arm64, x86_64: what `arch -arm64e -arm64 -x86_64` does. Steam itself spawns tools preferring x86_64.
+    static let passthroughArchitectures: [(cpu_type_t, cpu_subtype_t)] = [
+        (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E), (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL),
+        (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL),
+    ]
+
+    /// `posix_spawn`s `executable` with `passthroughArchitectures` as its slice preference and returns its pid.
+    /// `replacingThisProcess` (`POSIX_SPAWN_SETEXEC`) execs in place and returns only on failure.
+    static func spawn(_ executable: URL, _ arguments: [String], environment: [String: String],
+                      replacingThisProcess: Bool, standardOutput: URL? = nil) throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        var types = passthroughArchitectures.map(\.0)
+        var subtypes = passthroughArchitectures.map(\.1)
+        var set = 0
+        var status = posix_spawnattr_setarchpref_np(&attributes, types.count, &types, &subtypes, &set)
+        if status == 0, replacingThisProcess { status = posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC)) }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        if status == 0, let standardOutput {
+            status = posix_spawn_file_actions_addopen(&actions, 1, standardOutput.path(percentEncoded: false),
+                                                      O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        }
+        let path = executable.path(percentEncoded: false)
+        let argv = ([path] + arguments).map { strdup($0) } + [nil]
+        let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer { (argv + envp).forEach { free($0) } }
+        var pid: pid_t = 0
+        if status == 0 { status = posix_spawn(&pid, path, &actions, &attributes, argv, envp) }
+        guard status == 0 else { throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EINVAL) }
+        return pid
     }
 
     // ponytail: global signal sources for the process's single launch; never mutated after setup.

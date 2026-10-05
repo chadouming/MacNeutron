@@ -43,9 +43,14 @@ import Testing
 
 @Test func bridgeNeedsSteamExeAndBothHalvesOfTheClient() throws {
     let layout = try makeToolLayout()
-    #expect(!layout.steamBridgeInstalled)
-    try installFakeSteamBridge(in: layout, i386: false)
+    #expect(!layout.steamBridgeInstalled)  // wine.app has lsteamclient; the tool folder has no steam.exe yet
+    try installFakeSteamBridge(in: layout)
     #expect(layout.steamBridgeInstalled)
-    try FileManager.default.removeItem(at: layout.lsteamclientUnix)
-    #expect(!layout.steamBridgeInstalled)
+    for half in [layout.lsteamclientUnix, layout.lsteamclient] {
+        let saved = try Data(contentsOf: half)
+        try FileManager.default.removeItem(at: half)
+        #expect(!layout.steamBridgeInstalled)
+        try saved.write(to: half)
+    }
+    #expect(layout.steamBridgeInstalled)
 }

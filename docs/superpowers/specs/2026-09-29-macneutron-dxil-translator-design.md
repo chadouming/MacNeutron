@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-29
 - **Status:** Draft for review
+- Superseded in part by `2026-10-04-macneutron-arm64-release-design.md` (the Rosetta runtime, GPTK, DXVK and the x86_64 DXMT build were removed in 0.1.0).
 - **Builds on:** `2026-09-28-macneutron-dxmt-fork-design.md` (roadmap §2 item 2; the fork, `make dxmt`, `make dxmt-check`, capture mode), with its acceptance in `docs/testing/acceptance-dxmt-fork.md`.
 - **Scope:**
   - **In:** a DXIL front end in the fork's `airconv` that turns Shader Model 6.0–6.6 vertex, pixel and compute shaders into Metal libraries, for every operation SMITE 2's captured shaders use; behaviour tests against D3DMetal; an offline corpus tool; the SMITE 2 run that finds the next runtime gap.
