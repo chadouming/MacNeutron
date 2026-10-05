@@ -33,7 +33,15 @@ row "first install installs" "$([ "$st:${out%% *}" = "0:installed" ] && echo 1 |
 # The launcher's servers run with msync; a stop must use the same mode to reach them.
 server() { WINEPREFIX="$1" WINEMSYNC=1 "$TOOL/wine.app/Contents/Resources/bin/wineserver" "$2" 2> /dev/null || true; }
 stop_wine() { for p in "$WORK"/compatdata/*/pfx; do [ ! -d "$p" ] || { server "$p" -k; server "$p" -w; }; done; }
-trap 'exec 3>&- 2> /dev/null; stop_wine' EXIT
+# On the way out, also whatever still runs the tool folder's wine or wineserver (wineserver -k doesn't stop its
+# clients), as release.sh's stop_r3; never pkill -f.
+sweep() {
+  pids=$(for f in "$TOOL/wine.app/Contents/MacOS/wine" "$TOOL/wine.app/Contents/Resources/bin/wineserver"; do
+    lsof -t "$f" 2> /dev/null || true; done | sort -u)
+  # shellcheck disable=SC2086  # pids is a list
+  [ -z "$pids" ] || kill $pids 2> /dev/null || true
+}
+trap 'exec 3>&- 2> /dev/null; stop_wine; sweep' EXIT
 
 launch() { # compat-folder backend exe [args...]
   data=$1 backend=$2 exe=$3; shift 3

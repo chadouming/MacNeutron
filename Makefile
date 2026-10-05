@@ -74,7 +74,7 @@ dxil-corpus: wine-arm64
 dxmt-check: build wine-arm64 dxmt-tests dxmt-tests-arm64ec presenter
 	sh dxmt/tests/build_test.sh
 	sh dxmt/check.sh
-	MACNEUTRON_ARM64_TESTS=build/dxmt-tests-arm64ec MACNEUTRON_ARM64_LOOP=build/dxmt-tests-arm64ec/present_loop.exe DXMT_CHECK_WORK="$$TMPDIR/macneutron dxmt arm64ec" sh dxmt/check.sh
+	MACNEUTRON_ARM64_TESTS=build/dxmt-tests-arm64ec MACNEUTRON_ARM64_LOOP=build/dxmt-tests-arm64ec/present_loop.exe DXMT_CHECK_WORK="$${TMPDIR:-/tmp}/macneutron dxmt arm64ec" sh dxmt/check.sh
 
 # A development MacNeutron.app, ad hoc signed, with the CLI, wine.app and steam.exe inside. Never open it on this Mac:
 # its start installs into the real tool folder. Needs the signing variables (it builds wine.app); make release

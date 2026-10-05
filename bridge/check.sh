@@ -1,17 +1,19 @@
 #!/bin/sh
 # Runs steam.exe on wine.app: real Wine, no Steam needed (bridge spec §9, release spec §9 L3). Needs `make build bridge
-# wine-arm64`. Two modes:
+# wine-arm64`. Its modes:
+# - a tool folder, MACNEUTRON_TOOL_DIR (assembled with `macneutron install … --steam-exe`): the rows directly in its
+#   prefix, then through its launcher. It wins over MACNEUTRON_ARM64_APP, as in bridge/probe.sh.
 # - arm64 (ship-base spec §7), when MACNEUTRON_ARM64_APP names a wine.app: the aarch64 steam.exe and helper on that
 #   runtime, run directly in the booted prefix MACNEUTRON_ARM64_PREFIX (wine-arm64/check.sh's).
-# - a tool folder, MACNEUTRON_TOOL_DIR (assembled with `macneutron install … --steam-exe`), or else $WORK/tool,
-#   assembled here from build/wine-arm64/wine.app: the same rows directly in its prefix, then through its launcher.
+# - otherwise a tool folder $WORK/tool assembled here from build/wine-arm64/wine.app, as the first mode.
 # BRIDGE_CHECK_WORK replaces the folder the helper's files (and, with a tool folder, the compat folder) go in.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${BRIDGE_CHECK_WORK:-${TMPDIR:-/tmp}/macneutron bridge ü}"   # a space and a non-ASCII letter on purpose
 B="$ROOT/build/bridge/arm64"
 mkdir -p "$WORK"
-if [ -n "${MACNEUTRON_ARM64_APP:-}" ]; then
+COMPAT=  # set in tool-folder mode only: the launcher rows run then
+if [ -z "${MACNEUTRON_TOOL_DIR:-}" ] && [ -n "${MACNEUTRON_ARM64_APP:-}" ]; then
   TOOL="$MACNEUTRON_ARM64_APP"
   WINE="$TOOL/Contents/MacOS/wine"
   export WINEPREFIX="${MACNEUTRON_ARM64_PREFIX:?arm64 mode needs MACNEUTRON_ARM64_PREFIX}"
@@ -64,7 +66,7 @@ expect "launchers may start children outside the job" "$(steam breakaway)" "brea
 # The same rows through the tool folder's launcher, as Steam starts a game: the launcher copies steam.exe and starts
 # the game through it. A fake account ID: the launcher would fill in the real one, which steam.exe writes to the
 # prefix's registry. The helper goes as a macOS path; the launcher converts it.
-if [ -n "${COMPAT:-}" ]; then
+if [ -n "$COMPAT" ]; then
   GAME="$WORK/game dir/hélper.exe"
   L() { env STEAM_COMPAT_DATA_PATH="$COMPAT" SteamAppId=0 MACNEUTRON_STEAM_ACCOUNT=12345 "$TOOL/bin/macneutron" launch "$@"; }
   lsteam() { L waitforexitandrun "$GAME" "$@" 2>/dev/null | tr -d '\r'; }

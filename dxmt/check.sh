@@ -596,7 +596,8 @@ PY
 run ours volume-ours dxmt "$TESTS/d3d12_volume.exe" "Z:$S/volume.fill.dxil" "Z:$S/volume.sample.dxil"
 run ref volume-ref d3dmetal "$TESTS/d3d12_volume.exe" "Z:$S/volume.fill.dxil" "Z:$S/volume.sample.dxil"
 expect "a 3D texture written by compute, then sampled and loaded, matches D3DMetal" \
-  "$(grep '^volume ' "$WORK/volume-ours.txt" | tr '\n' ' ')" "$(grep '^volume ' "$WORK/volume-ref.txt" | tr '\n' ' ')"
+  "$( (grep '^volume ' "$WORK/volume-ours.txt" || echo none) | tr '\n' ' ')" \
+  "$( (grep '^volume ' "$WORK/volume-ref.txt" || echo 'D3DMetal printed nothing') | tr '\n' ' ')"
 exit $fail
 ) > "$WORK/lane-D.log" 2>&1 & pD=$!
 
@@ -769,7 +770,7 @@ expect "a signal behind no pending timestamps stays on the GPU" \
 V=$(cat "$WORK/ours/wine.app/Contents/Resources/DXMT/version" 2> /dev/null || true)
 LANE=A; P="$WORK/compat/ours-A/dxmt-pipelines"  # lane A's prefix: its d3d12_cache runs recorded and stamped there
 expect "the launcher records into the game's compat folder" "$([ -s "$P/d3d12_cache.exe.pipelines" ] && echo yes || echo no)" yes
-expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "$V"
+expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "${V:-no DXMT/version}"
 echo "old build" > "$P/replayed"
 LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; before=$(cat "$LLOG" 2> /dev/null | wc -l)
 CACHE="$WORK/cache/e2e"
@@ -779,7 +780,7 @@ expect "a changed build replays d3d12_cache's recording before the game" \
   "$(tail -n +$((before + 1)) "$LLOG" | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
 expect "then the game only hits" "$(counters e2e)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
 expect "and draws as D3DMetal" "$(drawn e2e)" "$(drawn cache-ref-a)"
-expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "$V"
+expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "${V:-no DXMT/version}"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail
