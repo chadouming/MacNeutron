@@ -60,18 +60,18 @@ Nothing was submitted to Apple: the notarized run (R2, L6's notarized row on the
     rehearsal skips the clean-tree and origin/main refusals.
   - The release `wine.app` (`bundle.sh --release`): every assertion passed after stripping (signature, entitlements,
     licences, minos, timestamps, links, x18 counts, builtin markers, CHPE metadata). Its `SOURCE` differs from the
-    development one only in `MACNEUTRON_COMMIT` (HEAD `b75a7e4`; the development bundle's names `8da5fdb`, the last
+    development one only in `MACNEUTRON_COMMIT` (HEAD `e23f131`; the development bundle's names `8da5fdb`, the last
     commit that changed a build input).
   - R3: `smoke.sh` on it (`info wine.app: …/build/release/rehearse-0.0.0/wine.app (0.0.0)`): every row PASS (the
     notarized row ran on `build/release/r0/wine.app`, R0's bundle); the bridge probe through an assembled tool folder:
     `init: ok`, `steamid ok`, auth ticket 234 bytes; `present_loop.exe 1280 720 0 0 120 0` on DXMT through it:
     `frames 120, avg frame 8.092 ms`.
-  - R4: `licences_test.sh --app` on `MacNeutron.app`: `PASS licences_test`, `PASS licences_test --app` (and red by
-    hand on a copy without `Contents/Resources/licenses/LICENSE`, and on one with neither the README's pointer nor
-    `wine.app`'s `licenses/macneutron/LICENSE`). The app: both Swift binaries `arm64`, version `0.0.0`, minimum `27.0`,
-    hardened runtime and a secure timestamp on the CLI and the app, no entitlements, `codesign --verify --strict
-    --deep` passes, the nested `wine.app`'s CDHash equal to the release bundle's; `spctl` rejects it (`Unnotarized
-    Developer ID`), as expected before notarization.
+  - R4: `licences_test.sh --app` on `MacNeutron.app`: `PASS licences_test`, `PASS licences_test --app` (and red by hand
+    on a copy without `Contents/Resources/licenses/LICENSE`, and on one with neither the README's pointer nor
+    `wine.app`'s `licenses/macneutron/LICENSE`). The app: both Swift binaries `arm64` and stripped (`strip -S`: no `OSO`
+    entries, no path under `/Users/`), version `0.0.0`, minimum `27.0`, hardened runtime and a secure timestamp on the
+    CLI and the app, no entitlements, `codesign --verify --strict --deep` passes, the nested `wine.app`'s CDHash equal
+    to the release bundle's; `spctl` rejects it (`Unnotarized Developer ID`), as expected before notarization.
   - R5: `PASS sources`. `verify-sources.sh` was also red, by hand, on a wrong `WINE_SERIES`, `FEX_SUBMODULE_fmt`,
     `GMP_SHA256`, `MACNEUTRON_COMMIT` and `LLVM_TAG`, a missing `dxmt-nvapi.tar`, an edited lsteamclient file, an SDK
     file added to `lsteamclient.tar` and a wrong Wine patch count.
@@ -80,7 +80,7 @@ Nothing was submitted to Apple: the notarized run (R2, L6's notarized row on the
 |---|---|
 | `wine.app` before stripping | 1,373,232 KB |
 | `wine.app` after stripping (unsigned; `.a` files and Wine's developer tools deleted) | 459,260 KB |
-| `MacNeutron-0.0.0.zip` (rehearsal, not notarized) | 139,633,357 bytes |
-| `MacNeutron-0.0.0-source.tar.gz` | 106,960,332 bytes |
+| `MacNeutron-0.0.0.zip` (rehearsal, not notarized) | 139,576,793 bytes |
+| `MacNeutron-0.0.0-source.tar.gz` | 106,961,622 bytes |
 
 The rehearsal's `SHA256SUMS` describe unpublished rehearsal files and aren't recorded; the release's go here in Task 14.
