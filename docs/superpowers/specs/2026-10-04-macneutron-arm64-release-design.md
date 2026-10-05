@@ -599,7 +599,9 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   (its minimum is 27.0 and it is arm64 only). The host build (`swift build -c release`) is already thin arm64 on Apple
   Silicon; `release.sh` asserts `lipo -archs` is `arm64`. AVX is a per-game toggle, not a column.
 - **§5.2:** release mode also deletes the `winecpp` and `wineg++` links (to `winegcc`). Stripping goes between the
-  layout and the signing; every assertion runs after signing, as today.
+  layout and the signing; every assertion runs after signing, as today, except the build-path check (no shipped file
+  names the repository, the build folder or `$HOME/`; release mode, and `release.sh` on the assembled app), which runs
+  between stripping and signing so a failure stops before anything is signed.
 - **§5.3:** `winemetal.so` has no initialisation today; patch 0002 adds a constructor.
 - **§6.3 step 1:** `release.sh` fetches `origin` first; it checks each tree with `lib.sh`'s `build_mode` (naming any
   tree not `applied`) and then requires `make wine-arm64` to say `up to date`; `dxmt/published.sh` runs on
