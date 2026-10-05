@@ -61,6 +61,10 @@ check_origin_tag() {  # check_origin_tag <repo> <version>: not a tag on origin e
   t=$(git -C "$1" ls-remote --tags origin "refs/tags/v$2") || { echo "release: can't list origin's tags" >&2; return 1; }
   [ -z "$t" ] || { echo "release: v$2 is already a tag on origin" >&2; return 1; }
 }
+check_notary_profile() {  # check_notary_profile <profile>: notarytool signs in with it (one query, no submission)
+  xcrun notarytool history -p "$1" > /dev/null 2>&1 \
+    || { echo "release: the notary profile $1 isn't usable (xcrun notarytool store-credentials $1)" >&2; return 1; }
+}
 check_trees() {  # check_trees: the four trees in build/wine-arm64-src are applied (the patches are the truth)
   r=0
   for t in wine fex dxmt lsteamclient; do
@@ -199,6 +203,34 @@ self_test() {
     "release: DXMT_COMMIT $(git -C "$T/dxmt" rev-parse HEAD) is not on the fork's macneutron branch" \
     check_dxmt "$T/dxmt" "$(git -C "$T/dxmt" rev-parse HEAD)"
 
+  # The notary profile (release mode checks it with the refusals) and stapling's retries, with a stand-in xcrun on
+  # PATH that logs its arguments: the real notarytool is never run here. The stand-in sleep only logs too.
+  mkdir -p "$T/shim" "$T/Some.app"
+  cat > "$T/shim/xcrun" << 'EOF'
+#!/bin/sh
+echo "$*" >> "$SHIM_LOG"
+case "$1 $2" in
+  "notarytool history") exit "${SHIM_HISTORY:-0}" ;;
+  "stapler staple") [ "$(LC_ALL=C /usr/bin/grep -c '^stapler staple' "$SHIM_LOG")" -gt "${SHIM_STAPLE_FAILS:-0}" ] || exit 65 ;;
+esac
+EOF
+  printf '#!/bin/sh\necho "sleep $*" >> "$SHIM_LOG"\n' > "$T/shim/sleep"
+  chmod +x "$T/shim/xcrun" "$T/shim/sleep"
+  shim() { export PATH="$T/shim:$PATH" SHIM_LOG="$T/shim.log"; "$@"; }  # in refused's or passes' subshell
+  no_profile() { export SHIM_HISTORY=69; shim check_notary_profile nope; }
+  refused "a notary profile notarytool can't use" \
+    "release: the notary profile nope isn't usable (xcrun notarytool store-credentials nope)" no_profile
+  passes "a usable notary profile" shim check_notary_profile macneutron
+  staples() {  # staples <case> <failures> <want status:staples:sleeps>
+    : > "$T/shim.log"
+    out=$( (export SHIM_STAPLE_FAILS=$2; shim staple "$T/Some.app") 2>&1 ) && st=0 || st=$?
+    n=$(LC_ALL=C /usr/bin/grep -c '^stapler staple' "$T/shim.log" || true)
+    got="$st:$n:$(LC_ALL=C /usr/bin/grep -cx 'sleep 10' "$T/shim.log" || true)"
+    if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "got [$got], want [$3]: $out"; fi
+  }
+  staples "a staple that fails twice is retried" 2 0:3:2
+  staples "a staple that keeps failing stops after six tries" 99 1:6:5
+
   if [ $fail = 0 ]; then echo "PASS release self-test"; else echo "FAIL release self-test"; fi
   return $fail
 }
@@ -318,6 +350,22 @@ EOF
   echo "PASS R4"
 }
 
+# The zip unzipped with /usr/bin/unzip: MacNeutron.app and its wine.app pass codesign --verify --strict --deep and, in
+# a release, carry valid stapled tickets.
+check_zip() {
+  X=$(mktemp -d "${TMPDIR:-/tmp}/release-unzip.XXXXXX")
+  /usr/bin/unzip -q "$OUT/$ZIP" -d "$X" || { rm -rf "$X"; die "can't unzip $ZIP"; }
+  for b in MacNeutron.app MacNeutron.app/Contents/Helpers/wine.app; do
+    out=$(codesign --verify --strict --deep "$X/$b" 2>&1) \
+      || { rm -rf "$X"; die "the unzipped $b fails codesign --verify --strict --deep: $out"; }
+    if [ $mode = release ]; then
+      xcrun stapler validate "$X/$b" > /dev/null 2>&1 || { rm -rf "$X"; die "the unzipped $b fails stapler validate"; }
+    fi
+  done
+  rm -rf "$X"
+  echo "PASS $ZIP unzips (unzip) to a MacNeutron.app and wine.app that verify"
+}
+
 # The entry points: --self-test, --check-version, or a version (released or rehearsed). Any other arguments: usage.
 case "$#:${1:-}" in
   1:--self-test) self_test; exit ;;
@@ -338,6 +386,7 @@ if [ $mode = release ]; then
   check_clean "$ROOT" || failed=1
   check_published "$ROOT" || failed=1
   check_origin_tag "$ROOT" "$V" || failed=1
+  check_notary_profile "${MACNEUTRON_NOTARY_PROFILE:-macneutron}" || failed=1  # before the bundle and R3, not after
 fi
 check_trees || failed=1
 check_dxmt "${BUILD_DIR:-$ROOT/build}/wine-arm64-src/dxmt" "$(. "$ROOT/dxmt/pins"; echo "$DXMT_COMMIT")" || failed=1
@@ -376,8 +425,11 @@ if [ $mode = release ]; then
   accepted "$A" || die "R2: Gatekeeper rejects $A: $(spctl -a -vvv -t exec "$A" 2>&1 | head -n 2 | tr '\n' ' ')"
   echo "PASS R2 MacNeutron.app accepted"
 fi
+# Without extended attributes (--norsrc): Info-ZIP's unzip, which the README's "unzip it" may mean, would leave their
+# AppleDouble entries in the bundles as files and break both seals. Then what a terminal user gets is checked.
 ZIP="MacNeutron-$V.zip"
-ditto -c -k --keepParent "$A" "$OUT/$ZIP"
+ditto -c -k --norsrc --keepParent "$A" "$OUT/$ZIP"
+check_zip
 
 # 5. The source archive (R5).
 TGZ="MacNeutron-$V-source.tar.gz"

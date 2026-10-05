@@ -17,6 +17,18 @@ syspolicy() {  # syspolicy <mode> <bundle> <work-dir>
 # Gatekeeper accepts <path> to run (spctl writes its verdict to stderr).
 accepted() { spctl -a -vvv -t exec "$1" 2>&1 | LC_ALL=C /usr/bin/grep -q ': accepted$'; }
 
+# Staples <bundle>'s ticket: up to six tries, 10 s apart. Right after Accepted the ticket can take a while to reach
+# stapler's lookup ("Could not find ticket"), and a rerun of the release would submit to Apple again.
+staple() {  # staple <bundle>
+  i=1
+  until xcrun stapler staple "$1"; do
+    [ $i -lt 6 ] || die "stapler staple failed for $1"
+    echo "release: stapler staple failed for $1 (try $i of 6), again in 10 s" >&2
+    i=$((i + 1))
+    sleep 10
+  done
+}
+
 # Notarizes <bundle> and staples its ticket (spec §6.2/§6.3): the zip and the notary output go in <work-dir>.
 # Prints `submission <id>`. On a rejection, prints the notary log and fails.
 notarize_and_staple() {  # notarize_and_staple <bundle> <work-dir>
@@ -37,7 +49,7 @@ notarize_and_staple() {  # notarize_and_staple <bundle> <work-dir>
     xcrun notarytool log "$id" -p "$profile" >&2 || true
     die "submission $id: $status"
   fi
-  xcrun stapler staple "$1" || die "stapler staple failed for $1"
+  staple "$1"
   xcrun stapler validate "$1" || die "stapler validate failed for $1"
   syspolicy distribution "$1" "$2"
 }
