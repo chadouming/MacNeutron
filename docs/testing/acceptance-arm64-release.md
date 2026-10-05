@@ -46,13 +46,13 @@ R0b: PASS
 ## R1, R3, R4, R5: `release/release.sh` and its rehearsal
 
 `release/release.sh` (Task 12, then Task 12b: no build path in the release, and the hardening of Rulings 20 and 22),
-2026-10-05, with the signing variables and Steam running and logged in. Every run below is at `9faeb88`. Nothing was
+2026-10-05, with the signing variables and Steam running and logged in. Every run below is at `d1972a4`. Nothing was
 submitted to Apple: the notarized run (R2, L6's notarized row on the release bundle) is Task 14's.
 
-- `make release VERSION=0.0.1-rc` (at `9faeb88`): `release.sh --check-version` runs before make's prerequisites, so it
+- `make release VERSION=0.0.1-rc` (at `d1972a4`): `release.sh --check-version` runs before make's prerequisites, so it
   printed only `release: VERSION 0.0.1-rc is not MAJOR.MINOR.PATCH` and make's own `make: *** [release] Error 2`, built
   nothing, and exited 2. `make release VERSION=01.0.0` the same (exit 2).
-- R1, `sh release/release.sh --self-test` (at `9faeb88`): 35 `ok`, `PASS release self-test`. Each refusal on its own
+- R1, `sh release/release.sh --self-test` (at `d1972a4`): 35 `ok`, `PASS release self-test`. Each refusal on its own
   input in a temporary clone whose origin is a local bare clone (the DXMT case with a local bare repository as the
   fork): a version that isn't MAJOR.MINOR.PATCH, one with a leading zero (`01.0.0`, `0.00.1`), `v0.0.0` already a tag,
   `v0.0.2` a tag on origin only (pushed to the local origin, deleted locally), release.sh exiting 2 with only the version
@@ -61,7 +61,7 @@ submitted to Apple: the notarized run (R2, L6's notarized row on the release bun
   `import-gptk`, `doesn't redistribute`), a dirty tree, a HEAD not in origin/main, a tree that isn't applied, a SOURCE
   with `WINE_SERIES=dev`, with a `+dirty` commit or with another commit than HEAD, an unpublished DXMT commit; and the
   passing case of each (`0.10.0` among them).
-- `sh release/release.sh --rehearse 0.0.0` (at `9faeb88`, 2 min 19 s; `build/release/rehearse-0.0.0/`, with its
+- `sh release/release.sh --rehearse 0.0.0` (at `d1972a4`, 2 min 20 s; `build/release/rehearse-0.0.0/`, with its
   `REHEARSAL` file):
   - Refusals: READMEs, the four trees `applied`, `DXMT_COMMIT` published on the fork, `wine-arm64: up to date`. The
     rehearsal skips the clean-tree, origin/main and origin tag refusals.
@@ -80,7 +80,7 @@ submitted to Apple: the notarized run (R2, L6's notarized row on the release bun
   - R3: `smoke.sh` on it (`info wine.app: …/build/release/rehearse-0.0.0/wine.app (0.0.0)`): every row PASS (the
     notarized row names the bundle it checked, `build/release/r0/wine.app`, R0's); the bridge probe through an assembled
     tool folder: `init: ok`, `steamid ok`, auth ticket 234 bytes; `present_loop.exe 1280 720 0 0 120 0` on DXMT through
-    it: `frames 120, avg frame 8.106 ms`.
+    it: `frames 120, avg frame 8.104 ms`.
   - R4: `licences_test.sh --app` on `MacNeutron.app`: `PASS licences_test`, `PASS licences_test --app` (and red by hand
     on a copy without `Contents/Resources/licenses/LICENSE`, on one with neither the README's pointer nor `wine.app`'s
     `licenses/macneutron/LICENSE`, and on one whose `LICENSE.TXT` differs from `wine.app`'s `llvm-mingw/` copy). The
@@ -93,11 +93,11 @@ submitted to Apple: the notarized run (R2, L6's notarized row on the release bun
     file added to `lsteamclient.tar`, a wrong Wine patch count, and a submodule row that names another submodule's
     commit and tar (with SOURCE to match): its commit isn't the gitlink FEX records at its applied commit.
 
-| Size (rehearsal at `9faeb88`) | |
+| Size (rehearsal at `d1972a4`) | |
 |---|---|
 | `wine.app` before stripping | 1,368,024 KB |
 | `wine.app` after stripping (unsigned; `.a` files and Wine's developer tools deleted) | 459,108 KB |
-| `MacNeutron-0.0.0.zip` (rehearsal, not notarized) | 139,554,007 bytes |
-| `MacNeutron-0.0.0-source.tar.gz` | 106,960,437 bytes |
+| `MacNeutron-0.0.0.zip` (rehearsal, not notarized) | 139,553,957 bytes |
+| `MacNeutron-0.0.0-source.tar.gz` | 106,959,269 bytes |
 
 The rehearsal's `SHA256SUMS` describe unpublished rehearsal files and aren't recorded; the release's go here in Task 14.
