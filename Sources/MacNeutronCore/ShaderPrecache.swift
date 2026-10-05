@@ -1,16 +1,17 @@
 import Foundation
 
 /// Shader pre-caching as Steam does it for Vulkan games (docs/superpowers/specs/2026-09-30-macneutron-pipeline-cache-design.md
-/// §3.7): our d3d12.dll records each game's pipelines in `<compatdata>/dxmt-pipelines`, and after a DXMT or macOS
-/// update the launcher rebuilds them with `dxmt-replay.exe` before the game starts.
+/// §3.7): our d3d12.dll records each game's pipelines in `<compatdata>/dxmt-pipelines`, and after a translator or
+/// macOS update the launcher rebuilds them with `dxmt-replay.exe` before the game starts.
 public struct ShaderPrecache: Sendable {
     public let folder: URL
-    /// The builds the recordings are compiled for: `<dxmt-version> <macOS build>`.
+    /// The builds the recordings are compiled for: `<translator key> <macOS build>` (`DXMT/translator`). A stamp from
+    /// before the key (`<dxmt-version> <macOS build>`) differs, so it replays once.
     public let builds: String
 
     public init(context: CompatContext, layout: ToolLayout, osBuild: String = ShaderPrecache.macOSBuild()) {
         folder = Self.folder(for: context)
-        builds = "\(layout.dxmtVersion ?? "none") \(osBuild)"
+        builds = "\(layout.dxmtTranslator ?? "none") \(osBuild)"
     }
 
     public static func folder(for context: CompatContext) -> URL { context.dataPath.appending(path: "dxmt-pipelines") }

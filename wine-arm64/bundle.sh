@@ -69,7 +69,7 @@ cp "$FEX_DLL" "$R/lib/wine/aarch64-windows/"
 cp "$FEX_SO" "$R/lib/wine/aarch64-unix/"
 # DXMT (arm64 DXMT spec §6), before signing so macho() signs winemetal.so with the rest. winemetal.dll is a Wine builtin
 # (DXMT's own build marks it) among Wine's. The front ends are native DLLs that go into a prefix's system32: they keep
-# to DXMT/, with the licences and the version.
+# to DXMT/, with the licences, the version and the translator's key (the launcher's replay stamp).
 put() { [ -f "$1/$2" ] || die "no $1/$2"; cp "$1/$2" "$3"; }  # put <dir> <file> <dest>
 mkdir -p "$R/DXMT/aarch64-windows"
 put "$DXMT_IN" aarch64-windows/winemetal.dll "$R/lib/wine/aarch64-windows/"
@@ -79,6 +79,7 @@ for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
 done
 for f in COPYING.LIB LICENSE LICENSE.OLD; do put "$DXMT_TREE" "$f" "$R/DXMT/"; done
 put "$DXMT_IN" version "$R/DXMT/"
+put "$DXMT_IN" translator "$R/DXMT/"
 # FreeType and gnutls (ship-base spec §5): beside the unix libraries that dlopen them by name, which find them through
 # their LC_RPATH @loader_path/.
 U="$R/lib/wine/aarch64-unix"
@@ -272,6 +273,8 @@ for f in d3d11.dll d3d10core.dll dxgi.dll d3d12.dll dxmt-replay.exe; do
 done
 ver=$(cat "$R/DXMT/version")
 case $ver in "$DXMT_COMMIT"+?*) ;; *) die "DXMT/version is '$ver', not $DXMT_COMMIT+<series or dev>" ;; esac
+LC_ALL=C /usr/bin/grep -qxE '[0-9a-f]{64}' "$R/DXMT/translator" \
+  || die "DXMT/translator is '$(cat "$R/DXMT/translator")', not the translator's 64-hex key"
 git -C "$DXMT_TREE" merge-base --is-ancestor "$DXMT_COMMIT" HEAD \
   || die "$DXMT_COMMIT (dxmt/pins) is not an ancestor of HEAD in $DXMT_TREE"
 # The Steam bridge (ship-base spec §7): an ARM64X Wine builtin (llvm-readobj prints a CHPEMetadata block only for a

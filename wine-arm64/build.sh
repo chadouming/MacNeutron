@@ -312,7 +312,9 @@ fi
 #    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). Its .metal
 #    files compile through tools/xcrun-metal.sh (a second cross file names it as xcrun), so the AIR modules embedded in
 #    winemetal.so name no build path. Set up again in a new build folder when the options or the wrapper change
-#    (dxmt-build/.setup-inputs); fetch_dxmt removes it too. dxmt-install is redone every build.
+#    (dxmt-build/.setup-inputs); fetch_dxmt removes it too. dxmt-install is redone every build. The translator's key
+#    (lib.sh's translator_key, arm64 release Ruling 46) keys DXMT's shader cache: DXMT reads it from dxmt-translator-key
+#    (patch 0003), rewritten only when it changes, which makes meson regenerate rather than set up again.
 build_llvm arm64 "$SRC/llvm-arm64" "$B/dxmt-src/llvm-project"
 echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 : > "$SRC/dxmt.log"
@@ -320,9 +322,15 @@ echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 printf "[binaries]\nxcrun = ['/bin/sh', '%s']\n" "$ROOT/wine-arm64/tools/xcrun-metal.sh" > "$SRC/dxmt-xcrun.txt.new"
 if cmp -s "$SRC/dxmt-xcrun.txt.new" "$SRC/dxmt-xcrun.txt"; then rm "$SRC/dxmt-xcrun.txt.new"
 else mv "$SRC/dxmt-xcrun.txt.new" "$SRC/dxmt-xcrun.txt"; fi
+dxmt_buildtype=release
+translator=$(translator_key "$D" "$dxmt_buildtype")
+echo "$translator" > "$SRC/dxmt-translator-key.new"
+if cmp -s "$SRC/dxmt-translator-key.new" "$SRC/dxmt-translator-key"; then rm "$SRC/dxmt-translator-key.new"
+else mv "$SRC/dxmt-translator-key.new" "$SRC/dxmt-translator-key"; fi
 set -- "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --cross-file "$SRC/dxmt-xcrun.txt" \
-  --buildtype release --strip --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true \
-  -Dnative_llvm_path="$SRC/llvm-arm64" -Dwine_build_path="$SRC/wine-build"
+  --buildtype "$dxmt_buildtype" --strip --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true \
+  -Dnative_llvm_path="$SRC/llvm-arm64" -Dwine_build_path="$SRC/wine-build" \
+  -Dtranslator_key_file="$SRC/dxmt-translator-key"
 inputs=$(printf '%s\n' "$@"; cat "$SRC/dxmt-xcrun.txt" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
 if [ ! -f "$SRC/dxmt-build/build.ninja" ] || [ "$(cat "$SRC/dxmt-build/.setup-inputs" 2> /dev/null)" != "$inputs" ]; then
   rm -rf "$SRC/dxmt-build"
@@ -339,6 +347,8 @@ if [ "$dxmt_mode" = development ]; then
 else
   printf '%s+%.12s\n' "$DXMT_COMMIT" "$dxmt_series" > "$SRC/dxmt-install/version"
 fi
+# The launcher's replay stamp reads the translator's key from DXMT/translator (ShaderPrecache).
+echo "$translator" > "$SRC/dxmt-install/translator"
 # The DXIL host tools, arm64, next to wine.app (not in it).
 mkdir -p "$OUT"
 build_probe arm64 "$SRC/llvm-arm64" "$OUT" "$SRC"

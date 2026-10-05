@@ -32,7 +32,7 @@ import Testing
     #expect(layout.wine.path(percentEncoded: false) == "\(app)/MacOS/wine")
     #expect(layout.wineserver.path(percentEncoded: false) == "\(app)/Resources/bin/wineserver")
     #expect(layout.dxmt.path(percentEncoded: false) == "\(app)/Resources/DXMT/aarch64-windows/")
-    #expect(layout.dxmtVersionFile.path(percentEncoded: false) == "\(app)/Resources/DXMT/version")
+    #expect(layout.dxmtTranslatorFile.path(percentEncoded: false) == "\(app)/Resources/DXMT/translator")
     #expect(layout.dxmtReplay.path(percentEncoded: false) == "\(app)/Resources/DXMT/aarch64-windows/dxmt-replay.exe")
     #expect(layout.lsteamclient.path(percentEncoded: false) == "\(app)/Resources/lib/wine/aarch64-windows/lsteamclient.dll")
     #expect(layout.lsteamclientUnix.path(percentEncoded: false) == "\(app)/Resources/lib/wine/aarch64-unix/lsteamclient.so")

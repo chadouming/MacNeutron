@@ -767,10 +767,10 @@ expect "a signal behind no pending timestamps stays on the GPU" \
 # 10. The launcher (spec §3.7; gate L1): recordings land in the compat folder and the first session stamps the builds;
 #     with another build in the stamp, the next launch replays every recording before the game, which then only hits.
 #     (d3d12_cache's recording there holds every mode section 7 ran: a, rt, layout and root.)
-V=$(cat "$WORK/ours/wine.app/Contents/Resources/DXMT/version" 2> /dev/null || true)
+V=$(cat "$WORK/ours/wine.app/Contents/Resources/DXMT/translator" 2> /dev/null || true)  # the stamp's key (Ruling 46)
 LANE=A; P="$WORK/compat/ours-A/dxmt-pipelines"  # lane A's prefix: its d3d12_cache runs recorded and stamped there
 expect "the launcher records into the game's compat folder" "$([ -s "$P/d3d12_cache.exe.pipelines" ] && echo yes || echo no)" yes
-expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "${V:-no DXMT/version}"
+expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "${V:-no DXMT/translator}"
 echo "old build" > "$P/replayed"
 LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; before=$(cat "$LLOG" 2> /dev/null | wc -l)
 CACHE="$WORK/cache/e2e"
@@ -780,7 +780,7 @@ expect "a changed build replays d3d12_cache's recording before the game" \
   "$(tail -n +$((before + 1)) "$LLOG" | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
 expect "then the game only hits" "$(counters e2e)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
 expect "and draws as D3DMetal" "$(drawn e2e)" "$(drawn cache-ref-a)"
-expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "${V:-no DXMT/version}"
+expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "${V:-no DXMT/translator}"
 
 [ $fail = 0 ] && echo "dxmt-check: all passed"
 exit $fail

@@ -74,9 +74,9 @@ The full check needs, besides the build:
 - **Screen Recording** for the app that runs the check, and nothing in native full screen on the main display
   (`dxmt-present`, below). Windows appear on the display during the check.
 
-`make wine-arm64-check` runs `licences_test.sh` (after `mode_test` and `profile_test`) before `check.sh`: on the
-staged bundle, and its `--self-test`, which must go red on a copy with a licence file deleted and on one with an extra
-FEX external (gate S1). The ship-base steps (ship-base spec §10), before the DXMT steps:
+`make wine-arm64-check` runs `licences_test.sh` (after `mode_test`, `profile_test` and `translator_key_test`) before
+`check.sh`: on the staged bundle, and its `--self-test`, which must go red on a copy with a licence file deleted and on
+one with an extra FEX external (gate S1). The ship-base steps (ship-base spec §10), before the DXMT steps:
 
 | Step | What |
 |---|---|
@@ -168,8 +168,14 @@ this Wine's build tree, with an arm64 LLVM 15 built once into `build/wine-arm64-
 `make wine-arm64` also builds the arm64 `dxil-probe` and `dxil-translate` into `build/wine-arm64/`. A commit in
 `build/wine-arm64-src/dxmt` makes the build a development build, and DXMT's version token
 (`build/wine-arm64-src/dxmt-install/version`) ends in `+dev` instead of the series hash; `make wine-arm64-export`
-writes the commits to `patches/dxmt/`. A DXMT patch's message names the arm64 failure it fixes. Folding the patches
-into the fork (and moving the pin) is a separate maintainer step.
+writes the commits to `patches/dxmt/`. DXMT's shader-translation cache and the launcher's replay stamp follow neither:
+both are keyed on the translator's key (`lib.sh`'s `translator_key`, in `dxmt-install/translator` and the bundle's
+`DXMT/translator`), a hash of what changes translated output as the tree has it, committed or not: `src/airconv`,
+`libs/DXBCParser`, `include`, DXMT's top-level meson files, the buildtype, the LLVM pin and recipe, Apple clang's and
+metal's versions. A re-fetch of the same patches or a change elsewhere in DXMT keeps players' translated shaders and
+starts no replay; an edit to airconv, even uncommitted, gets new ones (`tests/translator_key_test.sh`). A DXMT
+patch's message names the arm64 failure it fixes. Folding the patches into the fork (and moving the pin) is a separate
+maintainer step.
 
 lsteamclient works the same way. Its tree, `build/wine-arm64-src/lsteamclient`, is a sparse, blob-filtered checkout of
 Proton's `lsteamclient/` folder at `deps.pins`' `LSTEAMCLIENT_COMMIT` (without the Steamworks SDK folders), linked

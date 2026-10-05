@@ -25,9 +25,11 @@ public struct ToolLayout: Equatable, Sendable {
     public var dxmt: URL { resources.appending(path: "DXMT/aarch64-windows", directoryHint: .isDirectory) }
     /// The DLLs every prefix gets in `system32`.
     public static let dxmtDLLs = ["d3d10core.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll"]
-    public var dxmtVersionFile: URL { resources.appending(path: "DXMT/version") }
-    public var dxmtVersion: String? {
-        (try? String(contentsOf: dxmtVersionFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The key of DXMT's shader translator: a hash of what changes translated output (wine-arm64/build.sh), not DXMT's
+    /// version, so a DXMT update that leaves the translator alone keeps the game's translated shaders.
+    public var dxmtTranslatorFile: URL { resources.appending(path: "DXMT/translator") }
+    public var dxmtTranslator: String? {
+        (try? String(contentsOf: dxmtTranslatorFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     /// DXMT's pipeline replayer (shader pre-caching), run by the launcher under Wine.
     public var dxmtReplay: URL { dxmt.appending(path: "dxmt-replay.exe") }

@@ -14,12 +14,13 @@ private struct PrecacheFixture {
     var launcherLog: String { (try? String(contentsOf: launcher.log.launcherLog, encoding: .utf8)) ?? "" }
 }
 
-/// A launcher on the fake wine.app (DXMT `fork123` and its replayer). The fake dxmt-replay.exe writes a
-/// result line to its output and returns `replayStatus`.
+/// A launcher on the fake wine.app (DXMT `fork123`, translator `tr123`, and its replayer). The fake dxmt-replay.exe
+/// writes a result line to its output and returns `replayStatus`.
 private func makePrecacheFixture(replayStatus: Int32 = 0,
                                  onReplay: (@Sendable (FakeRunner.Call) -> Void)? = nil) throws -> PrecacheFixture {
     let layout = try makeToolLayout()
-    try write("fork123\n", to: layout.dxmtVersionFile)
+    try write("fork123\n", to: layout.wineApp.appending(path: "Contents/Resources/DXMT/version"))
+    try write("tr123\n", to: layout.dxmtTranslatorFile)
     let runner = FakeRunner { call in
         if call.arguments.first == "wineboot", let prefix = call.environment["WINEPREFIX"] {
             try? FileManager.default.createDirectory(atPath: prefix, withIntermediateDirectories: true)
@@ -43,7 +44,7 @@ private func makePrecacheFixture(replayStatus: Int32 = 0,
     let context = try CompatContext(environment: env)
     return PrecacheFixture(launcher: launcher, runner: runner, notifier: notifier, env: env,
                            folder: ShaderPrecache.folder(for: context),
-                           builds: "fork123 \(ShaderPrecache.macOSBuild())")
+                           builds: "tr123 \(ShaderPrecache.macOSBuild())")
 }
 
 private let game = ["waitforexitandrun", "/g/Game.exe"]
@@ -77,6 +78,39 @@ private let game = ["waitforexitandrun", "/g/Game.exe"]
     try write(f.builds + "\n", to: f.folder.appending(path: "replayed"))
     _ = f.launcher.launch(game, environment: f.env)
     #expect(f.replays.isEmpty)
+}
+
+// The stamp is the translator's key (arm64 release Ruling 46), not DXMT's version: a DXMT update that leaves the
+// translator alone replays nothing.
+@Test func aDXMTUpdateThatKeepsTheTranslatorDoesNotReplay() throws {
+    let f = try makePrecacheFixture()
+    try write("rec", to: f.folder.appending(path: "Game.exe.pipelines"))
+    try write(f.builds + "\n", to: f.folder.appending(path: "replayed"))
+    try write("fork456\n", to: f.launcher.layout.wineApp.appending(path: "Contents/Resources/DXMT/version"))
+    _ = f.launcher.launch(game, environment: f.env)
+    #expect(f.replays.isEmpty)
+}
+
+@Test func aChangedTranslatorReplays() throws {
+    let f = try makePrecacheFixture()
+    try write("rec", to: f.folder.appending(path: "Game.exe.pipelines"))
+    try write(f.builds + "\n", to: f.folder.appending(path: "replayed"))
+    try write("tr456\n", to: f.launcher.layout.dxmtTranslatorFile)
+    _ = f.launcher.launch(game, environment: f.env)
+    #expect(f.replays.count == 1)
+    #expect(f.stamp == "tr456 \(ShaderPrecache.macOSBuild())\n")
+}
+
+// A stamp from before the key (`<dxmt commit>+<series> <macOS build>`) mismatches once, then the new stamp holds.
+@Test func aVersionEraStampReplaysOnce() throws {
+    let f = try makePrecacheFixture()
+    try write("rec", to: f.folder.appending(path: "Game.exe.pipelines"))
+    try write("1fba8d25b5e29ab49012d633676a6b0d4b3b96c5+cd6d4065e615 \(ShaderPrecache.macOSBuild())\n",
+              to: f.folder.appending(path: "replayed"))
+    _ = f.launcher.launch(game, environment: f.env)
+    _ = f.launcher.launch(game, environment: f.env)
+    #expect(f.replays.count == 1)
+    #expect(f.stamp == f.builds + "\n")
 }
 
 @Test func changedBuildsReplayEveryRecordingBeforeTheGame() throws {

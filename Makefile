@@ -143,6 +143,7 @@ build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
 wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter dxmt-tests-arm64ec
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
+	sh wine-arm64/tests/translator_key_test.sh
 	sh wine-arm64/tests/licences_test.sh build/wine-arm64/wine.app
 	sh wine-arm64/tests/licences_test.sh --self-test build/wine-arm64/wine.app
 	sh wine-arm64/check.sh

@@ -138,3 +138,26 @@ check_signing() {
   ( check_profile_plist "$plist" ) || { rm -f "$plist"; exit 1; }  # check_profile_plist already said what is wrong
   rm -f "$plist"
 }
+
+# The key of DXMT's shader translator (arm64 release Ruling 46): DXMT's translation cache (ShaderCacheVersion, DXMT
+# patch 0003) and the launcher's replay stamp (DXMT/translator) follow it, not DXMT's git version, which every re-fetch
+# changes (git am makes new commits) and an uncommitted edit doesn't. It hashes what changes translated output, as the
+# working tree has it (patched, committed or not, untracked files too): airconv (src/airconv, its .metal helpers and
+# meson.build files), the DXBC parser it builds with, the headers and the top-level meson files (compile flags), the
+# meson buildtype, LLVM (the pin and dxmt/llvm.sh's recipe), the compilers (Apple clang for airconv, metal for its
+# helpers, through tools/xcrun-metal.sh). Relative paths only: the same tree anywhere has the same key. The caller sets
+# ROOT and LLVM_TAG (dxmt/pins).
+translator_key() {  # translator_key <dxmt-tree> <buildtype>
+  for _tk_p in src/airconv libs/DXBCParser include meson.build meson.options; do
+    [ -e "$1/$_tk_p" ] || die "no $_tk_p in $1"
+  done
+  {
+    echo "macneutron translator 1"
+    ( cd "$1" && find src/airconv libs/DXBCParser include meson.build meson.options -name .git -prune -o -type f \
+      ! -name .DS_Store -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 )
+    echo "buildtype $2"
+    echo "llvm $LLVM_TAG"; cat "$ROOT/dxmt/llvm.sh" "$ROOT/wine-arm64/tools/xcrun-metal.sh"
+    c++ --version | head -1
+    xcrun -sdk macosx metal --version | head -1  # the rest names the toolchain's mount point
+  } | shasum -a 256 | cut -d ' ' -f 1
+}
