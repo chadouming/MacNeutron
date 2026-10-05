@@ -29,7 +29,8 @@ enum PlayerData {
             for folder in folders {
                 switch kind(old, "drive_c/users/\(user)/\(folder)") {
                 case .missing: continue
-                case .other: result.failed += 1
+                // Wine links Documents (and the like) to the Mac's own folder: that data is on the Mac already.
+                case .other: if !isLink(old, "drive_c/users/\(user)/\(folder)") { result.failed += 1 }
                 case .directory:
                     let destination = "drive_c/users/\(target)/\(folder)"
                     guard makeDirectory(new, destination) else { result.failed += 1; continue }
@@ -73,6 +74,14 @@ enum PlayerData {
         return .directory
     }
 
+    /// True when `base/relative` itself is a symbolic link and every folder above it is real.
+    private static func isLink(_ base: URL, _ relative: String) -> Bool {
+        let parent = (relative as NSString).deletingLastPathComponent
+        guard parent.isEmpty || kind(base, parent) == .directory else { return false }
+        var info = stat()
+        return lstat(base.appending(path: relative).path(percentEncoded: false), &info) == 0 && info.st_mode & S_IFMT == S_IFLNK
+    }
+
     /// True when `base/relative` is a real directory now, made where missing; false when a component is a link or a
     /// file, which is never followed or replaced.
     private static func makeDirectory(_ base: URL, _ relative: String) -> Bool {
@@ -109,7 +118,11 @@ enum PlayerData {
                 guard lstat(to.path(percentEncoded: false), &existing) != 0 else { continue }  // never overwritten
                 // COPYFILE_CLONE: an APFS clone, else a copy; it includes COPYFILE_EXCL.
                 guard copyfile(from.path(percentEncoded: false), to.path(percentEncoded: false), nil,
-                               copyfile_flags_t(COPYFILE_CLONE)) == 0 else { result.failed += 1; continue }
+                               copyfile_flags_t(COPYFILE_CLONE)) == 0 else {
+                    unlink(to.path(percentEncoded: false))  // nothing was there (lstat above): a part-copy is ours
+                    result.failed += 1
+                    continue
+                }
                 result.files += 1
             default: result.failed += 1  // a link, never followed, or a special file
             }

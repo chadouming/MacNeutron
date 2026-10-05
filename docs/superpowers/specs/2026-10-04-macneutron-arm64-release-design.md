@@ -600,12 +600,13 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   `Documents` and others to the Mac's folders, which hold their data already). An item that can't be carried is
   skipped and counted and the carry goes on: the registry (`user.reg` unreadable or not writable), an entry of
   `drive_c/users` that isn't a real folder, one of the five folders when it or a folder above it is a link on either
-  side (counted once per folder), a folder that can't be listed or made, a file that can't be read or cloned or
+  side (counted once per folder; the old prefix's own link of the folder, as Wine makes for `Documents`, is skipped
+  without counting: its data is on the Mac), a folder that can't be listed or made, a file that can't be read or cloned or
   vanished, and a link or special file inside the folders. It logs `note: carried the player's data from <name>: <n>
   files, <k> registry keys[, <m> not carried]` and the launch goes on. A preparation stopped after the rename (the
   stamp reads `wine.app preparing`) carries on its in-place retry, from the highest-numbered `pfx.rosetta…` in the
   compat folder, once: `player-data-carried` in the compat folder, written after every carry, stops a later retry from
-  carrying again. Not carried: other hives (`system.reg`) and files elsewhere in `drive_c` (a game saving beside its
+  carrying again; each rename removes it, so each rename carries once. Not carried: other hives (`system.reg`) and files elsewhere in `drive_c` (a game saving beside its
   exe or in `ProgramData`).
 - **§3.7:** `MACNEUTRON_PRESENT=1` goes only to the game's processes (`run`, `waitforexitandrun`), as the presenter
   does today.

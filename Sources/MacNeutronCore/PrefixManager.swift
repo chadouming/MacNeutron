@@ -123,6 +123,8 @@ public struct PrefixManager: Sendable {
             name = "pfx.rosetta-\(number)"
         }
         try FileManager.default.moveItem(at: context.prefix, to: context.dataPath.appending(path: name))
+        // Each rename carries once: an earlier rename's marker mustn't stop this one's retry.
+        try? FileManager.default.removeItem(at: context.dataPath.appending(path: Self.carriedMarker))
         log.append("note: renamed a Rosetta-era prefix to \(name)")
         return name
     }

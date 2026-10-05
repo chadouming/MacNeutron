@@ -530,6 +530,7 @@ private final class LockedBox<T>: @unchecked Sendable {
     try manager.prepare(environment: env)
     #expect(newPrefixFile(manager, "steamuser/AppData/Local/G/s.sav") == nil)
     #expect(newPrefixFile(manager, "steamuser/AppData/Local/G/u.sav") == nil)
+    #expect(newPrefixFile(manager, "linkeduser/AppData/Local/G/u.sav") == nil)
     #expect(newPrefixFile(manager, "steamuser/Saved Games/G/real.sav") == "Saved Games/G/real.sav")
     // The linked user folder, and AppData's three folders.
     #expect(launcherLog(manager).contains("pfx.rosetta: 1 files, 3 registry keys, 4 not carried\n"))
@@ -596,4 +597,31 @@ private func failedFirstPreparation() throws -> (PrefixManager, [String: String]
     #expect(winebootCount(runner) == 0)
     #expect(newPrefixFile(manager, "steamuser/AppData/Local/G/s.sav") == nil)
     #expect(!launcherLog(manager).contains("carried"))
+}
+
+@Test func winesLinkToTheMacsDocumentsIsNotCounted() throws {
+    // Wine links the old user's Documents to the Mac's ~/Documents: that data is on the Mac already. (Fake folder.)
+    let mac = try makeTempDir()
+    try write("mac", to: mac.appending(path: "Documents/notes.txt"))
+    let (manager, env) = try makeCarryManager(winebootMakingUser())
+    try rosettaPrefix(manager, files: ["AppData/Local/G/s.sav"])
+    try FileManager.default.createSymbolicLink(at: manager.context.prefix.appending(path: "drive_c/users/steamuser/Documents"),
+                                               withDestinationURL: mac.appending(path: "Documents"))
+    try manager.prepare(environment: env)
+    #expect(newPrefixFile(manager, "steamuser/Documents/notes.txt") == nil)
+    #expect(launcherLog(manager).contains("note: carried the player's data from pfx.rosetta: 1 files, 3 registry keys\n"))
+}
+
+@Test func eachRenameGetsItsOwnCarry() throws {
+    // An earlier rename's marker doesn't stop the retry of a later rename whose preparation was stopped.
+    let boots = LockedBox(0)
+    let (manager, env) = try makeCarryManager(winebootMakingUser(bootStatus: {
+        boots.value += 1
+        return boots.value == 1 ? 1 : 0
+    }))
+    try write("", to: manager.context.dataPath.appending(path: "player-data-carried"))
+    try rosettaPrefix(manager, files: ["AppData/Local/G/s.sav"])
+    #expect(throws: PrefixError.winebootFailed(1)) { try manager.prepare(environment: env) }
+    try manager.prepare(environment: env)
+    #expect(newPrefixFile(manager, "steamuser/AppData/Local/G/s.sav") == "AppData/Local/G/s.sav")
 }
