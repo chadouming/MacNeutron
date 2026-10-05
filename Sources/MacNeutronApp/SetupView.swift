@@ -1,11 +1,9 @@
 import AppKit
 import MacNeutronCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SetupView: View {
     @Environment(AppModel.self) private var model
-    @State private var choosingDMG = false
 
     private var nativeGames: [GameRow] { model.games.filter { !$0.runsWithMacNeutron } }
     private var windowsGames: [GameRow] { model.games.filter(\.runsWithMacNeutron) }
@@ -14,21 +12,8 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Set up MacNeutron", systemImage: "atom").font(.title2)
 
-            Step(done: model.runtimeVersion != nil, title: "Install runtime",
-                 detail: model.runtimeVersion.map { "Wine \($0) installed" } ?? "Downloads the Wine runtime (461 MB).") {
-                Button(model.runtimeVersion == nil ? "Install" : "Reinstall") { Task { await model.installRuntime() } }
-            }
-
-            Step(done: model.gptkVersion != nil, title: "Import Game Porting Toolkit (optional)",
-                 detail: model.gptkVersion.map { "D3DMetal \($0) imported. Games use DXMT by default; set modern Direct3D 12 games to D3DMetal in the Games window. Drop a newer .dmg here to update." }
-                     ?? "Drop Apple's Game_Porting_Toolkit .dmg here, or choose it. Games use DXMT; GPTK adds D3DMetal, which modern Direct3D 12 games need for now (set it per game in the Games window).") {
-                Button("Choose…") { choosingDMG = true }
-            }
-            .dropDestination(for: URL.self) { urls, _ in
-                guard let dmg = urls.first(where: { $0.pathExtension == "dmg" }) else { return false }
-                Task { await model.importGPTK(from: dmg) }
-                return true
-            }
+            Step(done: model.runtimeVersion != nil, title: "Runtime",
+                 detail: model.runtimeVersion.map { "Wine \($0) installed" } ?? "Not installed.") { EmptyView() }
 
             Step(done: model.mode.isWanted, title: "Turn on Steam Play mode",
                  detail: "Steam restarts. Your Mac games stay native and protected.") {
@@ -59,9 +44,6 @@ struct SetupView: View {
         .padding(20)
         .frame(width: 560)
         .disabled(model.busy != nil)
-        .fileImporter(isPresented: $choosingDMG, allowedContentTypes: [.diskImage]) { result in
-            if case .success(let dmg) = result { Task { await model.importGPTK(from: dmg) } }
-        }
         .onAppear {
             Task { await model.refresh() }
             raiseWindows()  // a menu-bar app isn't active on its own, so the window would open behind everything

@@ -86,7 +86,6 @@ public enum SteamPlayError: Error, Equatable, CustomStringConvertible {
     case configUnreadable(String)
     case verificationFailed(String)
     case planDropsMacGames(Int)
-    case rosettaMissing
 
     public var description: String {
         switch self {
@@ -95,7 +94,6 @@ public enum SteamPlayError: Error, Equatable, CustomStringConvertible {
         case .quitTimedOut: "Steam didn't quit within 30 seconds. Quit it yourself, then try again."
         case .configUnreadable(let detail): "Steam's settings file couldn't be read, so MacNeutron didn't change it (\(detail))."
         case .verificationFailed(let problem): "Steam Play mode didn't start correctly, so it was turned off again: \(problem)"
-        case .rosettaMissing: "Rosetta 2 isn't installed, and MacNeutron's runtime needs it. Run: softwareupdate --install-rosetta --agree-to-license"
         case .planDropsMacGames(let count):
             "MacNeutron didn't update Steam: the new plan would stop protecting \(count) Mac \(count == 1 ? "game" : "games"). Steam's app list may be unreadable right now."
         }

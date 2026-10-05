@@ -126,22 +126,6 @@ func installFakePresenter(in layout: ToolLayout) throws {
     try write("presenter", to: layout.presenterLibrary)
 }
 
-/// A fake `make dxmt` output. Both halves go in `folder`, or the Mac half goes in `unixFolder`, as in MacNeutron.app.
-@discardableResult
-func makeDXMTBuild(in folder: URL, unixFolder: URL? = nil, version: String = "abc123") throws -> DXMTBuild {
-    try write(version + "\n", to: folder.appending(path: "version"))
-    for (arch, dlls) in [("x86_64-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll", "d3d12.dll", "dxmt-replay.exe"]),
-                         ("i386-windows", ["winemetal.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll"])] {
-        for dll in dlls {
-            try write("ours \(arch) \(dll)", to: folder.appending(path: "\(arch)/\(dll)"))
-        }
-    }
-    let unix = unixFolder ?? folder
-    try write("ours winemetal.so", to: unix.appending(path: "x86_64-unix/winemetal.so"))
-    guard let build = DXMTBuild(windows: folder, unix: unix) else { throw CocoaError(.fileNoSuchFile) }
-    return build
-}
-
 /// An ad-hoc-signed `dir/wine.app` whose `Contents/MacOS/wine` is a copy of `loader` (never run). Sign it last:
 /// anything written into the bundle afterwards breaks `codesign --verify`.
 @discardableResult

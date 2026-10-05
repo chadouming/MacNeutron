@@ -16,9 +16,6 @@ struct SettingsView: View {
                 }
                 .foregroundStyle(.orange)
             }
-            LabeledContent("Runtime") {
-                Button("Repair runtime") { Task { await model.installRuntime() } }
-            }
             LabeledContent("Setup") {
                 Button("Run setup again") { show("setup", with: openWindow) }
             }

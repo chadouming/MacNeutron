@@ -70,11 +70,6 @@ final class AppModel {
         self.loginItem = loginItem
         // Keep the passthrough script current across app updates (it's only rewritten here and on enable).
         if mode.isWanted { try? mode.installNativeTool() }
-        // An updated app brings a new launcher, steam.exe and DXMT: install them without a runtime reinstall.
-        if layout.runtimeVersion != nil {
-            try? RuntimeInstaller.writeToolFiles(layout: layout, launcherBinary: helper)
-            _ = try? DXMTInstaller.installBundled(layout: layout, launcherBinary: helper)
-        }
         // Read now, not in the first refresh: the scene decides at launch whether to open the setup window.
         runtimeVersion = layout.runtimeVersion
         gptkVersion = layout.gptkVersion
@@ -138,21 +133,6 @@ final class AppModel {
     }
 
     // MARK: Setup
-
-    func installRuntime() async {
-        await run("Downloading and installing the runtime (461 MB, first time only)…") { [layout, helper] in
-            let tarball = try await RuntimeInstaller.cachedDownload(.current)
-            try await Task.detached {
-                try RuntimeInstaller.install(tarball: tarball, pin: .current, layout: layout, launcherBinary: helper)
-            }.value
-        }
-    }
-
-    func importGPTK(from dmg: URL) async {
-        await run("Importing the Game Porting Toolkit…") { [layout] in
-            _ = try await Task.detached { try GPTKDiskImage.importGPTK(from: dmg, into: layout) }.value
-        }
-    }
 
     func enableSteamPlay() async {
         guard appInfoError == nil else {
