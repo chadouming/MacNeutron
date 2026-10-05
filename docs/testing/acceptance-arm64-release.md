@@ -46,8 +46,10 @@ R0b: PASS
 ## R1, R3, R4, R5: `release/release.sh` and its rehearsal
 
 `release/release.sh` (Task 12, then Task 12b: no build path in the release, and the hardening of Rulings 20 and 22),
-2026-10-05, with the signing variables and Steam running and logged in. Every run below is at `d1972a4`. Nothing was
-submitted to Apple: the notarized run (R2, L6's notarized row on the release bundle) is Task 14's.
+2026-10-05, with the signing variables and Steam running and logged in. The runs below were made at `d1972a4`, and
+again after the final review's fixes at `83b1c15` (the self-test's four new rows, the zip's unzip check and the
+numbers in the table are from `83b1c15`). Nothing was submitted to Apple: the notarized run (R2, L6's notarized row on
+the release bundle) is Task 14's.
 
 - `make release VERSION=0.0.1-rc` (at `d1972a4`): `release.sh --check-version` runs before make's prerequisites, so it
   printed only `release: VERSION 0.0.1-rc is not MAJOR.MINOR.PATCH` and make's own `make: *** [release] Error 2`, built
@@ -60,7 +62,9 @@ submitted to Apple: the notarized run (R2, L6's notarized row on the release bun
   `--self-test x`, `--check-version`, `--rehearse`, `--bogus`, no argument), each README string (`Rosetta 2`,
   `import-gptk`, `doesn't redistribute`), a dirty tree, a HEAD not in origin/main, a tree that isn't applied, a SOURCE
   with `WINE_SERIES=dev`, with a `+dirty` commit or with another commit than HEAD, an unpublished DXMT commit; and the
-  passing case of each (`0.10.0` among them).
+  passing case of each (`0.10.0` among them). At `83b1c15`: 39 `ok`, the four new ones through a PATH shim for `xcrun`
+  (never the real notarytool): a notary profile notarytool can't use (refused with the other exit-1 refusals), a usable
+  one, a staple that fails twice and is retried, a staple that keeps failing and stops after six tries.
 - `sh release/release.sh --rehearse 0.0.0` (at `d1972a4`, 2 min 20 s; `build/release/rehearse-0.0.0/`, with its
   `REHEARSAL` file):
   - Refusals: READMEs, the four trees `applied`, `DXMT_COMMIT` published on the fork, `wine-arm64: up to date`. The
@@ -80,7 +84,7 @@ submitted to Apple: the notarized run (R2, L6's notarized row on the release bun
   - R3: `smoke.sh` on it (`info wine.app: …/build/release/rehearse-0.0.0/wine.app (0.0.0)`): every row PASS (the
     notarized row names the bundle it checked, `build/release/r0/wine.app`, R0's); the bridge probe through an assembled
     tool folder: `init: ok`, `steamid ok`, auth ticket 234 bytes; `present_loop.exe 1280 720 0 0 120 0` on DXMT through
-    it: `frames 120, avg frame 8.104 ms`.
+    it: `frames 120, avg frame 8.104 ms` (`8.089 ms` at `83b1c15`).
   - R4: `licences_test.sh --app` on `MacNeutron.app`: `PASS licences_test`, `PASS licences_test --app` (and red by hand
     on a copy without `Contents/Resources/licenses/LICENSE`, on one with neither the README's pointer nor `wine.app`'s
     `licenses/macneutron/LICENSE`, and on one whose `LICENSE.TXT` differs from `wine.app`'s `llvm-mingw/` copy). The
@@ -88,16 +92,42 @@ submitted to Apple: the notarized run (R2, L6's notarized row on the release bun
     `0.0.0`, minimum `27.0`, hardened runtime and a secure timestamp on the CLI and the app, no entitlements,
     `codesign --verify --strict --deep` passes, the nested `wine.app`'s CDHash equal to the release bundle's; `spctl`
     rejects it (`Unnotarized Developer ID`), as expected before notarization.
+  - The zip (at `83b1c15`): written with `ditto -c -k --norsrc`, so it holds no AppleDouble (`._*`) entries; release.sh
+    unzips it with `/usr/bin/unzip` into a temporary folder and `codesign --verify --strict --deep` passes on the
+    extracted `MacNeutron.app` and its `wine.app` (`PASS MacNeutron-0.0.0.zip unzips (unzip) to a MacNeutron.app and
+    wine.app that verify`; in release mode also `stapler validate` on both). The embedded provisioning profile carries
+    no download metadata (`kMDItemWhereFroms`) or quarantine.
   - R5: `PASS sources`. `verify-sources.sh` was also red, by hand, on a wrong `WINE_SERIES`, `FEX_SUBMODULE_fmt`,
     `GMP_SHA256`, `MACNEUTRON_COMMIT` and `LLVM_TAG`, a missing `dxmt-nvapi.tar`, an edited lsteamclient file, an SDK
     file added to `lsteamclient.tar`, a wrong Wine patch count, and a submodule row that names another submodule's
     commit and tar (with SOURCE to match): its commit isn't the gitlink FEX records at its applied commit.
 
-| Size (rehearsal at `d1972a4`) | |
+| Size (rehearsal at `83b1c15`) | |
 |---|---|
 | `wine.app` before stripping | 1,368,024 KB |
 | `wine.app` after stripping (unsigned; `.a` files and Wine's developer tools deleted) | 459,108 KB |
-| `MacNeutron-0.0.0.zip` (rehearsal, not notarized) | 139,553,957 bytes |
-| `MacNeutron-0.0.0-source.tar.gz` | 106,959,269 bytes |
+| `MacNeutron-0.0.0.zip` (rehearsal, not notarized, no AppleDouble entries) | 139,129,246 bytes |
+| `MacNeutron-0.0.0-source.tar.gz` | 106,953,079 bytes |
 
 The rehearsal's `SHA256SUMS` describe unpublished rehearsal files and aren't recorded; the release's go here in Task 14.
+
+## Full runs (Task 14 Step 1)
+
+2026-10-05, with the signing variables and Steam running and logged in; logs in `build/sp5-acceptance/` (first run)
+and `build/sp5-acceptance-2/` (second run).
+
+| | `21f2cb4` (before the final review) | `83b1c15` (after its fixes) |
+|---|---|---|
+| `make test` | 213 passed | 219 passed |
+| `make smoke` | 15/15 (notarized row PASS) | 15/15 (notarized row PASS) |
+| `make bridge-check` | 15 `ok` | 15 `ok` |
+| `make presenter-check` | 12 `ok` | 12 `ok` |
+| `make wine-arm64-check` | every step PASS, `dxmt-arm64ec` and `g4-bench` included (17 min) | every step to `dxmt` PASS; `dxmt-present` FAIL (see below) |
+| `release.sh --self-test` | 35 `ok` | 39 `ok` |
+| `release.sh --rehearse 0.0.0` | — | PASS (above) |
+
+At `83b1c15`, `dxmt-present` failed with `winshot: screencapture of window … failed`: the Mac's screen had locked
+(`CGSSessionScreenIsLocked` true at 02:11), and a window capture needs an unlocked screen. `make wine-arm64-check` stops
+at a failed step, so `dxmt-present`, `dxmt-arm64ec`, `dxmt-x64` and `g4-bench` are rerun with the screen unlocked
+(below). `PASS orphans` held.
+
