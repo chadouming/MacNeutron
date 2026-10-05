@@ -156,3 +156,40 @@ prefix (no Steam bridge), reads `vcruntime140_1.dll`'s version (14.50.35719.0), 
 `Hemingway-Win64-Shipping.exe`. The game then stops at its own error dialog: its log says `Adapter only supports up to
 Feature Level 'SM5', requested Feature Level was 'SM6'` (DXMT reports shader model 5.1 by default). `make test` 219
 passed, `make smoke` 15/15, `sh dxmt/check.sh` 200 `ok` (all passed), `make bridge-check` 15 `ok`.
+
+## Gate S follow-up: loading time and the player's settings (Task P2)
+
+2026-10-05. With its settings back, SMITE 2 ran its lobby at ~59 FPS, but its engine took 31-97 s to initialise on
+0.1.0 against 16 s on the Rosetta-era runtime.
+
+**Loading.** Each `NtCreateThreadEx` maps a stack and thread data through `map_free_area` → `try_map_free_area`
+(`dlls/ntdll/unix/virtual.c`), which tries one fixed `mach_vm_map` per 64 KB step through every range the host owns
+without Wine tracking it as a view. A benchmark creating 2,000 threads (`CreateThread`, each sleeping; x64 under FEX,
+through `macneutron launch` in a scratch tool folder) made 500 in 0.36 s and only 978 in 600 s on the 0.1.0 Wine;
+`WINEDEBUG=+virtual` showed ~2,960 failed probes per allocation through a 185 MB host range above `0x100230000` and 3,567
+per process start through the reserved area under the top of the address space, and the perf investigation saw ~7.2
+million per allocation once the 385 GB guard region under `0x7000000000` was in the way. Wine patch 0021 asks
+`mach_vm_region` for the region in the way after a failed probe and continues past it (to its end bottom-up, to its
+start minus the size top-down, aligned; every skipped candidate overlaps it). The benchmark now makes 2,000 threads in
+0.71-0.77 s (x64) and 0.22-0.25 s (arm64; Rosetta-era runtime: 0.57 s); `+virtual` shows no fallback to 64 KB steps
+(every failed probe is followed by a skip, at most 345 per allocation, one per host region).
+
+SMITE 2, scratch prefix cloned from one with the good settings, Steam bridge on, `env -i` (engine initialised = from the
+log's first line to `Engine is initialized`; lobby = launch to `Took … to LoadMap(…L_MainLobby_P)`):
+
+| Runtime | Engine initialised | Launch to lobby | Lobby FPS (60 s window) |
+| --- | --- | --- | --- |
+| 0.1.0 | 96.8 s, 44.7 s | 102.4 s, 49.3 s | 35.9, 36.3 |
+| with patch 0021 | 9.2 s, 8.9 s | 26.3 s, 24.8 s (includes preparing the prefix in place) | 36.0 |
+
+(Rosetta-era DXMT: 14.5 s. In one patched run the game moved on to the Jungle Practice match lobby 9 s after the main
+lobby without input from the test, so that run's frame rate isn't comparable and is left out. The lobby ran at ~36 FPS
+on both runtimes in these runs, below the 59 measured earlier in the same prefix; the cause wasn't established, and it
+is not a difference between the runtimes.)
+
+**Settings.** The fresh prefix that replaces a Rosetta-era one (renamed `pfx.rosetta`) started SMITE 2 with its
+defaults (XeSS, ~4 FPS). The launcher now carries the player's data into it (spec §14, amending §3.4 step 1): the user
+folders' `AppData/Local`, `AppData/LocalLow`, `AppData/Roaming`, `Documents` and `Saved Games` files it lacks, cloned,
+never overwriting, and the games' `HKCU\Software\<Vendor>` keys from `user.reg`. On a clone of the scratch Rosetta-era
+prefix, a launch logged `note: carried the player's data from pfx.rosetta (17 files, 1 registry keys)`; SMITE 2's
+`Saved` folder matched the old one, and the Unreal Engine key survived the wineserver's next save of `user.reg`.
