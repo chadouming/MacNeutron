@@ -136,7 +136,11 @@ cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" \
   -c "Add :CFBundleVersion string $VERSION" "$APP/Contents/Info.plist" > /dev/null \
   || die "can't write the version into Info.plist"
-cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+# Without its extended attributes: a downloaded profile carries the download's URL and quarantine record.
+cp -X "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+out=$(xattr "$APP/Contents/embedded.provisionprofile") || die "can't list embedded.provisionprofile's attributes"
+out=$(printf '%s\n' "$out" | LC_ALL=C /usr/bin/grep -xE 'com\.apple\.(metadata:kMDItemWhereFroms|quarantine)' || true)
+[ -z "$out" ] || die "embedded.provisionprofile kept $(echo "$out" | tr '\n' ' ')"
 
 # The Mach-O files in the bundle, one per line (PE DLLs need no signature).
 macho() { find "$APP" -type f -print0 | xargs -0 file | sed -n 's/: *Mach-O .*//p'; }
