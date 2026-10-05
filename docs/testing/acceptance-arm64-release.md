@@ -195,3 +195,25 @@ folders' `AppData/Local`, `AppData/LocalLow`, `AppData/Roaming`, `Documents` and
 never overwriting, and the games' `HKCU\Software\<Vendor>` keys from `user.reg`. On a clone of the scratch Rosetta-era
 prefix, a launch logged `note: carried the player's data from pfx.rosetta (17 files, 1 registry keys)`; SMITE 2's
 `Saved` folder matched the old one, and the Unreal Engine key survived the wineserver's next save of `user.reg`.
+
+## XeSS default (Task X1)
+
+2026-10-05. XeSS's path for GPUs other than Intel's (DP4a) is emulated on Apple GPUs: SMITE 2 with XeSS ran at ~3.8
+FPS on every translator, and a fresh prefix makes XeSS its default. Wine patch 0022 adds builtin `libxess.dll` and
+`libxess_dx11.dll` with the exports of SMITE 2's (XeSS SDK 2.0.1.41: 72 and 51, same names and order in both views of
+the ARM64X module) that report the device unsupported; the launcher loads them (`libxess,libxess_dx11=b`) unless
+`MACNEUTRON_XESS=1` (spec §14, amending §§3.6-3.7).
+
+SMITE 2, each run in a fresh scratch compat folder (no settings carried), Steam bridge on (`Result=Success`), `env -i`,
+tool folder from `macneutron install` with the new `wine.app`; lobby FPS over the 60 s window from 20 s after the
+lobby's `LoadMap` (`fps4.py`):
+
+| Run | Hemingway.log | Upscaler | Lobby FPS |
+| --- | --- | --- | --- |
+| default | `LogXeSSRHI: Loading XeSS library 2.0.1 on Apple RHI D3D12`, then `LogXeSSRHI: Intel XeSS effect NOT supported, result: -1`; the process maps the stand-in from `wine.app`, not the game's `libxess.dll` | FSR 3 (`r.FidelityFX.FSR3.Enabled = "1"`) | 60.0 |
+| `MACNEUTRON_XESS=1` | `LogXeSSRHI: Intel XeSS effect supported`, `LogXeSSModule: XeSS successfully initialized`; the game's `libxess.dll` is mapped | XeSS (`CallApplySettingFunction XeSS`) | 4.1 |
+
+(The game's defaults differ from the player's settings measured in Task P2, ~36 FPS at 2560x1440 High.) Also run:
+`make test` (236 passed), `wine-arm64: up to date` after the rebuild, `bundle.sh`'s assertions (the version-resource
+one included: both stand-ins set `VER_`), `make smoke` 15/15, `dxmt/check.sh` (x64 lane) 200 ok 0 FAIL,
+`make bridge-check` 15 ok.
