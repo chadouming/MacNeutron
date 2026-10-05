@@ -113,7 +113,7 @@ stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.pat
   "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
   "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh" "$ROOT/wine-arm64/deps.pins" \
   "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch \
-  "$ROOT/presenter/present.m" "$ROOT/LICENSE")
+  "$ROOT/presenter/present.m" "$ROOT/LICENSE" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
@@ -167,7 +167,6 @@ fi
 #    /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins, the configure options or the step's
 #    environment and commands change (their hash is deps/.complete); deps-src stays, bundle.sh copies the licence texts
 #    from it.
-deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"; }
 DEPS_TARS="gmp:$GMP_URL nettle:$NETTLE_URL gnutls:$GNUTLS_URL freetype:$FREETYPE_URL"  # <name>:<url>, build order
 fetch "$GMP_URL" "$SRC/${GMP_URL##*/}" "$GMP_SHA256"
 fetch "$NETTLE_URL" "$SRC/${NETTLE_URL##*/}" "$NETTLE_SHA256"
@@ -240,12 +239,15 @@ fi
 #    FreeType and gnutls (--with: missing is an error). FREETYPE_LIBS links only tools/sfnt2fon, which renders the
 #    bitmap fonts during the build and isn't installed: its rpath finds libfreetype's @rpath ID. Redone in a new build
 #    folder (a full Wine build) when the options or the deps change: both are recorded in wine-build/.configure-inputs.
+#    Both compilers (Apple clang for the unix side, llvm-mingw for the PE side) map $SRC/ away, so __FILE__ and the
+#    debug info name wine/dlls/..., not the build folder (arm64 release Ruling 20); otherwise Wine's default -g -O2.
 set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --without-x --without-wayland \
   --without-oss --without-alsa --without-pulse --without-sane --without-usb --without-v4l2 --without-pcap \
   --without-capi --without-opencl --without-cups --with-freetype --with-gnutls CC=/usr/bin/clang CXX=/usr/bin/clang++ \
   PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" FREETYPE_CFLAGS="-I$DEPS/include/freetype2" \
   FREETYPE_LIBS="-L$DEPS/lib -lfreetype -Wl,-rpath,$DEPS/lib" GNUTLS_CFLAGS="-I$DEPS/include" \
-  GNUTLS_LIBS="-L$DEPS/lib -lgnutls"
+  GNUTLS_LIBS="-L$DEPS/lib -lgnutls" CFLAGS="-g -O2 -ffile-prefix-map=$SRC/=" \
+  CROSSCFLAGS="-g -O2 -ffile-prefix-map=$SRC/="
 inputs=$(printf '%s\n' "$@"; cat "$DEPS/.complete")
 if [ -f "$SRC/wine-build/Makefile" ] && [ "$(cat "$SRC/wine-build/.configure-inputs" 2> /dev/null)" = "$inputs" ]; then
   echo "wine-arm64: Wine's configure is up to date" >&2
@@ -302,18 +304,23 @@ fi
 [ "$(grep -c 'Wine builtin DLL' "$dll")" = 1 ] || die "libarm64ecfex.dll lacks Wine's builtin marker"
 
 # 7. DXMT (arm64 DXMT spec §4): ARM64X front ends and winemetal.dll from DXMT's own cross file, linked against this
-#    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). The build
-#    folder is configured once per tree (fetch_dxmt removes it): changing the options below needs
-#    rm -rf build/wine-arm64-src/dxmt-build. dxmt-install is redone every build.
+#    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). Its .metal
+#    files compile through tools/xcrun-metal.sh (a second cross file names it as xcrun), so the AIR modules embedded in
+#    winemetal.so name no build path. Set up again in a new build folder when the options or the wrapper change
+#    (dxmt-build/.setup-inputs); fetch_dxmt removes it too. dxmt-install is redone every build.
 build_llvm arm64 "$SRC/llvm-arm64" "$B/dxmt-src/llvm-project"
 echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 : > "$SRC/dxmt.log"
-if [ ! -f "$SRC/dxmt-build/build.ninja" ]; then
+printf "[binaries]\nxcrun = ['/bin/sh', '%s']\n" "$ROOT/wine-arm64/tools/xcrun-metal.sh" > "$SRC/dxmt-xcrun.txt"
+set -- "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --cross-file "$SRC/dxmt-xcrun.txt" \
+  --buildtype release --strip --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true \
+  -Dnative_llvm_path="$SRC/llvm-arm64" -Dwine_build_path="$SRC/wine-build"
+inputs=$(printf '%s\n' "$@"; cat "$SRC/dxmt-xcrun.txt" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
+if [ ! -f "$SRC/dxmt-build/build.ninja" ] || [ "$(cat "$SRC/dxmt-build/.setup-inputs" 2> /dev/null)" != "$inputs" ]; then
   rm -rf "$SRC/dxmt-build"
-  meson setup "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --buildtype release --strip \
-    --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true -Dnative_llvm_path="$SRC/llvm-arm64" \
-    -Dwine_build_path="$SRC/wine-build" >> "$SRC/dxmt.log" 2>&1 \
+  meson setup "$@" >> "$SRC/dxmt.log" 2>&1 \
     || { rm -rf "$SRC/dxmt-build"; die "configuring DXMT failed; see $SRC/dxmt.log"; }
+  printf '%s\n' "$inputs" > "$SRC/dxmt-build/.setup-inputs"
 fi
 meson compile -C "$SRC/dxmt-build" >> "$SRC/dxmt.log" 2>&1 || die "building DXMT failed; see $SRC/dxmt.log"
 rm -rf "$SRC/dxmt-install"

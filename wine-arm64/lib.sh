@@ -91,8 +91,19 @@ write_source() {  # write_source <out> <mac>
     echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
     echo "LSTEAMCLIENT_COMMIT=$LSTEAMCLIENT_COMMIT"
     echo "LSTEAMCLIENT_SERIES=$(series lsteamclient)"
-    LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"  # <NAME>_URL, <NAME>_SHA256
+    deps_pins  # <NAME>_URL, <NAME>_SHA256
   ) > "$1"
+}
+
+# The FreeType, gnutls, nettle and GMP tarballs' pins (<NAME>_URL, <NAME>_SHA256): build.sh's deps input and SOURCE's.
+deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"; }
+
+# A release ships no build path (arm64 release Ruling 20): the files under <dir> that contain, as bytes, the repository's
+# path, the build folder's (BUILD_DIR can move it outside the repository) or the home folder's. The first ten, relative
+# to <dir>. The caller sets ROOT.
+build_paths() {  # build_paths <dir>
+  LC_ALL=C /usr/bin/grep -rlaF -e "$ROOT" -e "${BUILD_DIR:-$ROOT/build}" -e "${HOME:?}/" "$1" | head -n 10 \
+    | while IFS= read -r _bp; do echo "${_bp#"$1"/}"; done
 }
 
 # The App ID the entitled loader is signed for; a provisioning profile has to be for it (spec §7.2).

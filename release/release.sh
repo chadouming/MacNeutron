@@ -273,6 +273,8 @@ The runtime, Contents/Helpers/wine.app (Wine, FEX, DXMT, FreeType, gnutls, nettl
 MacNeutron's MetalFX presenter), carries every component's licence and the exact sources it is built from in
 Contents/Helpers/wine.app/Contents/Resources/licenses/ (README there first; SOURCE names each commit).
 EOF
+  out=$(build_paths "$A")  # no build path ships (Ruling 20)
+  [ -z "$out" ] || die "files naming the repository, build or home folder (the first ten): $(echo "$out" | tr '\n' ' ')"
   sign() { codesign -f -s "$MACNEUTRON_SIGN_IDENTITY" --options runtime --timestamp "$1" > /dev/null 2>&1 \
     || die "signing $1 failed"; }
   sign "$A/Contents/Helpers/macneutron"

@@ -3,7 +3,7 @@
 # built as wine.app.tmp and moved to wine.app only after every assertion holds, so a failure stages nothing.
 # bundle.sh --release --version <V> --out <folder> (arm64 release spec §5.2, release/release.sh) stages
 # <folder>/wine.app from the same build tree instead, never over build/wine-arm64: version <V>, its own SOURCE naming
-# HEAD, and before signing, no debug info, no import libraries and no Wine developer tools.
+# HEAD, and before signing, no debug info, no import libraries, no Wine developer tools and no build path.
 # Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE. BUILD_DIR replaces build/ (tests).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -169,6 +169,9 @@ if [ -n "$release" ]; then
   after=$(du -sk "$APP" | cut -f 1)
   printf 'wine.app before stripping: %s KB\nwine.app after stripping: %s KB\n' "$before" "$after" > "$OUT/SIZES.txt"
   echo "wine-arm64: stripped wine.app from $before KB to $after KB" >&2
+  # No build path ships (Ruling 20): build.sh maps the trees' paths away at compile time.
+  out=$(build_paths "$APP")
+  [ -z "$out" ] || die "files naming the repository, build or home folder (the first ten): $(echo "$out" | tr '\n' ' ')"
 fi
 
 # 2. Sign: everything but the loader, then the bundle with the entitlements, which land on the loader alone.
@@ -203,9 +206,9 @@ while IFS= read -r f; do
     | LC_ALL=C /usr/bin/grep -v '^@' || true)
   [ -z "$out" ] || die "${f#"$APP"/} has the rpath $(echo "$out" | tr '\n' ' ')"
 done < "$OUT/macho.list"
-# FreeType and gnutls (ship-base spec §5): found by @rpath, free of the build folder's path (DXMT's winemetal.so names
-# its own build paths by design), and exporting every symbol Wine resolves from them, as Wine's sources name them:
-# the LOAD_FUNCPTR/MAKE_FUNCPTR lists and gnutls's optional ones, looked up by string.
+# FreeType and gnutls (ship-base spec §5): found by @rpath, free of the build folder's path, and exporting every symbol
+# Wine resolves from them, as Wine's sources name them: the LOAD_FUNCPTR/MAKE_FUNCPTR lists and gnutls's optional ones,
+# looked up by string.
 WD="$B/wine-arm64-src/wine/dlls"
 funcptrs() {  # funcptrs <prefix> <source>...: the <prefix>* names on the non-#define LOAD_FUNCPTR/MAKE_FUNCPTR lines
   p=$1; shift
