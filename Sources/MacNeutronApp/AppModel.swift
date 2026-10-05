@@ -73,7 +73,18 @@ final class AppModel {
     private var deferredForce: Bool?
     /// The last install threw: the poll doesn't retry it on `runtime-damaged` (Repair does).
     private var installFailed = false
-    private(set) var status: SteamPlayStatus = .off
+    /// What the last refresh read; `status` adds the restart an install asked for.
+    private var readStatus: SteamPlayStatus = .off
+    /// An install replaced the tools' Rosetta-era entry points (`proton`, `passthrough.sh`) while Steam ran, and
+    /// Steam may keep the manifests it read at its start (Ruling 27). Cleared when Steam quits or is restarted here.
+    private var toolsChangedUnderSteam = false
+    var status: SteamPlayStatus {
+        switch readStatus {
+        case .on where toolsChangedUnderSteam: .restartNeeded(1)
+        case .restartNeeded(let count) where toolsChangedUnderSteam: .restartNeeded(count + 1)
+        default: readStatus
+        }
+    }
     private(set) var games: [GameRow] = []
     private(set) var orphans: [OrphanPrefix] = []
     private(set) var appInfoError: String?
@@ -103,8 +114,6 @@ final class AppModel {
         self.launcherOverride = launcherBinary
         self.installer = installer
         self.identity = identity
-        // Keep macneutron-native's copy of the CLI current (rewritten here, on enable and after each install).
-        if mode.isWanted { try? mode.installNativeTool() }
         // Read now, not in the first refresh: the scene decides at launch whether to open the setup window.
         runtime = InstalledRuntime.read(layout, identity: identity)
         Task { await refresh() }
@@ -150,7 +159,7 @@ final class AppModel {
                            settings: snapshot.settings[String($0.appID)] ?? GameSettings()) }
             .sorted { ($0.installed ? 0 : 1, $0.name.lowercased()) < ($1.installed ? 0 : 1, $1.name.lowercased()) }
         orphans = snapshot.orphans
-        status = snapshot.status
+        readStatus = snapshot.status
         loginItemStatus = loginItem.status()
     }
 
@@ -180,6 +189,9 @@ final class AppModel {
         installing = true
         if deferredForce == nil { runtimeNotice = "Installing the runtime…" }  // a retry keeps the deferral's text
         let (installer, layout, launcher) = (self.installer, self.layout, launcherOverride ?? helper)
+        let entryPoints = [layout.root.appending(path: "proton"),
+                           mode.tools.appending(path: "\(SteamPlayMode.nativeToolName)/passthrough.sh")]
+        let hadOldEntryPoints = entryPoints.contains { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
         let result = await Task.detached { Result { try installer(source, layout, launcher, force) } }.value
         installing = false
         deferredForce = nil
@@ -193,6 +205,9 @@ final class AppModel {
             runtimeNotice = nil
             if mode.isWanted {
                 do { try mode.installNativeTool() } catch { errorMessage = "\(error)" }
+            }
+            if hadOldEntryPoints, await Task.detached(operation: { [mode] in mode.process.isRunning() }).value {
+                toolsChangedUnderSteam = true
             }
         case .failure(let error):
             installFailed = true
@@ -269,7 +284,7 @@ final class AppModel {
             }
             return (mode.status(plan: plan), failure)
         }.value
-        status = result.0
+        readStatus = result.0
         if let failure = result.1 { errorMessage = failure }
     }
 
@@ -299,7 +314,10 @@ final class AppModel {
         guard busy == nil else { return }  // one Steam-changing action at a time
         busy = message
         errorMessage = nil
-        do { try await work() } catch { errorMessage = "\(error)" }
+        do {
+            try await work()
+            toolsChangedUnderSteam = false  // every action here restarts or quits Steam
+        } catch { errorMessage = "\(error)" }
         busy = nil
         await refresh()
     }
@@ -320,6 +338,7 @@ final class AppModel {
                 let running = await Task.detached { mode.process.isRunning() }.value
                 switch self.watcher.observe(running: running) {
                 case .quit?:
+                    self.toolsChangedUnderSteam = false
                     await self.refresh()  // Steam rewrites its app list on exit
                     if self.busy == nil, self.appInfoError == nil {
                         do { try self.mode.sync(plan: self.plan()) } catch { self.errorMessage = "\(error)" }

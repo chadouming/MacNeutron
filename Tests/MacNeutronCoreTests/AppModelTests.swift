@@ -239,3 +239,38 @@ private func makeModel(steamRunning: Bool = false,
     #expect(try String(contentsOf: mode.nativeTool.appending(path: "bin/macneutron"), encoding: .utf8)
         == newCLI)
 }
+
+@MainActor @Test func startLeavesTheNativeToolToTheInstall() async throws {
+    // Over an older MacNeutron the tool folder's CLI predates the `passthrough` verb until the install writes the new
+    // one: a start must not point the Mac-game tool at it first (here the install is deferred by a running game).
+    let (model, mode, _) = try await makeModel()
+    let native = mode.tools.appending(path: SteamPlayMode.nativeToolName)
+    let oldManifest = "\"manifest\"\n{\n  \"version\" \"2\"\n  \"commandline\" \"/passthrough.sh %verb%\"\n}\n"
+    try write("#!/bin/sh\necho old CLI\n", to: mode.tools.appending(path: "macneutron/bin/macneutron"), executable: true)
+    try write("#!/bin/sh\n", to: native.appending(path: "passthrough.sh"), executable: true)
+    try write(oldManifest, to: native.appending(path: "toolmanifest.vdf"))
+    let installer = ScriptedInstaller(.deferred("/x"))
+    let started = AppModel(steam: mode.steam, layout: model.layout, mode: mode, store: model.store, loginItem: model.loginItem,
+                           wineAppSource: try makeToolLayout().wineApp, installer: installer.install,
+                           identity: { _ in testIdentity })
+    await started.installTask?.value
+    #expect(installer.calls == [false])
+    #expect(FileManager.default.fileExists(atPath: native.appending(path: "passthrough.sh").path(percentEncoded: false)))
+    #expect(try String(contentsOf: native.appending(path: "toolmanifest.vdf"), encoding: .utf8) == oldManifest)
+}
+
+@MainActor @Test func replacingRosettaEraEntryPointsWhileSteamRunsAsksForARestart() async throws {
+    // Steam may keep the tool manifests it read at its start (Ruling 27): after an install that removed `proton`,
+    // the menu says to restart Steam until it does.
+    let installer = ScriptedInstaller(.unchanged, .installed, effect: { _, layout in
+        try? FileManager.default.removeItem(at: layout.root.appending(path: "proton"))
+    })
+    let (model, _, _) = try await makeModel(steamRunning: true, wineAppSource: try makeToolLayout().wineApp,
+                                            installer: installer)
+    #expect(model.status == .on)
+    try write("#!/bin/sh\n", to: model.layout.root.appending(path: "proton"), executable: true)
+    await model.installRuntime()
+    #expect(model.status == .restartNeeded(1))
+    await model.restartSteam()
+    #expect(model.status == .on)
+}
