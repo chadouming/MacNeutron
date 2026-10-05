@@ -96,8 +96,8 @@ covers Direct3D 9-11 only.
 **Shader pre-caching**, as Steam does for Vulkan games. DXMT keeps every shader it translates in a cache, so a
 Direct3D 12 game translates each shader once. MacNeutron also records every pipeline the game creates, in
 `dxmt-pipelines` in the game's Steam compat folder (`~/Library/Application Support/Steam/steamapps/compatdata/<appid>`).
-After an update of MacNeutron's DXMT or of macOS, the launcher rebuilds them before the game starts, and a
-notification says so. Troubleshooting:
+After an update that changes DXMT's shader translator, or of macOS, the launcher rebuilds them before the game
+starts, and a notification says so; other DXMT updates keep the translated shaders. Troubleshooting:
 
 - `DXMT_SHADER_CACHE=0` turns the translation cache off, and `MACNEUTRON_PRECACHE=0` turns recording and rebuilding
   off.

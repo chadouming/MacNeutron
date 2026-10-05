@@ -616,6 +616,13 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   ran at ~4 FPS with it on every translator, and a fresh prefix makes XeSS its default.
 - **§3.7:** `MACNEUTRON_PRESENT=1` goes only to the game's processes (`run`, `waitforexitandrun`), as the presenter
   does today.
+- **§3.8, §5 (2026-10-05, Task C1, Ruling 46):** the stamp is `<translator key> <macOS build>`, the key read from
+  `wine.app`'s `DXMT/translator` (the layout gains it beside `version`, which stays the fork commit and series). The key
+  is `wine-arm64/lib.sh`'s `translator_key`: a hash of what changes translated output as the DXMT tree has it,
+  committed or not (`src/airconv`, `libs/DXBCParser`, `include`, the top-level meson files, the buildtype, the LLVM pin
+  and recipe, Apple clang's and metal's versions). DXMT patch 0003 keys the translation cache on it too, in place of
+  `git describe`. A re-fetch of the same patches or a DXMT change outside the translator neither re-translates nor
+  replays; a `<version> <macOS build>` stamp from before differs, so each game replays once.
 - **§3.9:** the install is `RuntimeInstaller.install(wineApp:layout:launcherBinary:steamExe:force:) ->
   RuntimeInstallOutcome` (`installed`, `unchanged`, `deferred(path)`), and the CLI verb is
   `macneutron install --tool-dir <dir> --wine-app <path> [--steam-exe <path>] [--force]`; it exits 0 when installed or
