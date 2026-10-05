@@ -102,16 +102,6 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     #expect(fake.launchesWithDevConfig == [true, false])
 }
 
-@Test func passthroughRunsTheMacGameItself() async throws {
-    let (mode, _) = try makeMode()
-    try await mode.enable(plan: samplePlan)
-    let out = try makeTempDir().appending(path: "out.txt")
-    let status = try SystemProcessRunner().run(mode.link("macneutron-native").appending(path: "passthrough.sh"),
-                                               ["waitforexitandrun", "/bin/echo", "a b"], environment: [:], output: out)
-    #expect(status == 0)
-    #expect(try String(contentsOf: out, encoding: .utf8) == "a b\n")
-}
-
 @Test(arguments: [
     (okSession, nil),
     (macModeSession, "Steam started as a Mac client and ignored MacNeutron"),
@@ -128,22 +118,6 @@ func verifiesCompatLogSessions(log: String, problem: String?) {
     #expect(SteamPlayMode.verify(log: SteamPlayMode.lastSession(of: okSession + macModeSession)) != nil)
 }
 
-
-@Test func passthroughLaunchesAppBundles() async throws {
-    // Steam's launch entry for many Mac games is the .app folder itself (Timberborn's is).
-    let (mode, _) = try makeMode()
-    try await mode.enable(plan: samplePlan)
-    let app = try makeTempDir().appending(path: "My Game.app", directoryHint: .isDirectory)
-    try write("#!/bin/sh\necho \"$@\"\n", to: app.appending(path: "Contents/MacOS/Game Binary"), executable: true)
-    let info = try PropertyListSerialization.data(fromPropertyList: ["CFBundleExecutable": "Game Binary"], format: .xml, options: 0)
-    try info.write(to: app.appending(path: "Contents/Info.plist"))
-    let out = try makeTempDir().appending(path: "out.txt")
-    let status = try SystemProcessRunner().run(mode.link("macneutron-native").appending(path: "passthrough.sh"),
-                                               ["waitforexitandrun", app.path(percentEncoded: false), "a b"],
-                                               environment: [:], output: out)
-    #expect(status == 0)
-    #expect(try String(contentsOf: out, encoding: .utf8) == "a b\n")
-}
 
 @Test func syncRefusesToDropMacGameProtection() async throws {
     // An unreadable app list must never turn into "no Mac games" while Steam stays in Linux mode.
@@ -236,4 +210,24 @@ func verifiesCompatLogSessions(log: String, problem: String?) {
         return
     }
     #expect(message.contains("couldn't be read"))
+}
+
+@Test func nativeToolRunsTheCLIPassthrough() async throws {
+    // R0b: Steam launches a thin arm64 tool binary, so the Mac-game tool runs a copy of the CLI.
+    let (mode, _) = try makeMode()
+    try await mode.enable(plan: samplePlan)
+    let native = mode.link("macneutron-native")
+    let manifest = try String(contentsOf: native.appending(path: "toolmanifest.vdf"), encoding: .utf8)
+    #expect(manifest.contains("\"commandline\" \"/bin/macneutron passthrough %verb%\""))
+    let cli = native.appending(path: "bin/macneutron")
+    #expect(try Data(contentsOf: cli) == Data(contentsOf: mode.runtimeTool.appending(path: "bin/macneutron")))
+    #expect(FileManager.default.isExecutableFile(atPath: cli.path(percentEncoded: false)))
+}
+
+@Test func staleScriptIsRemoved() throws {
+    let (mode, _) = try makeMode()
+    let script = mode.nativeTool.appending(path: "passthrough.sh")
+    try write("#!/bin/sh\n", to: script, executable: true)
+    try mode.installNativeTool()
+    #expect(!FileManager.default.fileExists(atPath: script.path(percentEncoded: false)))
 }

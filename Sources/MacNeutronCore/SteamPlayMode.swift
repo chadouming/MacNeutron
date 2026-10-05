@@ -17,23 +17,6 @@ public struct SteamPlayMode: Sendable {
     public static let nativeToolName = MappingPlanner.nativeTool
     public static let devConfig = "@sSteamCmdForcePlatformType linux\n"
 
-    /// Runs a Mac game for Steam: `<verb> <command…>`. The command may be an `.app` folder (Steam would
-    /// normally open it through LaunchServices), so the bundle's executable is resolved. Steam starts
-    /// tools preferring x86_64, which carries through `exec`; `arch` puts the Apple Silicon build first.
-    /// `arch` replaces this process, so Steam keeps tracking the same PID.
-    static let passthroughScript = """
-        #!/bin/sh
-        shift
-        target=$1
-        shift
-        if [ -d "$target" ] && [ -f "$target/Contents/Info.plist" ]; then
-            name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$target/Contents/Info.plist" 2>/dev/null) || name=$(basename "$target" .app)
-            target="$target/Contents/MacOS/$name"
-        fi
-        exec /usr/bin/arch -arm64e -arm64 -x86_64 "$target" "$@"
-
-        """
-
     public let steam: SteamLocation
     public let tools: URL
     public let backups: URL
@@ -193,7 +176,11 @@ public struct SteamPlayMode: Sendable {
         return backup
     }
 
+    /// The Mac-game tool: a copy of the runtime tool's CLI, run as `macneutron passthrough %verb%` (R0b: Steam
+    /// launches a thin arm64 tool binary). The runtime install writes that CLI first.
     public func installNativeTool() throws {
+        try RuntimeInstaller.installFile(runtimeTool.appending(path: "bin/macneutron"),
+                                         at: nativeTool.appending(path: "bin/macneutron"))  // before the manifest
         try write("""
             "compatibilitytools"
             {
@@ -210,11 +197,9 @@ public struct SteamPlayMode: Sendable {
             }
 
             """, to: nativeTool.appending(path: "compatibilitytool.vdf"))
-        try write("\"manifest\"\n{\n  \"version\" \"2\"\n  \"commandline\" \"/passthrough.sh %verb%\"\n}\n",
+        try write("\"manifest\"\n{\n  \"version\" \"2\"\n  \"commandline\" \"/bin/macneutron passthrough %verb%\"\n}\n",
                   to: nativeTool.appending(path: "toolmanifest.vdf"))
-        let script = nativeTool.appending(path: "passthrough.sh")
-        try write(Self.passthroughScript, to: script)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path(percentEncoded: false))
+        try? FileManager.default.removeItem(at: nativeTool.appending(path: "passthrough.sh"))
     }
 
     func linkTools() throws {
