@@ -157,7 +157,7 @@ func makeSignedWineApp(at dir: URL, loader: URL = URL(filePath: "/usr/bin/true")
     try FileManager.default.copyItem(at: loader, to: macOS.appending(path: "wine"))
     let status = try SystemProcessRunner().run(URL(filePath: "/usr/bin/codesign"),
                                                ["-s", "-", "-f", bundle.path(percentEncoded: false)],
-                                               environment: [:], output: dir.appending(path: "codesign.log"))
+                                               environment: [:], output: URL(filePath: "/dev/null"))  // "replacing existing signature"
     guard status == 0 else { throw CocoaError(.executableLoad) }
     return bundle
 }
