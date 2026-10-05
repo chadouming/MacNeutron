@@ -15,7 +15,9 @@ needs Xcode 27 (Swift 6) and the Developer ID setup in `wine-arm64/README.md` (t
 1. Download `MacNeutron-<version>.zip` from the project's releases, unzip it, and move `MacNeutron.app` to
    `/Applications` before opening it (macOS runs an app opened from Downloads from a temporary read-only copy, so the
    first runtime install is a slow full copy instead of an instant clone). Upgrading from an older MacNeutron: quit
-   Steam before opening the new one, and start it again after setup.
+   Steam before opening the new one, and start it again after setup. From a version before 0.1, each game's first
+   launch gets a fresh Wine prefix that keeps the game's settings and local saves; the old prefix stays beside it as
+   `pfx.rosetta`.
 2. Open MacNeutron. The setup window checks the requirements (Steam), installs the runtime automatically, and then
    turns on Steam Play mode. After that, MacNeutron lives in the menu bar. It keeps Steam's mappings current so your
    Mac games stay native, and its Games window sets the graphics backend and options per game.

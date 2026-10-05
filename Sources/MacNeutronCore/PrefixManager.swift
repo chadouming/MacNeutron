@@ -64,9 +64,12 @@ public struct PrefixManager: Sendable {
                 try want.write(to: context.versionFile, atomically: true, encoding: .utf8)
             } else {
                 // An arm64 Wine doesn't adopt an x86_64 Wine's prefix.
-                if exists, recorded?.hasPrefix("wine.app ") != true { try renameRosettaPrefix() }
+                var renamed: String?
+                if exists, recorded?.hasPrefix("wine.app ") != true { renamed = try renameRosettaPrefix() }
                 try Self.preparingStamp.write(to: context.versionFile, atomically: true, encoding: .utf8)
                 try prepareNew(environment: environment)
+                // After prepareNew's `wineserver -w`: no server runs to rewrite user.reg.
+                if let renamed { carryPlayerData(from: renamed) }
                 try want.write(to: context.versionFile, atomically: true, encoding: .utf8)
             }
             if steamBridge { try deploySteamBridge() }
@@ -102,8 +105,9 @@ public struct PrefixManager: Sendable {
         _ = try runner.run(layout.wineserver, ["-w"], environment: environment, output: nil)
     }
 
-    /// `pfx` → the first free `pfx.rosetta`, `pfx.rosetta-2`, … (the saves inside stay where the player can find them).
-    private func renameRosettaPrefix() throws {
+    /// `pfx` → the first free `pfx.rosetta`, `pfx.rosetta-2`, … (the saves inside stay where the player can find them);
+    /// returns the new name.
+    private func renameRosettaPrefix() throws -> String {
         var name = "pfx.rosetta"
         var number = 1
         while FileManager.default.fileExists(atPath: context.dataPath.appending(path: name).path(percentEncoded: false)) {
@@ -112,6 +116,19 @@ public struct PrefixManager: Sendable {
         }
         try FileManager.default.moveItem(at: context.prefix, to: context.dataPath.appending(path: name))
         log.append("note: renamed a Rosetta-era prefix to \(name)")
+        return name
+    }
+
+    /// The fresh prefix gets the renamed one's settings and local saves (spec §14, amending §3.4 step 1). A failure
+    /// only costs the player those: the old prefix is still there, untouched.
+    private func carryPlayerData(from name: String) {
+        do {
+            let (files, keys) = try PlayerData.carry(from: context.dataPath.appending(path: name, directoryHint: .isDirectory),
+                                                     to: context.prefix)
+            log.append("note: carried the player's data from \(name) (\(files) files, \(keys) registry keys)")
+        } catch {
+            log.append("note: could not carry the player's data from \(name): \(error.localizedDescription)")
+        }
     }
 
     /// Every launch: prefixes made before the bridge existed get it too, and a runtime update replaces it.

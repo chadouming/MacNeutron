@@ -260,3 +260,238 @@ private func inode(_ url: URL) throws -> UInt64? {
     try manager.prepare(environment: env)
     #expect(!FileManager.default.fileExists(atPath: steamFolder(manager).path(percentEncoded: false)))
 }
+
+// MARK: Carrying the player's data out of a renamed Rosetta-era prefix
+
+/// A FakeRunner whose `wineboot` makes a prefix like Wine's: `users/<user>` with Wine's own folders, `Documents` a
+/// link to `documents` when given (Wine links it to the Mac's), and `user.reg`. `atWait` sees the prefix when
+/// `wineserver -w` runs; `afterBoot` adds to the new prefix.
+private func winebootMakingUser(_ user: String = "steamuser", documents: URL? = nil, userReg: String = newUserReg,
+                                afterBoot: @escaping @Sendable (URL) -> Void = { _ in },
+                                atWait: @escaping @Sendable (URL) -> Void = { _ in }) -> FakeRunner {
+    FakeRunner { call in
+        guard let path = call.environment["WINEPREFIX"] else { return 0 }
+        let prefix = URL(filePath: path, directoryHint: .isDirectory)
+        if call.arguments.first == "wineboot" {
+            let home = prefix.appending(path: "drive_c/users/\(user)", directoryHint: .isDirectory)
+            for folder in ["AppData/Local/Microsoft", "AppData/Local/Temp", "AppData/LocalLow", "AppData/Roaming/Microsoft",
+                           "Saved Games"] {
+                try? FileManager.default.createDirectory(at: home.appending(path: folder), withIntermediateDirectories: true)
+            }
+            try? FileManager.default.createDirectory(at: prefix.appending(path: "drive_c/users/Public/Documents"),
+                                                     withIntermediateDirectories: true)
+            if let documents {
+                try? FileManager.default.createSymbolicLink(at: home.appending(path: "Documents"), withDestinationURL: documents)
+            } else {
+                try? FileManager.default.createDirectory(at: home.appending(path: "Documents"), withIntermediateDirectories: true)
+            }
+            try? userReg.write(to: prefix.appending(path: "user.reg"), atomically: true, encoding: .utf8)
+            afterBoot(prefix)
+        } else if call.tool == "wineserver", call.arguments == ["-w"] {
+            atWait(prefix)
+        }
+        return 0
+    }
+}
+
+private let newUserReg = """
+    WINE REGISTRY Version 2
+    ;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000
+
+    #arch=win64
+
+    [Software\\\\Wine\\\\WineDbg] 1759600000
+    #time=1dc35f0a0000000
+    "ShowCrashDialog"=dword:00000000
+
+    [Software\\\\Taken Vendor\\\\Game] 1759600000
+    #time=1dc35f0a0000000
+    "Fresh"="new"
+
+    """
+
+/// What a Rosetta-era Wine left: Wine's and Windows' keys, Steam's, and the games' own.
+private let oldUserReg = """
+    WINE REGISTRY Version 2
+    ;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000
+
+    #arch=win64
+
+    [Control Panel\\\\Desktop] 1700000000
+    "FontSmoothing"="2"
+
+    [Software\\\\Epic Games\\\\Unreal Engine\\\\Identifiers] 1700000000
+    #time=1da0000000000000
+    "AccountId"="abc"
+
+    [Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer] 1700000000
+    "Old"="1"
+
+    [Software\\\\Unity\\\\UnityEditor] 1700000000
+
+    [software\\\\unity technologies\\\\Game] 1700000000
+    #time=1da0000000000000
+    "Screenmanager Resolution Width_h182942802"=dword:00000a00
+    "data_h1"=hex:01,02,03,04,05,06,07,08,09,0a,0b,0c,0d,0e,0f,10,11,12,13,14,15,16,\\
+      17,18,19,1a
+
+    [Software\\\\Classes\\\\Thing] 1700000000
+    @="x"
+
+    [Software\\\\Policies\\\\Thing] 1700000000
+
+    [Software\\\\Valve\\\\Steam] 1700000000
+    "SteamPath"="c:\\\\program files (x86)\\\\steam"
+
+    [Software\\\\Wine\\\\Direct3D] 1700000000
+    "renderer"="gl"
+
+    [Software\\\\taken vendor\\\\game] 1700000000
+    "Fresh"="old"
+
+    """
+
+/// A Rosetta-era `pfx` (no stamp) whose user `user` has `files` (paths under `drive_c/users/<user>/`, content = path).
+private func rosettaPrefix(_ manager: PrefixManager, user: String = "steamuser", files: [String],
+                           userReg: String = oldUserReg) throws {
+    let home = manager.context.prefix.appending(path: "drive_c/users/\(user)", directoryHint: .isDirectory)
+    for file in files { try write(file, to: home.appending(path: file)) }
+    try write(userReg, to: manager.context.prefix.appending(path: "user.reg"))
+}
+
+private func newPrefixFile(_ manager: PrefixManager, _ path: String) -> String? {
+    try? String(contentsOf: manager.context.prefix.appending(path: "drive_c/users/\(path)"), encoding: .utf8)
+}
+
+private func makeCarryManager(_ runner: FakeRunner) throws -> (PrefixManager, [String: String]) {
+    let layout = try makeToolLayout()
+    let context = try CompatContext(environment: steamEnvironment(dataPath: try makeTempDir().appending(path: "compat data/42")))
+    let manager = PrefixManager(context: context, layout: layout, identity: "id1", runner: runner,
+                                log: LauncherLog(directory: try makeTempDir().appending(path: "Logs")))
+    return (manager, wineEnvironment(manager))
+}
+
+/// SMITE 2 keeps its settings in AppData/Local/SMITE2Alpha/Saved: a fresh prefix reset them (XeSS, 4 FPS instead of 59).
+@Test func renamedPrefixCarriesThePlayersDataIntoTheFreshOne() throws {
+    let (manager, env) = try makeCarryManager(winebootMakingUser())
+    let files = ["AppData/Local/SMITE2Alpha/Saved/Config/Windows/GameUserSettings.ini",
+                 "AppData/Local/SMITE2Alpha/Saved/SaveGames/HWGameUserSettings.sav",
+                 "AppData/LocalLow/Studio/Game/prefs.json", "AppData/Roaming/Game/save 1.dat",
+                 "Documents/My Games/Game/settings.cfg", "Saved Games/Game/slot1.sav"]
+    try rosettaPrefix(manager, files: files)
+    try manager.prepare(environment: env)
+    for file in files { #expect(newPrefixFile(manager, "steamuser/\(file)") == file) }
+    // Read-only: the old prefix still has everything.
+    let old = manager.context.dataPath.appending(path: "pfx.rosetta/drive_c/users/steamuser")
+    for file in files { #expect(try String(contentsOf: old.appending(path: file), encoding: .utf8) == file) }
+    #expect(launcherLog(manager).contains(
+        "note: carried the player's data from pfx.rosetta (6 files, 3 registry keys)\n"))
+    #expect(stamp(manager) == "wine.app id1 msync=1")
+}
+
+@Test func carryNeverOverwritesAndSkipsWinesOwnFolders() throws {
+    let (manager, env) = try makeCarryManager(winebootMakingUser(afterBoot: { prefix in
+        try? write("fresh", to: prefix.appending(path: "drive_c/users/steamuser/AppData/Roaming/Game/a.cfg"))
+    }))
+    try rosettaPrefix(manager, files: ["AppData/Roaming/Game/a.cfg", "AppData/Roaming/Game/b.cfg",
+                                       "AppData/Local/Temp/junk.tmp", "AppData/Local/Microsoft/Windows/x.dat",
+                                       "AppData/Roaming/Microsoft/Crypto/y.dat"])
+    try write("public", to: manager.context.prefix.appending(path: "drive_c/users/Public/Documents/p.txt"))
+    try manager.prepare(environment: env)
+    #expect(newPrefixFile(manager, "steamuser/AppData/Roaming/Game/a.cfg") == "fresh")
+    #expect(newPrefixFile(manager, "steamuser/AppData/Roaming/Game/b.cfg") == "AppData/Roaming/Game/b.cfg")
+    #expect(newPrefixFile(manager, "steamuser/AppData/Local/Temp/junk.tmp") == nil)
+    #expect(newPrefixFile(manager, "steamuser/AppData/Local/Microsoft/Windows/x.dat") == nil)
+    #expect(newPrefixFile(manager, "steamuser/AppData/Roaming/Microsoft/Crypto/y.dat") == nil)
+    #expect(newPrefixFile(manager, "Public/Documents/p.txt") == nil)
+    #expect(launcherLog(manager).contains("(1 files, 3 registry keys)"))
+}
+
+@Test func carryMapsTheOldUserOntoTheNewOne() throws {
+    // wineboot names the user after $USER: a prefix made under another name gets the new single user's folder.
+    let (manager, env) = try makeCarryManager(winebootMakingUser("chad"))
+    try rosettaPrefix(manager, user: "steamuser", files: ["AppData/Local/Game/Saved/save.sav"])
+    try manager.prepare(environment: env)
+    #expect(newPrefixFile(manager, "chad/AppData/Local/Game/Saved/save.sav") == "AppData/Local/Game/Saved/save.sav")
+    #expect(newPrefixFile(manager, "steamuser/AppData/Local/Game/Saved/save.sav") == nil)
+}
+
+@Test func carryFollowsNoLinks() throws {
+    // Wine links Documents to the Mac's ~/Documents: the old link isn't followed, the new one isn't written through.
+    let mac = try makeTempDir()
+    try write("mac", to: mac.appending(path: "old/notes.txt"))
+    let (manager, env) = try makeCarryManager(winebootMakingUser(documents: mac.appending(path: "new")))
+    try FileManager.default.createDirectory(at: mac.appending(path: "new"), withIntermediateDirectories: true)
+    try rosettaPrefix(manager, files: ["Documents/My Games/Game/settings.cfg", "Saved Games/real.sav"])
+    let old = manager.context.prefix.appending(path: "drive_c/users/steamuser")
+    try FileManager.default.createSymbolicLink(at: old.appending(path: "Saved Games/linked"),
+                                               withDestinationURL: mac.appending(path: "old"))
+    try manager.prepare(environment: env)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: mac.appending(path: "new").path(percentEncoded: false)) == [])
+    #expect(newPrefixFile(manager, "steamuser/Saved Games/real.sav") == "Saved Games/real.sav")
+    #expect(newPrefixFile(manager, "steamuser/Saved Games/linked/notes.txt") == nil)
+    #expect(launcherLog(manager).contains("(1 files, 3 registry keys)"))
+}
+
+private final class LockedBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T
+    init(_ value: T) { stored = value }
+    var value: T {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+@Test func carryAppendsTheGamesRegistryKeysAfterTheServerStopped() throws {
+    let atWait = LockedBox<String?>(nil)
+    let (manager, env) = try makeCarryManager(winebootMakingUser(atWait: { prefix in
+        atWait.value = try? String(contentsOf: prefix.appending(path: "user.reg"), encoding: .utf8)
+    }))
+    try rosettaPrefix(manager, files: [])
+    try manager.prepare(environment: env)
+    // Untouched while wineserver ran.
+    #expect(atWait.value == newUserReg)
+    let carried = """
+
+        [Software\\\\Epic Games\\\\Unreal Engine\\\\Identifiers] 1700000000
+        #time=1da0000000000000
+        "AccountId"="abc"
+
+        [Software\\\\Unity\\\\UnityEditor] 1700000000
+
+        [software\\\\unity technologies\\\\Game] 1700000000
+        #time=1da0000000000000
+        "Screenmanager Resolution Width_h182942802"=dword:00000a00
+        "data_h1"=hex:01,02,03,04,05,06,07,08,09,0a,0b,0c,0d,0e,0f,10,11,12,13,14,15,16,\\
+          17,18,19,1a
+
+        """
+    #expect(try String(contentsOf: manager.context.prefix.appending(path: "user.reg"), encoding: .utf8)
+        == newUserReg + carried)
+    #expect(launcherLog(manager).contains("note: carried the player's data from pfx.rosetta (0 files, 3 registry keys)\n"))
+}
+
+@Test func failedCarryIsLoggedAndTheLaunchGoesOn() throws {
+    let (manager, env) = try makeCarryManager(winebootMakingUser())
+    try rosettaPrefix(manager, files: ["AppData/Local/Game/save.sav"])
+    // An old user.reg that can't be read.
+    try FileManager.default.removeItem(at: manager.context.prefix.appending(path: "user.reg"))
+    try FileManager.default.createDirectory(at: manager.context.prefix.appending(path: "user.reg"),
+                                            withIntermediateDirectories: true)
+    try manager.prepare(environment: env)
+    #expect(launcherLog(manager).contains("note: could not carry the player's data from pfx.rosetta: "))
+    #expect(stamp(manager) == "wine.app id1 msync=1")
+    #expect(FileManager.default.fileExists(atPath: manager.context.dataPath.appending(path: "pfx.rosetta/user.reg")
+        .path(percentEncoded: false)))
+}
+
+@Test func preparingInPlaceCarriesNothing() throws {
+    // Only a rename carries: an arm64 prefix prepared again keeps its own data, and a pfx.rosetta beside it is left be.
+    let (manager, env) = try makeCarryManager(winebootMakingUser())
+    try write("old", to: manager.context.dataPath.appending(path: "pfx.rosetta/drive_c/users/steamuser/AppData/Local/G/s.sav"))
+    try write("wine.app id0 msync=1", to: manager.context.versionFile)
+    try manager.prepare(environment: env)
+    #expect(newPrefixFile(manager, "steamuser/AppData/Local/G/s.sav") == nil)
+    #expect(!launcherLog(manager).contains("carried"))
+}
