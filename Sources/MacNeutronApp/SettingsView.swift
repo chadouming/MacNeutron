@@ -16,6 +16,11 @@ struct SettingsView: View {
                 }
                 .foregroundStyle(.orange)
             }
+            LabeledContent("Runtime") {
+                Button("Repair runtime") { Task { await model.installRuntime(force: true) } }
+                    .disabled(model.installing)
+            }
+            if let notice = model.runtimeNotice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
             LabeledContent("Setup") {
                 Button("Run setup again") { show("setup", with: openWindow) }
             }

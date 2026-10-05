@@ -8,8 +8,7 @@ struct MenuContent: View {
 
     var body: some View {
         Text(model.status.menuTitle)
-        Text(model.runtimeVersion == nil ? "Runtime not installed"
-             : "Runtime \(ToolLayout.runtimeLabel(version: model.runtimeVersion, identity: model.runtimeIdentity))")
+        Text(model.runtime.map { "Runtime \($0.label)" } ?? "Runtime not installed")
         if let busy = model.busy { Text(busy) }
         if let error = model.errorMessage {
             Text(error)

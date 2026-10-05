@@ -7,13 +7,22 @@ public enum RuntimeInstallOutcome: Equatable, Sendable {
     case deferred(String)
 }
 
-public enum RuntimeInstallError: Error, Equatable {
+public enum RuntimeInstallError: Error, Equatable, CustomStringConvertible {
     /// The source has no `Contents/MacOS/wine`.
     case notAWineApp(String)
     /// `codesign --verify --strict`'s exit status for the copy.
     case signatureInvalid(Int32)
     /// `renamex_np`'s or `rename`'s errno.
     case swapFailed(Int32)
+
+    /// Shown by setup and printed by `macneutron install`.
+    public var description: String {
+        switch self {
+        case .notAWineApp(let path): "\(path) isn't a runtime (it has no Contents/MacOS/wine)."
+        case .signatureInvalid(let status): "The runtime's signature check failed (codesign exit \(status))."
+        case .swapFailed(let error): "Couldn't put the new runtime in place: \(String(cString: strerror(error)))."
+        }
+    }
 }
 
 /// Installs `wine.app` and the Steam-facing tool files into a `macneutron` tool folder (spec §3.9).

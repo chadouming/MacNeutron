@@ -12,14 +12,19 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Set up MacNeutron", systemImage: "atom").font(.title2)
 
-            Step(done: model.runtimeVersion != nil, title: "Runtime",
-                 detail: model.runtimeVersion.map { "Runtime \($0) installed" } ?? "Not installed.") { EmptyView() }
+            Step(done: model.steamInstalled, title: "Steam",
+                 detail: model.steamInstalled ? "Steam for Mac is installed." : "Install Steam for Mac first.") { EmptyView() }
 
-            Step(done: model.mode.isWanted, title: "Turn on Steam Play mode",
+            Step(done: model.runtime != nil, title: "Runtime",
+                 detail: model.runtimeNotice ?? model.runtime.map { "Runtime \($0.label) installed" } ?? "Not installed.") {
+                if model.installing { ProgressView().controlSize(.small) }
+            }
+
+            Step(done: model.mode.isWanted, title: "Steam Play",
                  detail: "Steam restarts. Your Mac games stay native and protected.") {
                 Button("Turn on and restart Steam") { Task { await model.enableSteamPlay() } }
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.runtimeVersion == nil || !model.steamInstalled)
+                    .disabled(model.runtime == nil || !model.steamInstalled)
             }
             if !model.mode.isWanted {
                 Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 4) {
@@ -39,7 +44,6 @@ struct SetupView: View {
 
             if let busy = model.busy { ProgressView(busy).controlSize(.small) }
             if let error = model.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-            if !model.steamInstalled { Text("Install Steam for Mac first.").foregroundStyle(.red) }
         }
         .padding(20)
         .frame(width: 560)

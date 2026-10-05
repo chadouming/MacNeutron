@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MacNeutron",
-    platforms: [.macOS("26.0")],
+    platforms: [.macOS("27.0")],
     products: [
         .executable(name: "macneutron", targets: ["macneutron"]),
         .executable(name: "MacNeutronApp", targets: ["MacNeutronApp"]),

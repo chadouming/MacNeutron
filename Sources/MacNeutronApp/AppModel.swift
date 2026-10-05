@@ -22,11 +22,24 @@ struct LoginItem: Sendable {
     var unregister: @Sendable () throws -> Void = { try SMAppService.mainApp.unregister() }
 }
 
+/// The `wine.app` in the tool folder: its `CFBundleShortVersionString` and identity (CDHash).
+struct InstalledRuntime: Equatable, Sendable {
+    let version: String
+    let identity: String
+
+    /// Nil when `wine.app` is missing, has no version or isn't signed.
+    static func read(_ layout: ToolLayout, identity: (URL) -> String?) -> InstalledRuntime? {
+        guard let version = layout.runtimeVersion, let id = identity(layout.wineApp) else { return nil }
+        return InstalledRuntime(version: version, identity: id)
+    }
+
+    var label: String { ToolLayout.runtimeLabel(version: version, identity: identity) }
+}
+
 /// Everything `refresh()` reads from disk, built off the main thread (parsing the app list and sizing
 /// leftover prefixes can take a while; checking Steam spawns a process).
 struct Snapshot: Sendable {
-    var runtimeVersion: String?
-    var runtimeIdentity: String?
+    var runtime: InstalledRuntime?
     var apps: [AppInfo]
     var appInfoError: String?
     var installed: Set<UInt32>
@@ -43,9 +56,23 @@ final class AppModel {
     let mode: SteamPlayMode
     let store: GameSettingsStore
     let loginItem: LoginItem
+    /// MacNeutron.app's `Contents/Helpers/wine.app`; nil in dev runs and tests: nothing to install.
+    let wineAppSource: URL?
+    private let launcherOverride: URL?
+    private let installer: @Sendable (URL, ToolLayout, URL, Bool) throws -> RuntimeInstallOutcome
+    private let identity: @Sendable (URL) -> String?
 
-    private(set) var runtimeVersion: String?
-    private(set) var runtimeIdentity: String?
+    private(set) var runtime: InstalledRuntime?
+    /// Setup's runtime text while installing, deferred or failed; nil once installed.
+    private(set) var runtimeNotice: String?
+    /// The install started by init.
+    private(set) var installTask: Task<Void, Never>?
+    /// Never `busy`: a deferred install retries for a whole game session, and `busy` blocks Steam actions.
+    private(set) var installing = false
+    /// A deferred install's `force`, retried by the poll.
+    private var deferredForce: Bool?
+    /// The last install threw: the poll doesn't retry it on `runtime-damaged` (Repair does).
+    private var installFailed = false
     private(set) var status: SteamPlayStatus = .off
     private(set) var games: [GameRow] = []
     private(set) var orphans: [OrphanPrefix] = []
@@ -62,22 +89,36 @@ final class AppModel {
 
     init(steam: SteamLocation = SteamLocation(), layout: ToolLayout = ToolLayout(root: ToolLayout.defaultRoot),
          mode: SteamPlayMode = SteamPlayMode(), store: GameSettingsStore = GameSettingsStore(),
-         loginItem: LoginItem = LoginItem()) {
+         loginItem: LoginItem = LoginItem(), wineAppSource: URL? = AppModel.bundledWineApp, launcherBinary: URL? = nil,
+         installer: @escaping @Sendable (URL, ToolLayout, URL, Bool) throws -> RuntimeInstallOutcome = {
+             try RuntimeInstaller.install(wineApp: $0, layout: $1, launcherBinary: $2, force: $3)
+         },
+         identity: @escaping @Sendable (URL) -> String? = CodeIdentity.of) {
         self.steam = steam
         self.layout = layout
         self.mode = mode
         self.store = store
         self.loginItem = loginItem
-        // Keep the passthrough script current across app updates (it's only rewritten here and on enable).
+        self.wineAppSource = wineAppSource
+        self.launcherOverride = launcherBinary
+        self.installer = installer
+        self.identity = identity
+        // Keep macneutron-native's copy of the CLI current (rewritten here, on enable and after each install).
         if mode.isWanted { try? mode.installNativeTool() }
         // Read now, not in the first refresh: the scene decides at launch whether to open the setup window.
-        runtimeVersion = layout.runtimeVersion
+        runtime = InstalledRuntime.read(layout, identity: identity)
         Task { await refresh() }
+        installTask = Task { [weak self] in await self?.installRuntime() }
         startWatchingSteam()
     }
 
-    var setupComplete: Bool { runtimeVersion != nil && mode.isWanted }
+    var setupComplete: Bool { runtime != nil && mode.isWanted }
     var steamInstalled: Bool { steam.isInstalled }
+
+    nonisolated static var bundledWineApp: URL? {
+        let app = Bundle.main.bundleURL.appending(path: "Contents/Helpers/wine.app", directoryHint: .isDirectory)
+        return FileManager.default.fileExists(atPath: app.path(percentEncoded: false)) ? app : nil
+    }
 
     /// The `macneutron` CLI inside the app bundle (or next to the executable during development).
     var helper: URL {
@@ -89,10 +130,10 @@ final class AppModel {
     }
 
     func refresh() async {
-        let (steam, layout, store, mode, fallback) = (self.steam, self.layout, self.store, self.mode, apps)
+        let (steam, layout, store, mode, fallback, identity) = (self.steam, self.layout, self.store, self.mode, apps, self.identity)
         let mine = generation
         let snapshot = await Task.detached {
-            Self.loadSnapshot(steam: steam, layout: layout, store: store, mode: mode, fallbackApps: fallback)
+            Self.loadSnapshot(steam: steam, layout: layout, store: store, mode: mode, fallbackApps: fallback, identity: identity)
         }.value
         apply(snapshot, generation: mine)
     }
@@ -100,8 +141,7 @@ final class AppModel {
     /// Drops a snapshot read before a settings change or cleanup: it would put the old state back.
     func apply(_ snapshot: Snapshot, generation mine: Int) {
         guard mine == generation else { return }
-        runtimeVersion = snapshot.runtimeVersion
-        runtimeIdentity = snapshot.runtimeIdentity
+        runtime = snapshot.runtime
         apps = snapshot.apps
         appInfoError = snapshot.appInfoError
         games = snapshot.apps
@@ -117,18 +157,59 @@ final class AppModel {
     /// Reads everything from disk. On an unreadable app list it keeps `fallbackApps`: an empty list
     /// would plan away every Mac game's protection.
     nonisolated static func loadSnapshot(steam: SteamLocation, layout: ToolLayout, store: GameSettingsStore,
-                                         mode: SteamPlayMode, fallbackApps: [AppInfo]) -> Snapshot {
+                                         mode: SteamPlayMode, fallbackApps: [AppInfo],
+                                         identity: (URL) -> String? = CodeIdentity.of) -> Snapshot {
         var apps = fallbackApps
         var appInfoError: String?
         do { apps = try AppInfoReader.read(steam.appInfo) } catch { appInfoError = "\(error)" }
         let plan = MappingPlanner.plan(apps: apps, runAs: store.runAsOverrides())
-        return Snapshot(runtimeVersion: layout.runtimeVersion, runtimeIdentity: layout.identity, apps: apps,
+        return Snapshot(runtime: InstalledRuntime.read(layout, identity: identity), apps: apps,
                         appInfoError: appInfoError, installed: steam.installedAppIDs(), settings: store.all(),
                         orphans: OrphanPrefixes.find(in: steam), status: mode.status(plan: plan))
     }
 
     func plan() -> [String: ToolMapping] {
         MappingPlanner.plan(apps: apps, runAs: store.runAsOverrides())
+    }
+
+    // MARK: Runtime
+
+    /// Installs the bundled `wine.app` (spec §3.9) off the main thread. Deferred while a game runs from the old one.
+    func installRuntime(force: Bool = false) async {
+        guard let source = wineAppSource, !installing else { return }
+        installing = true
+        if deferredForce == nil { runtimeNotice = "Installing the runtime…" }  // a retry keeps the deferral's text
+        let (installer, layout, launcher) = (self.installer, self.layout, launcherOverride ?? helper)
+        let result = await Task.detached { Result { try installer(source, layout, launcher, force) } }.value
+        installing = false
+        deferredForce = nil
+        installFailed = false
+        switch result {
+        case .success(.deferred):
+            deferredForce = force
+            runtimeNotice = "The runtime updates after the game exits."
+            return  // nothing changed on disk: no refresh every 3 s for the whole game session
+        case .success:
+            runtimeNotice = nil
+            if mode.isWanted {
+                do { try mode.installNativeTool() } catch { errorMessage = "\(error)" }
+            }
+        case .failure(let error):
+            installFailed = true
+            runtimeNotice = "\(error)"
+        }
+        generation += 1  // a refresh that read the folder mid-install would put the old runtime back
+        runtime = InstalledRuntime.read(layout, identity: identity)
+        await refresh()
+    }
+
+    /// Each poll tick: retry a deferred install; reinstall when a launch found the runtime damaged.
+    func pollRuntime() async {
+        if let force = deferredForce {
+            await installRuntime(force: force)
+        } else if !installFailed, FileManager.default.fileExists(atPath: layout.runtimeDamagedMarker.path(percentEncoded: false)) {
+            await installRuntime()
+        }
     }
 
     // MARK: Setup
@@ -223,7 +304,8 @@ final class AppModel {
         await refresh()
     }
 
-    /// Every 3 s: when Steam quits, bring its mappings up to date; 20 s after it starts, re-check the files.
+    /// Every 3 s: retry a deferred or damaged runtime install; when Steam quits, bring its mappings up to date;
+    /// 20 s after it starts, re-check the files.
     /// Once a minute, re-read Steam's app list so games bought meanwhile show up as "restart needed".
     /// The Steam check and the disk reads run off the main thread.
     private func startWatchingSteam() {
@@ -232,6 +314,7 @@ final class AppModel {
             while !Task.isCancelled {
                 ticks += 1
                 guard let self else { return }
+                await self.pollRuntime()
                 if ticks % 20 == 0, self.busy == nil { await self.refresh() }
                 let mode = self.mode
                 let running = await Task.detached { mode.process.isRunning() }.value

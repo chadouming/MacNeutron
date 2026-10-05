@@ -21,10 +21,46 @@ final class FakeLoginItem: @unchecked Sendable {
     }
 }
 
+/// Stands in for `RuntimeInstaller.install`: records each call's `force` and answers with the next outcome
+/// (the last one repeats). `effect` runs after the recording, like the real install's disk changes.
+final class ScriptedInstaller: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcomes: [RuntimeInstallOutcome]
+    private var forces: [Bool] = []
+    let effect: @Sendable (URL, ToolLayout) throws -> Void
+
+    init(_ outcomes: RuntimeInstallOutcome..., effect: @escaping @Sendable (URL, ToolLayout) throws -> Void = { _, _ in }) {
+        self.outcomes = outcomes
+        self.effect = effect
+    }
+
+    var calls: [Bool] { lock.withLock { forces } }
+
+    var install: @Sendable (URL, ToolLayout, URL, Bool) throws -> RuntimeInstallOutcome {
+        { source, layout, _, force in
+            let outcome = self.lock.withLock {
+                self.forces.append(force)
+                return self.outcomes.count > 1 ? self.outcomes.removeFirst() : self.outcomes[0]
+            }
+            try self.effect(source, layout)
+            return outcome
+        }
+    }
+}
+
+/// What the real install does to the folder: the source (a fake, unsigned wine.app) replaces the old copy.
+private let copiesTheSource: @Sendable (URL, ToolLayout) throws -> Void = { source, layout in
+    try? FileManager.default.removeItem(at: layout.wineApp)
+    try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(at: source, to: layout.wineApp)
+    try? FileManager.default.removeItem(at: layout.runtimeDamagedMarker)
+}
+
 @MainActor
 private func makeModel(steamRunning: Bool = false,
-                       loginItem: LoginItem = FakeLoginItem(statusAfterRegister: .enabled).item) async throws
-    -> (AppModel, SteamPlayMode, FakeSteam) {
+                       loginItem: LoginItem = FakeLoginItem(statusAfterRegister: .enabled).item,
+                       wineAppSource: URL? = nil, installer: ScriptedInstaller = ScriptedInstaller(.unchanged))
+    async throws -> (AppModel, SteamPlayMode, FakeSteam) {
     let (mode, fake) = try makeMode()
     let apps = [timberborn, bongoCat, cats]
     try FileManager.default.createDirectory(at: mode.steam.appInfo.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -32,7 +68,9 @@ private func makeModel(steamRunning: Bool = false,
     try await mode.enable(plan: MappingPlanner.plan(apps: apps, runAs: [:]))
     if !steamRunning { try await fake.quit(timeout: .seconds(1)) }
     let model = AppModel(steam: mode.steam, layout: try makeToolLayout(), mode: mode,
-                         store: GameSettingsStore(directory: try makeTempDir().appending(path: "games")), loginItem: loginItem)
+                         store: GameSettingsStore(directory: try makeTempDir().appending(path: "games")), loginItem: loginItem,
+                         wineAppSource: wineAppSource, installer: installer.install, identity: { _ in testIdentity })
+    await model.installTask?.value
     await model.refresh()
     return (model, mode, fake)
 }
@@ -84,7 +122,7 @@ private func makeModel(steamRunning: Bool = false,
     let (model, mode, _) = try await makeModel()
     #expect(model.layout.runtimeVersion == "test")  // the fake wine.app's CFBundleShortVersionString
     let relaunched = AppModel(steam: mode.steam, layout: model.layout, mode: mode, store: model.store,
-                              loginItem: model.loginItem)
+                              loginItem: model.loginItem, wineAppSource: nil, identity: { _ in testIdentity })
     #expect(relaunched.setupComplete)  // the scene reads it before any refresh finishes
 }
 
@@ -96,4 +134,108 @@ private func makeModel(steamRunning: Bool = false,
     await model.update(bongoCat.appID) { $0.runAs = .windows }
     model.apply(stale, generation: token)
     #expect(model.games.first { $0.id == bongoCat.appID }?.settings.runAs == .windows)
+}
+
+// MARK: The runtime
+
+@MainActor @Test func startupInstallsTheBundledRuntime() async throws {
+    let (mode, _) = try makeMode()
+    let layout = ToolLayout(root: try makeTempDir().appending(path: "macneutron", directoryHint: .isDirectory))
+    let installer = ScriptedInstaller(.installed, effect: copiesTheSource)
+    let model = AppModel(steam: mode.steam, layout: layout, mode: mode, store: GameSettingsStore(directory: try makeTempDir()),
+                         loginItem: FakeLoginItem(statusAfterRegister: .enabled).item,
+                         wineAppSource: try makeToolLayout().wineApp, installer: installer.install, identity: { _ in testIdentity })
+    #expect(model.runtime == nil)
+    await model.installTask?.value
+    #expect(installer.calls == [false])
+    #expect(model.runtime == InstalledRuntime(version: "test", identity: testIdentity))
+    #expect(model.runtimeNotice == nil)
+}
+
+@MainActor @Test func noBundledRuntimeInstallsNothing() async throws {
+    let installer = ScriptedInstaller(.installed)
+    let (model, _, _) = try await makeModel(installer: installer)
+    await model.installRuntime(force: true)
+    #expect(installer.calls.isEmpty)
+    #expect(model.runtimeNotice == nil)
+    #expect(model.runtime == InstalledRuntime(version: "test", identity: testIdentity))  // the one already there
+}
+
+@MainActor @Test func aDeferredInstallIsRetriedByThePoll() async throws {
+    let installer = ScriptedInstaller(.deferred("/x"), .installed)
+    let (model, _, _) = try await makeModel(wineAppSource: try makeToolLayout().wineApp, installer: installer)
+    #expect(model.runtimeNotice == "The runtime updates after the game exits.")
+    #expect(model.busy == nil)
+    #expect(model.generation == 0)  // a deferral changes nothing on disk, so it doesn't refresh
+    await model.pollRuntime()
+    #expect(installer.calls == [false, false])
+    #expect(model.runtimeNotice == nil)
+    #expect(model.busy == nil)
+    await model.pollRuntime()
+    #expect(installer.calls.count == 2)  // nothing pending any more
+}
+
+@MainActor @Test func repairForcesAReinstall() async throws {
+    let installer = ScriptedInstaller(.unchanged, .installed)
+    let (model, _, _) = try await makeModel(wineAppSource: try makeToolLayout().wineApp, installer: installer)
+    await model.installRuntime(force: true)
+    #expect(installer.calls == [false, true])
+    #expect(model.runtimeNotice == nil)
+}
+
+@MainActor @Test func oneInstallAtATime() async throws {
+    let installer = ScriptedInstaller(.unchanged)
+    let (model, _, _) = try await makeModel(wineAppSource: try makeToolLayout().wineApp, installer: installer)
+    async let first: Void = model.installRuntime(force: true)
+    async let second: Void = model.installRuntime(force: true)
+    _ = await (first, second)
+    #expect(installer.calls == [false, true])
+}
+
+@MainActor @Test func damagedMarkerTriggersAReinstall() async throws {
+    let installer = ScriptedInstaller(.unchanged, .installed, effect: copiesTheSource)
+    let (model, _, _) = try await makeModel(wineAppSource: try makeToolLayout().wineApp, installer: installer)
+    await model.pollRuntime()
+    #expect(installer.calls == [false])  // no marker, nothing deferred
+    try write("", to: model.layout.runtimeDamagedMarker)
+    await model.pollRuntime()
+    #expect(installer.calls == [false, false])
+    #expect(!FileManager.default.fileExists(atPath: model.layout.runtimeDamagedMarker.path(percentEncoded: false)))
+}
+
+@MainActor @Test func aFailedInstallShowsTheErrorAndIsNotRetriedEveryTick() async throws {
+    let installer = ScriptedInstaller(.installed, effect: { _, _ in throw RuntimeInstallError.signatureInvalid(1) })
+    let (model, _, _) = try await makeModel(wineAppSource: try makeToolLayout().wineApp, installer: installer)
+    #expect(model.runtimeNotice == "The runtime's signature check failed (codesign exit 1).")
+    #expect(model.runtime != nil)  // the old copy stays
+    try write("", to: model.layout.runtimeDamagedMarker)
+    await model.pollRuntime()
+    #expect(installer.calls == [false])  // Repair retries; the poll doesn't
+}
+
+@MainActor @Test func setupCompletesWithRuntimeAndSteamPlay() async throws {
+    let (model, mode, _) = try await makeModel()
+    #expect(model.setupComplete)
+    let unsigned = AppModel(steam: mode.steam, layout: model.layout, mode: mode, store: model.store,
+                            loginItem: model.loginItem, wineAppSource: nil, identity: { _ in nil })
+    #expect(!unsigned.setupComplete)
+    let (off, _) = try makeMode()
+    let notWanted = AppModel(steam: off.steam, layout: model.layout, mode: off, store: model.store,
+                             loginItem: model.loginItem, wineAppSource: nil, identity: { _ in testIdentity })
+    #expect(!notWanted.setupComplete)
+}
+
+@MainActor @Test func installRefreshesTheNativeTool() async throws {
+    let (model, mode, _) = try await makeModel()
+    let newCLI = "#!/bin/sh\necho new macneutron\n"
+    let installer = ScriptedInstaller(.installed, effect: { [runtimeTool = mode.runtimeTool] _, _ in
+        try write(newCLI, to: runtimeTool.appending(path: "bin/macneutron"), executable: true)  // the install's tool files
+    })
+    let updated = AppModel(steam: mode.steam, layout: model.layout, mode: mode, store: model.store, loginItem: model.loginItem,
+                           wineAppSource: try makeToolLayout().wineApp, installer: installer.install,
+                           identity: { _ in testIdentity })
+    await updated.installTask?.value
+    #expect(installer.calls == [false])
+    #expect(try String(contentsOf: mode.nativeTool.appending(path: "bin/macneutron"), encoding: .utf8)
+        == newCLI)
 }
