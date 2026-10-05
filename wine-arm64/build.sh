@@ -112,7 +112,8 @@ stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.pat
   "$ROOT/wine-arm64/Info.plist" "$ROOT/dxmt/pins" "$DXMT_PATCHES"/*.patch "$ROOT/dxmt/llvm.sh" \
   "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
   "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh" "$ROOT/wine-arm64/deps.pins" \
-  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch)
+  "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch \
+  "$ROOT/presenter/present.m" "$ROOT/LICENSE")
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
@@ -141,8 +142,8 @@ ln -sfn ../../lsteamclient/lsteamclient "$W/dlls/lsteamclient"
 # The repository commit the bundle's SOURCE names (step 8). Dirty when anything the build reads from the repository
 # differs from that commit, a new file included.
 mac=$(git -C "$ROOT" rev-parse HEAD)
-[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile)" ] \
-  || mac="$mac+dirty"
+[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal -- wine-arm64 dxmt bridge Makefile presenter \
+  LICENSE)" ] || mac="$mac+dirty"
 # The build is a development build if any tree is.
 if [ "$wine_mode" = development ] || [ "$fex_mode" = development ] || [ "$dxmt_mode" = development ] \
   || [ "$lsteamclient_mode" = development ]; then
@@ -327,6 +328,12 @@ fi
 mkdir -p "$OUT"
 build_probe arm64 "$SRC/llvm-arm64" "$OUT" "$SRC"
 build_translate arm64 "$SRC/llvm-arm64" "$D" "$SRC/dxmt-build" "$OUT" "$SRC"
+# The MetalFX presenter (arm64 release spec §5.3), which winemetal.so loads from beside itself (DXMT patch 0002).
+mkdir -p "$SRC/presenter"
+/usr/bin/clang -arch arm64 -mmacosx-version-min=27.0 -fobjc-arc -O2 -dynamiclib \
+  -install_name @rpath/libmacneutron-present.dylib -framework Foundation -framework AppKit -framework QuartzCore \
+  -framework Metal -framework MetalFX -o "$SRC/presenter/libmacneutron-present.dylib" "$ROOT/presenter/present.m" \
+  > "$SRC/presenter.log" 2>&1 || die "building the presenter failed; see $SRC/presenter.log"
 
 # 8. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
 #    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.
@@ -342,6 +349,8 @@ series() { if [ "$1" = development ]; then echo dev; else echo "$2"; fi; }  # se
     n ~ /^(fmt|range-v3|rpmalloc|unordered_dense|xxhash|cpp-optparse)$/ { print "FEX_SUBMODULE_" n "=" c }'
   echo "DXMT_COMMIT=$DXMT_COMMIT"
   echo "DXMT_SERIES=$(series "$dxmt_mode" "$dxmt_series")"
+  git -C "$D" submodule status | awk '{ c = $1; sub(/^[-+U]/, "", c); n = $2; sub(/.*\//, "", n)
+    print "DXMT_SUBMODULE_" n "=" c }'  # external/nvapi, include/native/directx
   echo "LLVM_TAG=$LLVM_TAG"
   echo "LLVM_MINGW_SHA256=$LLVM_MINGW_SHA256"
   echo "LSTEAMCLIENT_COMMIT=$LSTEAMCLIENT_COMMIT"

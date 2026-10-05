@@ -61,12 +61,15 @@ put "$DXMT_IN" version "$R/DXMT/"
 # their LC_RPATH @loader_path/.
 U="$R/lib/wine/aarch64-unix"
 for l in libfreetype.6.dylib libgnutls.30.dylib; do put "$DEPS/lib" "$l" "$U/"; done
+# The MetalFX presenter (arm64 release spec §5.3): winemetal.so loads it from its own folder (DXMT patch 0002).
+put "$B/wine-arm64-src/presenter" libmacneutron-present.dylib "$U/"
 # Licences (ship-base spec §4): the components' own texts, the committed README and NOTICES.md, and build.sh's SOURCE.
 # DXMT's stay in DXMT/.
 L="$R/licenses"
 S="$B/wine-arm64-src"
-mkdir -p "$L/wine" "$L/fex" "$L/llvm" "$L/llvm-mingw"
+mkdir -p "$L/wine" "$L/fex" "$L/llvm" "$L/llvm-mingw" "$L/macneutron"
 for f in README NOTICES.md; do put "$ROOT/wine-arm64/licenses" "$f" "$L/"; done
+put "$ROOT" LICENSE "$L/macneutron/"  # the presenter's and the patch files' (arm64 release spec §7.1)
 put "$S" SOURCE "$L/"
 for f in LICENSE COPYING.LIB AUTHORS NOTICES.md; do put "$S/wine" "$f" "$L/wine/"; done
 put "$S/wine" libs/gsm/COPYRIGHT "$L/wine/gsm-COPYRIGHT"
@@ -105,6 +108,9 @@ lsteamclient is under Valve's Steamworks SDK licence (LICENSE, beside this note)
 LGPL-2.1-or-later: copyright 2012 Piotr Caban for CodeWeavers, from Wine (Wine's licence texts are in ../wine/).
 EOF
 cp "$ROOT/wine-arm64/Info.plist" "$APP/Contents/Info.plist"
+# The version (arm64 release spec §5.1): dev for a development bundle.
+/usr/libexec/PlistBuddy -c 'Add :CFBundleShortVersionString string dev' -c 'Add :CFBundleVersion string dev' \
+  "$APP/Contents/Info.plist" > /dev/null || die "can't write the version into Info.plist"
 cp "$MACNEUTRON_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
 
 # The Mach-O files in the bundle, one per line (PE DLLs need no signature).
@@ -188,6 +194,11 @@ rm "$OUT/macho.list"
   || die "Contents/MacOS/ntdll.so does not resolve to lib/wine/aarch64-unix/ntdll.so"
 [ -e "$R/bin/wineserver" ] || die "no Resources/bin/wineserver"
 [ -e "$R/share/wine/wine.inf" ] || die "no Resources/share/wine/wine.inf"
+v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2> /dev/null || true)
+[ "$v" = dev ] || die "Info.plist's CFBundleShortVersionString is '${v:-missing}', not dev"
+id=$(otool -D "$U/libmacneutron-present.dylib" | tail -n +2)
+[ "$id" = @rpath/libmacneutron-present.dylib ] \
+  || die "libmacneutron-present.dylib's install name is ${id:-missing}, not @rpath/libmacneutron-present.dylib"
 # DXMT: Wine's builtin marker as dxmt/build.sh checks it (bytes 64-79), the version token, the pin's place in the tree.
 builtin() { [ "$(dd if="$1" bs=1 skip=64 count=16 2> /dev/null)" = "Wine builtin DLL" ]; }
 builtin "$R/lib/wine/aarch64-windows/winemetal.dll" || die "winemetal.dll lacks Wine's builtin marker"

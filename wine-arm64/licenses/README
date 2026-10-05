@@ -24,8 +24,8 @@ FEX (libarm64ecfex.dll and libarm64ecfex.so: runs x86_64 code)
 DXMT (the Direct3D to Metal DLLs in ../DXMT/aarch64-windows, winemetal.dll and winemetal.so)
   Licence: LGPL-2.1-or-later. Texts: ../DXMT/LICENSE, ../DXMT/COPYING.LIB, ../DXMT/LICENSE.OLD (MIT, for releases up
   to v0.80). DXBCParser (MIT, Microsoft) and the constexpr GUID parser (MIT): NOTICES.md.
-  Source: https://github.com/chadouming/dxmt.git at DXMT_COMMIT (../DXMT/version names it too), with the patches
-  in the repository's wine-arm64/patches/dxmt (pinned in dxmt/pins).
+  Source: https://github.com/chadouming/dxmt.git at DXMT_COMMIT (../DXMT/version names it too) with its submodules
+  at the DXMT_SUBMODULE_* commits, and the patches in the repository's wine-arm64/patches/dxmt (pinned in dxmt/pins).
 
 LLVM 15.0.7 (linked statically into winemetal.so)
   Licence: Apache-2.0 WITH LLVM-exception, llvm/LICENSE.TXT; its regular-expression code, llvm/COPYRIGHT.regex;
@@ -69,10 +69,15 @@ GMP 6.3.0 (linked statically into libgnutls.30.dylib)
 lsteamclient (lsteamclient.dll and lsteamclient.so: the Steam bridge, from Windows games' Steam API to Mac Steam's
 steamclient.dylib)
   Licence: Valve's Steamworks SDK licence, lsteamclient/LICENSE (lsteamclient is Steamworks-SDK-derived); its cxx.h is
-  LGPL-2.1-or-later (CodeWeavers, from Wine), lsteamclient/NOTE. Whether a release bundle may include it is not
-  decided yet (ship-base spec §1): this bundle is a local build.
+  LGPL-2.1-or-later (CodeWeavers, from Wine), lsteamclient/NOTE. It ships by the maintainer's decision of 2026-10-04
+  under Valve's Steamworks SDK licence (lsteamclient/).
   Source: https://github.com/ValveSoftware/Proton.git, its lsteamclient/ folder at LSTEAMCLIENT_COMMIT (pinned in
   wine-arm64/deps.pins), with the patches in the repository's wine-arm64/patches/lsteamclient (dappermint/winecx's
   three Mac fixes).
+
+MacNeutron (libmacneutron-present.dylib, the MetalFX presenter; the Wine, DXMT and FEX patch files)
+  Licence: MIT, macneutron/LICENSE.
+  Source: the repository at MACNEUTRON_COMMIT: presenter/present.m, and the patches in wine-arm64/patches/wine,
+  wine-arm64/patches/dxmt and wine-arm64/patches/fex.
 
 FreeType: Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.
