@@ -182,10 +182,10 @@ log's first line to `Engine is initialized`; lobby = launch to `Took … to Load
 | 0.1.0 | 96.8 s, 44.7 s | 102.4 s, 49.3 s | 35.9, 36.3 |
 | with patch 0021 | 9.2 s, 8.9 s | 26.3 s, 24.8 s (includes preparing the prefix in place) | 36.0 |
 
-(Rosetta-era DXMT: 14.5 s. In one patched run the game moved on to the Jungle Practice match lobby 9 s after the main
-lobby without input from the test, so that run's frame rate isn't comparable and is left out. The lobby ran at ~36 FPS
-on both runtimes in these runs, below the 59 measured earlier in the same prefix; the cause wasn't established, and it
-is not a difference between the runtimes.)
+(Rosetta-era DXMT: 14.5 s. Every run logged in through the bridge (`Result=Success`). In one patched run the game
+moved on to the Jungle Practice match lobby 9 s after the main lobby without input from the test, so that run's frame
+rate is left out; the 59 FPS measured earlier in this prefix came from a window that also covered that match lobby.
+In the main lobby alone, both runtimes run at ~36 FPS.)
 
 **Settings.** The fresh prefix that replaces a Rosetta-era one (renamed `pfx.rosetta`) started SMITE 2 with its
 defaults (XeSS, ~4 FPS). The launcher now carries the player's data into it (spec §14, amending §3.4 step 1): the user
