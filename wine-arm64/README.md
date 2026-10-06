@@ -171,7 +171,9 @@ this Wine's build tree, with an arm64 LLVM 15 built once into `build/wine-arm64-
 writes the commits to `patches/dxmt/`. DXMT's shader-translation cache and the launcher's replay stamp follow neither:
 both are keyed on the translator's key (`lib.sh`'s `translator_key`, in `dxmt-install/translator` and the bundle's
 `DXMT/translator`), a hash of what changes translated output as the tree has it, committed or not: `src/airconv`,
-`libs/DXBCParser`, `include`, DXMT's top-level meson files, the buildtype, the LLVM pin and recipe, Apple clang's and
+`libs/DXBCParser`, `include`, DXMT's top-level meson files, d3d11's compile arguments (`src/d3d11/d3d11_shader.cpp`,
+whose cache entries key on the variant, not on the arguments), the airconv thunks (`src/winemetal/airconv_thunks.*`),
+the buildtype, the LLVM pin and recipe, Apple clang's and
 metal's versions. A re-fetch of the same patches or a change elsewhere in DXMT keeps players' translated shaders and
 starts no replay; an edit to airconv, even uncommitted, gets new ones (`tests/translator_key_test.sh`). A DXMT
 patch's message names the arm64 failure it fixes. Folding the patches into the fork (and moving the pin) is a separate

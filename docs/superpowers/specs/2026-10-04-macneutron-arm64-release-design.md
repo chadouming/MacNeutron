@@ -619,7 +619,9 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
 - **§3.8, §5 (2026-10-05, Task C1, Ruling 46):** the stamp is `<translator key> <macOS build>`, the key read from
   `wine.app`'s `DXMT/translator` (the layout gains it beside `version`, which stays the fork commit and series). The key
   is `wine-arm64/lib.sh`'s `translator_key`: a hash of what changes translated output as the DXMT tree has it,
-  committed or not (`src/airconv`, `libs/DXBCParser`, `include`, the top-level meson files, the buildtype, the LLVM pin
+  committed or not (`src/airconv`, `libs/DXBCParser`, `include`, the top-level meson files, d3d11's compile arguments
+  in `src/d3d11/d3d11_shader.cpp` (its entries key on the variant's fields, not on the arguments built from them), the
+  airconv thunks `src/winemetal/airconv_thunks.*`, the buildtype, the LLVM pin
   and recipe, Apple clang's and metal's versions). DXMT patch 0003 keys the translation cache on it too, in place of
   `git describe`. A re-fetch of the same patches or a DXMT change outside the translator neither re-translates nor
   replays; a `<version> <macOS build>` stamp from before differs, so each game replays once.

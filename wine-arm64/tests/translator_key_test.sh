@@ -11,16 +11,22 @@ fail=0
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 g() { _g_dir=$1; shift; git -C "$_g_dir" -c user.name=t -c user.email=t@t "$@"; }
 
-# The pin: the translator (src/airconv, the DXBC parser, the headers, the top-level build files) and the rest of DXMT.
+# The pin: the translator (src/airconv, the DXBC parser, the headers, the top-level build files, d3d11's compile
+# arguments, the airconv thunks) and the rest of DXMT.
 O="$T/origin"
-mkdir -p "$O/src/airconv/dxil" "$O/src/d3d12" "$O/libs/DXBCParser" "$O/include"
+mkdir -p "$O/src/airconv/dxil" "$O/src/d3d12" "$O/src/d3d11" "$O/src/winemetal/unix" "$O/libs/DXBCParser" "$O/include"
 echo 'int convert();' > "$O/src/airconv/dxbc_converter.cpp"
 echo 'int lower();' > "$O/src/airconv/dxil/dxil_lower.cpp"
 echo 'int parse();' > "$O/libs/DXBCParser/DXBCUtils.cpp"
 echo '#pragma once' > "$O/include/adt.hpp"
 echo "project('dxmt')" > "$O/meson.build"
 echo "option('x', type : 'string')" > "$O/meson.options"
+echo 'int variant();' > "$O/src/d3d11/d3d11_shader.cpp"
+echo 'int thunk();' > "$O/src/winemetal/airconv_thunks.c"
+echo '#pragma once' > "$O/src/winemetal/airconv_thunks.h"
 echo 'int queue();' > "$O/src/d3d12/d3d12_command_queue.cpp"
+echo 'int present();' > "$O/src/winemetal/unix/winemetal_unix.c"
+echo 'int context();' > "$O/src/d3d11/d3d11_context.cpp"
 git init -q "$O"; g "$O" add -A; g "$O" commit -qm pin
 # The series: one patch in the translator, one outside it.
 git clone -q "$O" "$T/work"
@@ -58,7 +64,8 @@ rm "$T/a/src/airconv/dxil/new.hpp"
 rm "$T/a/src/airconv/dxil/dxil_lower.cpp"
 changes "a deleted file in src/airconv" "$T/a" release
 g "$T/a" checkout -q -- src/airconv/dxil/dxil_lower.cpp
-for f in libs/DXBCParser/DXBCUtils.cpp include/adt.hpp meson.build meson.options; do
+for f in libs/DXBCParser/DXBCUtils.cpp include/adt.hpp meson.build meson.options src/d3d11/d3d11_shader.cpp \
+  src/winemetal/airconv_thunks.c src/winemetal/airconv_thunks.h; do
   cp "$T/a/$f" "$T/saved"; printf ' ' >> "$T/a/$f"
   changes "a byte in $f" "$T/a" release
   cp "$T/saved" "$T/a/$f"
@@ -70,6 +77,10 @@ expect "the tree is as fetched again" "$(translator_key "$T/a" release)" "$k"
 # 3. The rest of DXMT doesn't, committed or not.
 printf ' ' >> "$T/a/src/d3d12/d3d12_command_queue.cpp"
 expect "an uncommitted byte in src/d3d12 keeps the key" "$(translator_key "$T/a" release)" "$k"
+for f in src/d3d11/d3d11_context.cpp src/winemetal/unix/winemetal_unix.c; do
+  printf ' ' >> "$T/a/$f"
+  expect "an uncommitted byte in $f keeps the key" "$(translator_key "$T/a" release)" "$k"
+done
 g "$T/a" commit -qam 'd3d12: three'
 echo 'int fence();' > "$T/a/src/d3d12/d3d12_fence.cpp"
 expect "a commit and a new file outside the translator keep it" "$(translator_key "$T/a" release)" "$k"
