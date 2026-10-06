@@ -235,6 +235,7 @@ re-clone; that is why they wait for the rebase.
   - 0024 (`dlls/libxess`: XeSS on D3D12 answered by MetalFX's temporal upscaler through DXMT's private interface,
     DXMT patches 0004-0005) is ours and stays local. Its `xess.h` copies declarations from Intel's public headers
     (github.com/intel/xess, branch `main`, MIT since commit de0fb9c) with Intel's MIT notice.
+  - 0025 (`dlls/libxess`: notes on the bridge's lock and its conventions) is ours and stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
@@ -259,5 +260,5 @@ re-clone; that is why they wait for the rebase.
     the date before importing another. This is not legal advice.
 - Each patch taken or derived from another tree names its source in its message (0006's is given above, since its message
   doesn't). Patch files keep their original authors.
-- **DXMT** is LGPL-2.1+; our patches to it are too. 0001-0005 are ours.
+- **DXMT** is LGPL-2.1+; our patches to it are too. 0001-0006 are ours.
 - Upstream FEX and DXMT refuse AI-authored contributions: no patches go upstream (issue reports only).

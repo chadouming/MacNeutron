@@ -9,6 +9,9 @@
 //   depthstencil   2.0x, a D32_FLOAT_S8X24_UINT depth, jittered motion vectors     "upscale depthstencil ok psnr ..."
 //   rtoutput       2.0x, an output with ALLOW_RENDER_TARGET only, R16G16_TYPELESS motion vectors   "upscale rtoutput ok ..."
 //   compute        2.0x, recorded on a COMPUTE command list and queue, with a reactive mask      "upscale compute ok ..."
+//   typeless       2.0x, colour and output R16G16B16A16_TYPELESS (read as FLOAT)                "upscale typeless ok ..."
+//   typeless32     2.0x, colour and output R32G32B32A32_TYPELESS (DXMT keeps them as RGBA32Uint: read through
+//                  RGBA32Float views)                                                           "upscale typeless32 ok ..."
 //   bad            a null output, then a 4.0x input: both E_INVALIDARG; then an upscale on the same list works
 //                  "upscale bad ok"
 //   range          "range <min> <max>" (GetTemporalScalerScaleRange)
@@ -111,6 +114,7 @@ struct Upscale {
     std::string name;
     float ratio = 2.0f;
     DXGI_FORMAT depth = DXGI_FORMAT_D32_FLOAT, motion = DXGI_FORMAT_R16G16_FLOAT, mask = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT color = DXGI_FORMAT_R16G16B16A16_FLOAT, out = DXGI_FORMAT_R16G16B16A16_FLOAT; // 8 or 16 bytes a texel
     D3D12_RESOURCE_FLAGS output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     bool jittered = false, exposure = false, compute = false, bad = false;
 };
@@ -166,19 +170,20 @@ static void Run(const Upscale &u) {
     UINT iw = (UINT)std::ceil(OW / u.ratio), ih = (UINT)std::ceil(OH / u.ratio);
     float scale = (float)OW / iw;
     int phases = (int)std::ceil(8 * u.ratio * u.ratio);
-    MTL_TEMPORAL_SCALER_D3D12_DESC sd = {iw, ih, OW, OH, DXGI_FORMAT_R16G16B16A16_FLOAT, u.depth, u.motion,
-                                         DXGI_FORMAT_R16G16B16A16_FLOAT, u.mask, FALSE, FALSE, u.jittered, 1.0f, 3.0f};
+    MTL_TEMPORAL_SCALER_D3D12_DESC sd = {iw, ih, OW, OH, u.color, u.depth, u.motion, u.out, u.mask, FALSE, FALSE,
+                                         u.jittered, 1.0f, 3.0f};
+    bool c32 = u.color == DXGI_FORMAT_R32G32B32A32_TYPELESS, o32 = u.out == DXGI_FORMAT_R32G32B32A32_TYPELESS;
     IMTLD3D12TemporalScaler *scaler = nullptr;
     CHECK(ext->CreateTemporalScaler(&sd, &scaler));
 
     auto DS = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-    ID3D12Resource *color = g.Texture(Tex2D(iw, ih, DXGI_FORMAT_R16G16B16A16_FLOAT), COPY_DEST);
+    ID3D12Resource *color = g.Texture(Tex2D(iw, ih, u.color), COPY_DEST);
     ID3D12Resource *depth = g.Texture(Tex2D(iw, ih, u.depth, 1, DS), COPY_DEST);
     ID3D12Resource *motion = g.Texture(Tex2D(iw, ih, u.motion), COPY_DEST);
     ID3D12Resource *mask = u.mask ? g.Texture(Tex2D(iw, ih, u.mask), COPY_DEST) : nullptr;
     auto out_state = u.output & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
                                                                           : D3D12_RESOURCE_STATE_RENDER_TARGET;
-    ID3D12Resource *output = g.Texture(Tex2D(OW, OH, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, u.output), out_state);
+    ID3D12Resource *output = g.Texture(Tex2D(OW, OH, u.out, 1, u.output), out_state);
     ID3D12Resource *exposure = nullptr;
     if (u.exposure) { // 1x1 R16F holding 1.0
         exposure = g.Texture(Tex2D(1, 1, DXGI_FORMAT_R16_FLOAT), COPY_DEST);
@@ -188,7 +193,7 @@ static void Run(const Upscale &u) {
         g.Barrier(exposure, COPY_DEST, READ);
         g.Submit();
     }
-    Staging sc = MakeStaging(g, iw * 8, ih), sdp = MakeStaging(g, iw * 4, ih), sm = MakeStaging(g, iw * 4, ih),
+    Staging sc = MakeStaging(g, iw * (c32 ? 16 : 8), ih), sdp = MakeStaging(g, iw * 4, ih), sm = MakeStaging(g, iw * 4, ih),
             sk = MakeStaging(g, iw, ih);
     std::vector<float> last(iw * ih * 4); // the last frame's colour as uploaded
 
@@ -203,8 +208,12 @@ static void Run(const Upscale &u) {
             for (UINT x = 0; x < iw; x++) {
                 Sample s = Scene((x + 0.5f + jx) * scale, (y + 0.5f + jy) * scale, (float)f);
                 for (int ch = 0; ch < 4; ch++) {
-                    c[x * 4 + ch] = ToHalf(ch < 3 ? s.c[ch] : 1.0f);
-                    last[((size_t)y * iw + x) * 4 + ch] = FromHalf(c[x * 4 + ch]);
+                    float v = ch < 3 ? s.c[ch] : 1.0f;
+                    if (c32)
+                        ((float *)c)[x * 4 + ch] = v;
+                    else
+                        v = FromHalf(c[x * 4 + ch] = ToHalf(v));
+                    last[((size_t)y * iw + x) * 4 + ch] = v;
                 }
                 d[x] = s.d;
                 float mx = -s.vx / scale, my = -s.vy / scale;
@@ -218,7 +227,7 @@ static void Run(const Upscale &u) {
             for (auto *r : {color, depth, motion, mask})
                 if (r) g.Barrier(r, READ, COPY_DEST);
         }
-        Copy(g, color, sc, DXGI_FORMAT_R16G16B16A16_FLOAT, iw, ih);
+        Copy(g, color, sc, u.color, iw, ih);
         Copy(g, depth, sdp, DXGI_FORMAT_R32_TYPELESS, iw, ih);
         Copy(g, motion, sm, DXGI_FORMAT_R16G16_TYPELESS, iw, ih);
         if (mask) Copy(g, mask, sk, DXGI_FORMAT_R8_UNORM, iw, ih);
@@ -253,19 +262,19 @@ static void Run(const Upscale &u) {
     }
 
     // The output back, against the scene at the last frame's time and a bilinear upscale of the last input.
-    UINT t = u.bad ? 0 : kFrames - 1, pitch = OW * 8;
+    UINT t = u.bad ? 0 : kFrames - 1, pitch = OW * (o32 ? 16 : 8);
     ID3D12Resource *rb = g.Buffer(D3D12_HEAP_TYPE_READBACK, (UINT64)pitch * OH, COPY_DEST);
     g.Barrier(output, out_state, COPY_SOURCE);
     D3D12_TEXTURE_COPY_LOCATION src = {output, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
     src.SubresourceIndex = 0;
     D3D12_TEXTURE_COPY_LOCATION dst = {rb, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-    dst.PlacedFootprint.Footprint = {DXGI_FORMAT_R16G16B16A16_FLOAT, OW, OH, 1, pitch};
+    dst.PlacedFootprint.Footprint = {u.out, OW, OH, 1, pitch};
     g.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     g.Submit();
     uint16_t *p;
     CHECK(rb->Map(0, nullptr, (void **)&p));
     std::vector<float> out((size_t)OW * OH * 4), truth(out.size()), bilinear(out.size());
-    for (size_t k = 0; k < out.size(); k++) out[k] = FromHalf(p[k]);
+    for (size_t k = 0; k < out.size(); k++) out[k] = o32 ? ((float *)p)[k] : FromHalf(p[k]);
     rb->Unmap(0, nullptr);
     Rows(OH, [&](UINT y) {
         for (UINT x = 0; x < OW; x++) {
@@ -336,6 +345,10 @@ int main(int argc, char **argv) {
         } else if (mode == "compute") {
             u.compute = true;
             u.mask = DXGI_FORMAT_R8_UNORM;
+        } else if (mode == "typeless") {
+            u.color = u.out = DXGI_FORMAT_R16G16B16A16_TYPELESS;
+        } else if (mode == "typeless32") {
+            u.color = u.out = DXGI_FORMAT_R32G32B32A32_TYPELESS;
         } else if (mode == "bad") {
             u.bad = true;
         } else {

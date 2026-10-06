@@ -283,3 +283,24 @@ and releasing one keeps ~232 MB per upscaler (`currentAllocatedSize`; retain cou
 grow the GPU memory by ~5.2 GB whatever the bridge releases. Also run: `make test` 239 passed, `make smoke` 15/15,
 `make bridge-check` 15 ok, both series applied from a fresh fetch (Wine 24 of 24, DXMT 5 of 5), the translator key
 unchanged.
+
+## XeSS answered by MetalFX: before the game run (XeSS plan, Task 2b)
+
+2026-10-06. DXMT patch 0006 keeps the last 4 MetalFX temporal upscalers a device made and hands one that only the
+device still holds (its D3D12 object released, every allocator that recorded it reset) to the next
+`CreateTemporalScaler` of the same Metal description: macOS 27.0.1's MetalFX never frees one (~232 MB each), so a
+game re-initialising XeSS now reuses instead of growing. A reused upscaler's first upscale resets its history. A
+TYPELESS colour or output (R16G16B16A16, R32G32B32A32, R10G10B10A2, R8G8B8A8, B8G8R8A8) is read as its float or unorm
+variant through a same-layout view; other TYPELESS formats stay refused. Wine patch 0025 only adds notes: the bridge's
+lock limit (a destroy waits for at most one call inside that context) and the rulings Task 3 checks (pass-through
+jitter and velocity signs, the optimal input as the dynamic minimum, the literal pre-exposure).
+
+New rows, both lanes of `make dxmt-check` (226 ok each, `dxmt-check: all passed`): `upscale typeless` 24.90 dB against
+22.17 bilinear (already passed before 0006: DXMT maps R16G16B16A16_TYPELESS to RGBA16Float), `upscale typeless32`
+24.90 (refused before 0006), `xess cycles` with the GPU memory judged (a context made while the destroyed one's
+upscaler is still in the unsubmitted list gets a new one: +231 MB; 20 contexts made and destroyed: +28 MB, was +5194;
+balanced and performance alternating 10 times: +255 MB, was +2572), `xess reuse` (1440x810 textures, content
+1280x720 → 1152x648 → 1024x576 kept the upscaler, 23.84 against 20.93; RG32F motion vectors made one new one, 24.66
+against 22.17; `recreates 1`), and `xess flags` with real frames for bits 1, 4, 7 and 0 (24.68, 24.68, 24.68, 24.69
+against 22.17). Without their Init bits the same frames score 19.09 (NDC), 21.86 (jittered) and 20.52 (high-res), all
+below bilinear; inverted depth scores 24.66 either way: this scene barely depends on depth.

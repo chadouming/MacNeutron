@@ -11,12 +11,23 @@
 //       Init twice on one context (1920x1080, then 2560x1440), 64 frames, the context destroyed after the last Execute
 //       and before its list is submitted: the output is still right. 20 contexts made, upscaling a frame and destroyed.
 //       A history reset on a converged context's last frame: closer to bilinear than to the converged upscale.
-//       "xess cycles ok psnr <s> bilinear <b> reset <r> growth <MB>". The GPU memory's growth over the 20 contexts is
-//       printed, not judged: macOS 27.0.1's MetalFX never frees a temporal upscaler (natively too: one released at
-//       once keeps its ~230 MB), so it can't tell an upscaler the bridge released from one it leaked.
+//       GPU memory (macOS 27.0.1's MetalFX never frees a temporal upscaler, ~230 MB each, so DXMT keeps released ones
+//       for the next of the same kind): another context made while the destroyed one's upscaler is still in the
+//       unsubmitted list gets a new one (early: more than 150 MB); the 20 contexts grow it by less than 300 MB (one
+//       upscaler at most); balanced and performance alternating 10 times on one context, by less than 300 MB (the
+//       performance one made once: the two held). "xess cycles ok psnr <s> bilinear <b> reset <r> early <MB>
+//       growth <MB> ab <MB>"
+//   reuse
+//       Balanced (1280x720) on 1440x810 textures: content 1280x720, 1152x648, then 1024x576 (dynamic resolution)
+//       keeps the upscaler; then RG32F motion vectors instead of RG16F make one new one. Both outputs beat bilinear.
+//       "xess reuse ok psnr <s> bilinear <b> psnr <s> bilinear <b> recreates 1" (upscalers made after Init, counted
+//       by a device wrapper the bridge reaches DXMT through)
 //   flags
 //       Init with bits 5 and 30 (external descriptor heap, profiling): SUCCESS; with bit 9: INVALID_ARGUMENT;
-//       xessGetIntelXeFXVersion 0.0.0, xessGetVersion 2.0.1; a destroyed context: INVALID_CONTEXT. "xess flags ok"
+//       xessGetIntelXeFXVersion 0.0.0, xessGetVersion 2.0.1; a destroyed context: INVALID_CONTEXT. Then 64 balanced
+//       frames each with bit 1 (inverted depth, the depth 1 - d), bit 4 (NDC velocity: pixels / (0.5 w, -0.5 h)),
+//       bit 7 (jittered motion vectors: the jitter's change added) and bit 0 (motion vectors at 2560x1440, in output
+//       pixels), each beating bilinear. "xess flags ok inverted <s>/<b> ndc <s>/<b> jittered <s>/<b> highres <s>/<b>"
 //   unsupported
 //       (Wine's wined3d) xessD3D12CreateContext: UNSUPPORTED_DEVICE and a NULL context. "xess unsupported ok"
 // Anything else prints "xess <mode> FAIL ..." or a failed call.
@@ -206,10 +217,22 @@ static std::string mode; // for messages
 }
 #define XESS(call) do { int r_ = (call); if (r_ != XESS_RESULT_SUCCESS) Fail(#call, r_); } while (0)
 
-// One input size's textures (colour RGBA16F, D32 depth, RG16F motion vectors) and a 2560x1440 RGBA16F UAV output.
+// How a run's inputs are made, with the Init flags that say so.
+struct Inputs {
+    bool inverted = false; // bit 1: depth 1 - d
+    bool ndc = false;      // bit 4: velocity in NDC of the content: pixels / (0.5 w, -0.5 h)
+    bool jittered = false; // bit 7: velocity includes the jitter's change
+    bool highres = false;  // bit 0: motion vectors at the output size, in output pixels
+    DXGI_FORMAT motion = DXGI_FORMAT_R16G16_FLOAT; // or R32G32_FLOAT
+    UINT tw = 0, th = 0;   // the input textures' size (0: the content's)
+};
+
+// Input textures (colour RGBA16F, D32 depth, motion vectors) holding a content size (Content changes it) and a
+// 2560x1440 RGBA16F UAV output.
 struct Frames {
     Gpu &g;
-    UINT iw, ih;
+    Inputs in;
+    UINT iw, ih, mw, mh; // the content; the motion texture
     float sx, sy;
     int phases;
     ID3D12Resource *color, *depth, *motion, *output;
@@ -217,42 +240,73 @@ struct Frames {
     std::vector<float> last; // the last frame's colour as uploaded
     bool uploaded = false;
 
-    Frames(Gpu &g, xess_2d_t in) : g(g), iw(in.x), ih(in.y), sx((float)OW / iw), sy((float)OH / ih), last(iw * ih * 4) {
-        phases = (int)std::ceil(8 * sx * sy);
-        color = g.Texture(Tex2D(iw, ih, DXGI_FORMAT_R16G16B16A16_FLOAT), COPY_DEST);
-        depth = g.Texture(Tex2D(iw, ih, DXGI_FORMAT_D32_FLOAT, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL), COPY_DEST);
-        motion = g.Texture(Tex2D(iw, ih, DXGI_FORMAT_R16G16_FLOAT), COPY_DEST);
+    Frames(Gpu &g, xess_2d_t content, Inputs inputs = {}) : g(g), in(inputs) {
+        UINT tw = in.tw ? in.tw : content.x, th = in.th ? in.th : content.y;
+        mw = in.highres ? OW : tw;
+        mh = in.highres ? OH : th;
+        UINT mbytes = in.motion == DXGI_FORMAT_R32G32_FLOAT ? 8 : 4;
+        color = g.Texture(Tex2D(tw, th, DXGI_FORMAT_R16G16B16A16_FLOAT), COPY_DEST);
+        depth = g.Texture(Tex2D(tw, th, DXGI_FORMAT_D32_FLOAT, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL), COPY_DEST);
+        motion = g.Texture(Tex2D(mw, mh, in.motion), COPY_DEST);
         output = g.Texture(Tex2D(OW, OH, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS), UAV);
-        sc = MakeStaging(g, iw * 8, ih);
-        sd = MakeStaging(g, iw * 4, ih);
-        sm = MakeStaging(g, iw * 4, ih);
+        sc = MakeStaging(g, tw * 8, th);
+        sd = MakeStaging(g, tw * 4, th);
+        sm = MakeStaging(g, mw * mbytes, mh);
+        Content(content.x, content.y);
+    }
+
+    void Content(UINT w, UINT h) {
+        iw = w; ih = h;
+        sx = (float)OW / iw; sy = (float)OH / ih;
+        phases = (int)std::ceil(8 * sx * sy);
+        last.assign((size_t)iw * ih * 4, 0.0f);
+    }
+
+    // Motion vector (current to previous) at row y of the motion texture into m: in input pixels, or as `in` says.
+    void Motion(uint8_t *m, UINT y, UINT f, float jx, float jy, float jpx, float jpy) {
+        bool f32 = in.motion == DXGI_FORMAT_R32G32_FLOAT;
+        for (UINT x = 0; x < (in.highres ? OW : iw); x++) {
+            float mx, my;
+            if (in.highres) { // the output pixel's own motion, in output pixels
+                Sample s = Scene(x + 0.5f, y + 0.5f, (float)f);
+                mx = -s.vx; my = -s.vy;
+            } else {
+                Sample s = Scene((x + 0.5f - jx) * sx, (y + 0.5f - jy) * sy, (float)f);
+                mx = -s.vx / sx; my = -s.vy / sy;
+                if (in.jittered) { mx += jpx - jx; my += jpy - jy; } // the samples' offset is -jitter
+                if (in.ndc) { mx /= 0.5f * iw; my /= -0.5f * ih; }
+            }
+            if (f32) { ((float *)m)[x * 2] = mx; ((float *)m)[x * 2 + 1] = my; }
+            else { ((uint16_t *)m)[x * 2] = ToHalf(mx); ((uint16_t *)m)[x * 2 + 1] = ToHalf(my); }
+        }
     }
 
     // Frame f's inputs uploaded on the list (not submitted), and the execute parameters for them.
     xess_d3d12_execute_params_t Record(UINT f, bool reset) {
-        int i = f % phases + 1;
+        int i = f % phases + 1, ip = (f + phases - 1) % phases + 1;
         float jx = Halton(i, 2) - 0.5, jy = Halton(i, 3) - 0.5; // the projection's jitter: samples move by -(jx, jy)
+        float jpx = Halton(ip, 2) - 0.5, jpy = Halton(ip, 3) - 0.5;
         Rows(ih, [&](UINT y) {
             auto *c = (uint16_t *)(sc.p + (size_t)y * sc.pitch);
             auto *d = (float *)(sd.p + (size_t)y * sd.pitch);
-            auto *m = (uint16_t *)(sm.p + (size_t)y * sm.pitch);
             for (UINT x = 0; x < iw; x++) {
                 Sample s = Scene((x + 0.5f - jx) * sx, (y + 0.5f - jy) * sy, (float)f);
                 for (int ch = 0; ch < 4; ch++) {
                     c[x * 4 + ch] = ToHalf(ch < 3 ? s.c[ch] : 1.0f);
                     last[((size_t)y * iw + x) * 4 + ch] = FromHalf(c[x * 4 + ch]);
                 }
-                d[x] = s.d;
-                m[x * 2] = ToHalf(-s.vx / sx); // current to previous, in input pixels
-                m[x * 2 + 1] = ToHalf(-s.vy / sy);
+                d[x] = in.inverted ? 1.0f - s.d : s.d;
             }
+            if (!in.highres) Motion(sm.p + (size_t)y * sm.pitch, y, f, jx, jy, jpx, jpy);
         });
+        if (in.highres)
+            Rows(OH, [&](UINT y) { Motion(sm.p + (size_t)y * sm.pitch, y, f, jx, jy, jpx, jpy); });
         if (uploaded)
             for (auto *r : {color, depth, motion})
                 g.Barrier(r, READ, COPY_DEST);
         Copy(g, color, sc, DXGI_FORMAT_R16G16B16A16_FLOAT, iw, ih);
         Copy(g, depth, sd, DXGI_FORMAT_R32_TYPELESS, iw, ih);
-        Copy(g, motion, sm, DXGI_FORMAT_R16G16_FLOAT, iw, ih);
+        Copy(g, motion, sm, in.motion, in.highres ? OW : iw, in.highres ? OH : ih);
         for (auto *r : {color, depth, motion})
             g.Barrier(r, COPY_DEST, READ);
         uploaded = true;
@@ -366,12 +420,21 @@ static void Quality(int quality) {
 
 static void Cycles() {
     Gpu g;
-    // Re-initialised (another output size), then destroyed before the last list runs.
+    // Re-initialised (another output size), then destroyed before the last list runs. Meanwhile another context of
+    // the same kind can't have that upscaler: the list still uses it.
     xess_context_handle_t ctx = Create(g);
     Init(ctx, XESS_QUALITY_SETTING_BALANCED, 1920, 1080);
     Init(ctx, XESS_QUALITY_SETTING_BALANCED);
     Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED));
-    Run(fr, ctx, 0, kFrames, [&] { XESS(X.DestroyContext(ctx)); });
+    double early = 0;
+    Run(fr, ctx, 0, kFrames, [&] {
+        XESS(X.DestroyContext(ctx));
+        double before = GpuMB();
+        auto other = Create(g);
+        Init(other, XESS_QUALITY_SETTING_BALANCED);
+        early = GpuMB() - before;
+        XESS(X.DestroyContext(other));
+    });
     auto [s, b] = fr.Read(kFrames - 1);
     // Contexts made, used and destroyed.
     double before = GpuMB();
@@ -382,6 +445,17 @@ static void Cycles() {
         XESS(X.DestroyContext(ctx));
     }
     double growth = GpuMB() - before;
+    // A -> B -> A ...: balanced and performance in turn on one context.
+    ctx = Create(g);
+    Frames perf(g, Optimal(ctx, XESS_QUALITY_SETTING_PERFORMANCE));
+    before = GpuMB();
+    for (int i = 0; i < 10; i++) {
+        bool a = i % 2 == 0;
+        Init(ctx, a ? XESS_QUALITY_SETTING_BALANCED : XESS_QUALITY_SETTING_PERFORMANCE);
+        Run(a ? fr : perf, ctx, 0, 1, [] {});
+    }
+    XESS(X.DestroyContext(ctx));
+    double ab = GpuMB() - before;
     // A converged history reset on the last frame: what's left is the frame itself.
     ctx = Create(g);
     Init(ctx, XESS_QUALITY_SETTING_BALANCED);
@@ -391,8 +465,75 @@ static void Cycles() {
     g.Submit();
     auto [r, rb] = fr.Read(kFrames - 1);
     XESS(X.DestroyContext(ctx));
-    bool ok = s > b && r < (s + b) / 2;
-    printf("xess cycles %s psnr %.2f bilinear %.2f reset %.2f growth %.0f\n", ok ? "ok" : "FAIL", s, b, r, growth);
+    bool ok = s > b && r < (s + b) / 2 && early > 150 && growth < 300 && ab < 300;
+    printf("xess cycles %s psnr %.2f bilinear %.2f reset %.2f early %.0f growth %.0f ab %.0f\n", ok ? "ok" : "FAIL", s,
+           b, r, early, growth, ab);
+}
+
+// The bridge reaches DXMT only through the device's IMTLD3D12DeviceExt (DXMT's src/d3d12/d3d12_interfaces.hpp): a
+// device standing in for the real one answers it with a wrapper counting the upscalers made.
+struct IMTLD3D12TemporalScaler : IUnknown {};
+struct IMTLD3D12DeviceExt : IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetTemporalScalerScaleRange(FLOAT *pMin, FLOAT *pMax) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateTemporalScaler(const void *pDesc, IMTLD3D12TemporalScaler **ppScaler) = 0;
+};
+static const GUID kDeviceExt = {0xa8c64ba7, 0x6d54, 0x4833, {0x8c, 0xc6, 0x26, 0x05, 0xc5, 0xb4, 0x54, 0xbe}};
+struct Counting : IMTLD3D12DeviceExt { // lives as long as the run
+    IMTLD3D12DeviceExt *real = nullptr;
+    int made = 0;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+        *out = riid == __uuidof(IUnknown) || riid == kDeviceExt ? this : nullptr;
+        return *out ? S_OK : E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    HRESULT STDMETHODCALLTYPE GetTemporalScalerScaleRange(FLOAT *lo, FLOAT *hi) override {
+        return real->GetTemporalScalerScaleRange(lo, hi);
+    }
+    HRESULT STDMETHODCALLTYPE CreateTemporalScaler(const void *desc, IMTLD3D12TemporalScaler **out) override {
+        made++;
+        return real->CreateTemporalScaler(desc, out);
+    }
+};
+struct Device : IUnknown {
+    Counting ext;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+        *out = riid == kDeviceExt ? &ext : nullptr;
+        return *out ? S_OK : E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+};
+
+static void Reuse() {
+    Gpu g;
+    Device device;
+    CHECK(g.device->QueryInterface(kDeviceExt, (void **)&device.ext.real));
+    xess_context_handle_t ctx = nullptr;
+    XESS(X.CreateContext((ID3D12Device *)&device, &ctx));
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED); // 1280x720
+    device.ext.made = 0;
+    // Dynamic resolution: the content shrinks in textures larger than it.
+    Inputs in;
+    in.tw = 1440; in.th = 810;
+    Frames dyn(g, {1280, 720}, in);
+    Run(dyn, ctx, 0, 16, [] {});
+    dyn.Content(1152, 648);
+    Run(dyn, ctx, 16, 32, [] {});
+    dyn.Content(1024, 576);
+    Run(dyn, ctx, 32, kFrames, [] {});
+    auto [s1, b1] = dyn.Read(kFrames - 1);
+    int kept = device.ext.made;
+    // Another motion vector format.
+    in.motion = DXGI_FORMAT_R32G32_FLOAT;
+    Frames other(g, {1280, 720}, in);
+    Run(other, ctx, 0, kFrames, [] {});
+    auto [s2, b2] = other.Read(kFrames - 1);
+    XESS(X.DestroyContext(ctx));
+    bool ok = !kept && device.ext.made == 1 && s1 > b1 && s2 > b2;
+    printf("xess reuse %s psnr %.2f bilinear %.2f psnr %.2f bilinear %.2f recreates %d\n", ok ? "ok" : "FAIL", s1, b1,
+           s2, b2, device.ext.made);
+    device.ext.real->Release();
 }
 
 static void Flags() {
@@ -410,10 +551,28 @@ static void Flags() {
               !fx.minor && !fx.patch && !vr && v.major == 2 && !v.minor && v.patch == 1 &&
               stale == XESS_RESULT_ERROR_INVALID_CONTEXT && stale_destroy == XESS_RESULT_ERROR_INVALID_CONTEXT &&
               null_destroy == XESS_RESULT_SUCCESS;
-    printf("xess flags %s", ok ? "ok\n" : "FAIL");
     if (!ok)
-        printf(" init %d %d xefx %d %u.%u.%u version %d %u.%u.%u stale %d %d null %d\n", known, unknown, fxr, fx.major,
-               fx.minor, fx.patch, vr, v.major, v.minor, v.patch, stale, stale_destroy, null_destroy);
+        printf("xess flags FAIL init %d %d xefx %d %u.%u.%u version %d %u.%u.%u stale %d %d null %d\n", known, unknown,
+               fxr, fx.major, fx.minor, fx.patch, vr, v.major, v.minor, v.patch, stale, stale_destroy, null_destroy);
+    // Real frames with each flag that changes what the inputs mean.
+    std::string psnrs;
+    for (int k = 0; k < 4; k++) {
+        static const char *const names[] = {"inverted", "ndc", "jittered", "highres"};
+        static const uint32_t bits[] = {1u << 1, 1u << 4, 1u << 7, 1u << 0};
+        Inputs in;
+        in.inverted = k == 0; in.ndc = k == 1; in.jittered = k == 2; in.highres = k == 3;
+        ctx = Create(g);
+        Init(ctx, XESS_QUALITY_SETTING_BALANCED, OW, OH, bits[k]);
+        Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED), in);
+        Run(fr, ctx, 0, kFrames, [] {});
+        auto [s, b] = fr.Read(kFrames - 1);
+        XESS(X.DestroyContext(ctx));
+        char line[64];
+        snprintf(line, sizeof line, " %s %.2f/%.2f", names[k], s, b);
+        psnrs += line;
+        ok = ok && s > b;
+    }
+    printf("xess flags %s%s\n", ok ? "ok" : "FAIL", psnrs.c_str());
 }
 
 // A device without DXMT's interface: Wine's own D3D12, or, where it makes none (no Vulkan), an object answering only
@@ -468,6 +627,7 @@ int main(int argc, char **argv) {
         else if (mode == "performance") Quality(XESS_QUALITY_SETTING_PERFORMANCE);
         else if (mode == "ultraperf") Quality(XESS_QUALITY_SETTING_ULTRA_PERFORMANCE);
         else if (mode == "cycles") Cycles();
+        else if (mode == "reuse") Reuse();
         else if (mode == "flags") Flags();
         else if (mode == "unsupported") Unsupported();
         else { printf("unknown mode %s\n", mode.c_str()); return 2; }
