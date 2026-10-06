@@ -12,8 +12,10 @@
 //   typeless       2.0x, colour and output R16G16B16A16_TYPELESS (read as FLOAT)                "upscale typeless ok ..."
 //   typeless32     2.0x, colour and output R32G32B32A32_TYPELESS (DXMT keeps them as RGBA32Uint: read through
 //                  RGBA32Float views)                                                           "upscale typeless32 ok ..."
-//   bad            a null output, then a 4.0x input: both E_INVALIDARG; then an upscale on the same list works
-//                  "upscale bad ok"
+//   typeless10     2.0x, colour and output R10G10B10A2_TYPELESS (RGB10A2Uint, read through RGB10A2Unorm views; the
+//                  scene clamped to 1)                                                          "upscale typeless10 ok ..."
+//   bad            an unlisted TYPELESS colour (B8G8R8X8, R16G16) at creation, then a null output and a 4.0x input:
+//                  all E_INVALIDARG; then an upscale on the same list works                     "upscale bad ok"
 //   range          "range <min> <max>" (GetTemporalScalerScaleRange)
 // Anything else prints "upscale <mode> FAIL ..." or a failed call. The interface is this program's own copy of DXMT's
 // src/d3d12/d3d12_interfaces.hpp (the Wine bridge keeps another): a drift shows here as a failure.
@@ -173,7 +175,18 @@ static void Run(const Upscale &u) {
     MTL_TEMPORAL_SCALER_D3D12_DESC sd = {iw, ih, OW, OH, u.color, u.depth, u.motion, u.out, u.mask, FALSE, FALSE,
                                          u.jittered, 1.0f, 3.0f};
     bool c32 = u.color == DXGI_FORMAT_R32G32B32A32_TYPELESS, o32 = u.out == DXGI_FORMAT_R32G32B32A32_TYPELESS;
+    bool c10 = u.color == DXGI_FORMAT_R10G10B10A2_TYPELESS, o10 = u.out == DXGI_FORMAT_R10G10B10A2_TYPELESS;
     IMTLD3D12TemporalScaler *scaler = nullptr;
+    if (u.bad) // TYPELESS colours DXMT doesn't read as a typed variant
+        for (DXGI_FORMAT f : {DXGI_FORMAT_B8G8R8X8_TYPELESS, DXGI_FORMAT_R16G16_TYPELESS}) {
+            auto refused = sd;
+            refused.ColorFormat = f;
+            HRESULT hr = ext->CreateTemporalScaler(&refused, &scaler);
+            if (hr != E_INVALIDARG || scaler) {
+                printf("upscale bad FAIL colour %d 0x%08lx\n", (int)f, (unsigned long)hr);
+                exit(1);
+            }
+        }
     CHECK(ext->CreateTemporalScaler(&sd, &scaler));
 
     auto DS = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -193,7 +206,7 @@ static void Run(const Upscale &u) {
         g.Barrier(exposure, COPY_DEST, READ);
         g.Submit();
     }
-    Staging sc = MakeStaging(g, iw * (c32 ? 16 : 8), ih), sdp = MakeStaging(g, iw * 4, ih), sm = MakeStaging(g, iw * 4, ih),
+    Staging sc = MakeStaging(g, iw * (c32 ? 16 : c10 ? 4 : 8), ih), sdp = MakeStaging(g, iw * 4, ih), sm = MakeStaging(g, iw * 4, ih),
             sk = MakeStaging(g, iw, ih);
     std::vector<float> last(iw * ih * 4); // the last frame's colour as uploaded
 
@@ -211,7 +224,12 @@ static void Run(const Upscale &u) {
                     float v = ch < 3 ? s.c[ch] : 1.0f;
                     if (c32)
                         ((float *)c)[x * 4 + ch] = v;
-                    else
+                    else if (c10) { // 10 bits a colour, 2 for alpha (3: 1.0)
+                        int bits = ch < 3 ? 1023 : 3;
+                        uint32_t q = (uint32_t)std::lround(std::clamp(v, 0.0f, 1.0f) * bits);
+                        ((uint32_t *)c)[x] = (ch ? ((uint32_t *)c)[x] : 0) | q << (10 * ch);
+                        v = (float)q / bits;
+                    } else
                         v = FromHalf(c[x * 4 + ch] = ToHalf(v));
                     last[((size_t)y * iw + x) * 4 + ch] = v;
                 }
@@ -262,7 +280,7 @@ static void Run(const Upscale &u) {
     }
 
     // The output back, against the scene at the last frame's time and a bilinear upscale of the last input.
-    UINT t = u.bad ? 0 : kFrames - 1, pitch = OW * (o32 ? 16 : 8);
+    UINT t = u.bad ? 0 : kFrames - 1, pitch = OW * (o32 ? 16 : o10 ? 4 : 8);
     ID3D12Resource *rb = g.Buffer(D3D12_HEAP_TYPE_READBACK, (UINT64)pitch * OH, COPY_DEST);
     g.Barrier(output, out_state, COPY_SOURCE);
     D3D12_TEXTURE_COPY_LOCATION src = {output, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
@@ -274,7 +292,10 @@ static void Run(const Upscale &u) {
     uint16_t *p;
     CHECK(rb->Map(0, nullptr, (void **)&p));
     std::vector<float> out((size_t)OW * OH * 4), truth(out.size()), bilinear(out.size());
-    for (size_t k = 0; k < out.size(); k++) out[k] = o32 ? ((float *)p)[k] : FromHalf(p[k]);
+    for (size_t k = 0; k < out.size(); k++)
+        out[k] = o32   ? ((float *)p)[k]
+                 : o10 ? (float)(((uint32_t *)p)[k / 4] >> (10 * (k % 4)) & (k % 4 < 3 ? 1023 : 3)) / (k % 4 < 3 ? 1023 : 3)
+                       : FromHalf(p[k]);
     rb->Unmap(0, nullptr);
     Rows(OH, [&](UINT y) {
         for (UINT x = 0; x < OW; x++) {
@@ -349,6 +370,8 @@ int main(int argc, char **argv) {
             u.color = u.out = DXGI_FORMAT_R16G16B16A16_TYPELESS;
         } else if (mode == "typeless32") {
             u.color = u.out = DXGI_FORMAT_R32G32B32A32_TYPELESS;
+        } else if (mode == "typeless10") {
+            u.color = u.out = DXGI_FORMAT_R10G10B10A2_TYPELESS;
         } else if (mode == "bad") {
             u.bad = true;
         } else {

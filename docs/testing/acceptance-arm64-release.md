@@ -304,3 +304,20 @@ balanced and performance alternating 10 times: +255 MB, was +2572), `xess reuse`
 against 22.17; `recreates 1`), and `xess flags` with real frames for bits 1, 4, 7 and 0 (24.68, 24.68, 24.68, 24.69
 against 22.17). Without their Init bits the same frames score 19.09 (NDC), 21.86 (jittered) and 20.52 (high-res), all
 below bilinear; inverted depth scores 24.66 either way: this scene barely depends on depth.
+
+## XeSS answered by MetalFX: the pool cap (XeSS plan, Task 2c)
+
+2026-10-06. DXMT patch 0007 caps the upscaler pool by released upscalers (Ruling 7): every upscaler in use stays
+pooled, and at most 4 released ones beside them; past that the oldest released one is dropped. 0006 kept the last 4
+made, so a live context's upscaler could be pushed out and, once released, never reused. A `static_assert` on
+`WMTFXTemporalScalerInfo`'s size (52) makes a new field join `SameTemporalScaler`'s comparison. Wine patch 0026 rewords
+the bridge's lock note: a destroy, and the lookups queued behind it, wait for every call whose lookup already holds
+the list lock, each one pass or at most one upscaler creation.
+
+Both lanes of `make dxmt-check`: 227 ok each, `dxmt-check: all passed`. `xess cycles` now also keeps one context live
+while 5 other settings (aa, quality, performance, ultra performance at 2560x1440, balanced at 1920x1080) are made and
+released in turn, then makes the first 4 again: `five 879 rerun 0` MB (0006: `five 1106 rerun 978`), and the live
+context still upscales after it, 24.68 against 22.17 bilinear. New rows: `upscale typeless10` (R10G10B10A2_TYPELESS
+colour and output) 24.34 against 21.91, and `upscale bad` refusing a B8G8R8X8_TYPELESS and an R16G16_TYPELESS colour
+with E_INVALIDARG; both already passed on 0006 (they pin its behaviour). Metal's validation: 0 messages, 6 upscale
+modes and 2 XeSS modes ok.

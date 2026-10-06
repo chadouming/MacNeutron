@@ -15,8 +15,10 @@
 //       for the next of the same kind): another context made while the destroyed one's upscaler is still in the
 //       unsubmitted list gets a new one (early: more than 150 MB); the 20 contexts grow it by less than 300 MB (one
 //       upscaler at most); balanced and performance alternating 10 times on one context, by less than 300 MB (the
-//       performance one made once: the two held). "xess cycles ok psnr <s> bilinear <b> reset <r> early <MB>
-//       growth <MB> ab <MB>"
+//       performance one made once: the two held). With one context live, 5 other settings made and released in turn
+//       ("five": their upscalers), then the first 4 again: less than 100 MB (DXMT keeps 4 released besides the live
+//       one); the live context's output still beats bilinear. "xess cycles ok psnr <s> bilinear <b> reset <r>
+//       early <MB> growth <MB> ab <MB> five <MB> rerun <MB> live <s>/<b>"
 //   reuse
 //       Balanced (1280x720) on 1440x810 textures: content 1280x720, 1152x648, then 1024x576 (dynamic resolution)
 //       keeps the upscaler; then RG32F motion vectors instead of RG16F make one new one. Both outputs beat bilinear.
@@ -465,9 +467,35 @@ static void Cycles() {
     g.Submit();
     auto [r, rb] = fr.Read(kFrames - 1);
     XESS(X.DestroyContext(ctx));
-    bool ok = s > b && r < (s + b) / 2 && early > 150 && growth < 300 && ab < 300;
-    printf("xess cycles %s psnr %.2f bilinear %.2f reset %.2f early %.0f growth %.0f ab %.0f\n", ok ? "ok" : "FAIL", s,
-           b, r, early, growth, ab);
+    // One context live while 5 other settings are made and released in turn, then the first 4 again: DXMT keeps 4
+    // released upscalers besides the live one, so the re-run makes none. The live one still upscales afterwards.
+    ctx = Create(g);
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED);
+    Run(fr, ctx, 0, kFrames / 2, [] {});
+    struct { int quality; UINT w, h; } set[] = {{XESS_QUALITY_SETTING_AA, OW, OH},
+                                                {XESS_QUALITY_SETTING_QUALITY, OW, OH},
+                                                {XESS_QUALITY_SETTING_PERFORMANCE, OW, OH},
+                                                {XESS_QUALITY_SETTING_ULTRA_PERFORMANCE, OW, OH},
+                                                {XESS_QUALITY_SETTING_BALANCED, 1920, 1080}};
+    auto Each = [&](int n) {
+        for (int i = 0; i < n; i++) {
+            auto other = Create(g);
+            Init(other, set[i].quality, set[i].w, set[i].h);
+            XESS(X.DestroyContext(other));
+        }
+    };
+    before = GpuMB();
+    Each(5);
+    double five = GpuMB() - before;
+    before = GpuMB();
+    Each(4);
+    double rerun = GpuMB() - before;
+    Run(fr, ctx, kFrames / 2, kFrames, [] {});
+    auto [l, lb] = fr.Read(kFrames - 1);
+    XESS(X.DestroyContext(ctx));
+    bool ok = s > b && r < (s + b) / 2 && early > 150 && growth < 300 && ab < 300 && rerun < 100 && l > lb;
+    printf("xess cycles %s psnr %.2f bilinear %.2f reset %.2f early %.0f growth %.0f ab %.0f five %.0f rerun %.0f "
+           "live %.2f/%.2f\n", ok ? "ok" : "FAIL", s, b, r, early, growth, ab, five, rerun, l, lb);
 }
 
 // The bridge reaches DXMT only through the device's IMTLD3D12DeviceExt (DXMT's src/d3d12/d3d12_interfaces.hpp): a

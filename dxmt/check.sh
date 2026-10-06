@@ -745,29 +745,30 @@ expect "and as on D3DMetal but where a load straddles the view's end" \
 # list's order. 64 jittered frames of the spike's scene upscaled to 2560x1440 beat a bilinear upscale of the last input
 # against the unjittered scene (d3d12_upscale prints both PSNRs), at three ratios and with the inputs MetalFX can't
 # take directly (a depth/stencil depth, a render-target-only output, typeless motion vectors, typeless colour and
-# output), on a COMPUTE list (with a reactive mask); bad calls record nothing.
+# output), on a COMPUTE list (with a reactive mask); bad calls (and unlisted typeless colours) record nothing.
 upscaled() { grep -q "^upscale $2 ok" "$WORK/$1.txt" && echo yes || { grep -m1 -E '^upscale|failed' "$WORK/$1.txt" || echo none; }; }
 for r in 1.5 2.0 3.0; do
   run ours "upscale-ratio-$r" dxmt "$TESTS/d3d12_upscale.exe" ratio "$r"
   expect "DXMT upscales ratio $r" "$(upscaled "upscale-ratio-$r" "ratio $r")" yes
 done
-for m in depthstencil rtoutput compute typeless typeless32 bad; do
+for m in depthstencil rtoutput compute typeless typeless32 typeless10 bad; do
   run ours "upscale-$m" dxmt "$TESTS/d3d12_upscale.exe" "$m"
   expect "DXMT upscales $m" "$(upscaled "upscale-$m" "$m")" yes
 done
 run ours upscale-range dxmt "$TESTS/d3d12_upscale.exe" range
 expect "the device reports MetalFX's scale range" "$(grep '^range ' "$WORK/upscale-range.txt" || echo none)" "range 1.000 3.000"
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
-run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute typeless32 bad
+run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute typeless32 typeless10 bad
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in the upscale" \
-  "$(invalid upscale-val):$(grep -c '^upscale [a-z0-9]* ok' "$WORK/upscale-val.txt" || true)" "0:5"
+  "$(invalid upscale-val):$(grep -c '^upscale [a-z0-9]* ok' "$WORK/upscale-val.txt" || true)" "0:6"
 # XeSS answered by MetalFX (spec §4.2, §7): Wine's builtin libxess.dll driven through XeSS's API. d3d12_xess loads it
 # by full path, the game's way, from a copy of itself named libxess.dll: only the launcher's libxess=b makes that the
 # builtin. Every quality mode at its input size beats bilinear; a re-initialised context, one destroyed before its list
-# runs, 20 more made and destroyed (DXMT reuses their upscaler), A -> B -> A, and a history reset; dynamic resolution
-# keeping the upscaler and a new motion vector format replacing it; Init's flags, with real frames for the ones that
-# change what the inputs mean, and the version calls; "unsupported" under wined3d. A failing mode's FAIL line shows.
+# runs, 20 more made and destroyed (DXMT reuses their upscaler), A -> B -> A, a history reset, and 5 settings in turn
+# beside a live context (DXMT keeps 4 released); dynamic resolution keeping the upscaler and a new motion vector
+# format replacing it; Init's flags, with real frames for the ones that change what the inputs mean, and the version
+# calls; "unsupported" under wined3d. A failing mode's FAIL line shows.
 mkdir -p "$WORK/xess" && cp "$TESTS/d3d12_xess.exe" "$WORK/xess/libxess.dll"
 xessed() {
   grep -q "^xess $2 ok" "$WORK/$1.txt" && echo yes ||
