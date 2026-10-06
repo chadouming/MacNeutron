@@ -339,3 +339,76 @@ scratch path gave 24.90 in Task 2c); `upscale direct` with `DXMT_D3D12_PRIVATE=0
 (a buffer placed in a DEFAULT heap, written by a dispatch, copied to READBACK, mapped) reads 1048576, on our DXMT and
 on D3DMetal. Every other upscale and XeSS PSNR is unchanged; `xess cycles` reports `growth 0 ab 227` MB (Task 2c:
 `growth 28 ab 255`). Metal's validation: 0 messages in the upscale (8 modes), XeSS (2) and hazards runs.
+
+## XeSS on MetalFX in SMITE 2 (XeSS plan, Task 3)
+
+2026-10-06. SMITE 2 in a scratch prefix (an APFS clone of the Gate S follow-up's player-settings prefix with the fresh
+game defaults' `HWGameUserSettings.sav`, which selects XeSS; the clone alone keeps TAA), `env -i`, a tool folder from
+`macneutron install` with the dev `wine.app`, Steam bridge on, lobby only. The external display was off: every run
+below is on the built-in display, where the game's fullscreen window makes XeSS's output 1728x1117 (balanced, input
+864x559), not the player's 2560x1440. The 2560x1440 runs are still owed.
+
+**Logging run.** `MACNEUTRON_LOG=1` doesn't show the bridge's parameter dumps: its `WINEDEBUG=+err,+warn` turns on
+channels named `err` and `warn`, not the warn class (`warn+xess` does). Hemingway.log still has the bridge's one-time
+messages, through the game's logging callback. The first run found the bridge refusing every frame:
+`LogXeSSSDK: Warning: xessD3D12Execute: … depth 0000000000000000, … input 864x559`, then `Failed to execute XeSS,
+result: -4` about 50 times a second. Unreal's XeSS plugin initialises with flags 0x101 (high-res motion vectors, auto
+exposure) and passes no depth texture, which XeSS's header allows with high-res motion vectors. Wine patch 0027 makes a
+colour-sized far-plane depth for MetalFX when the game passes none (MetalFX's validation wants depth and colour the
+same size; an output-sized one drew 2 messages a frame). `d3d12_xess`'s `flags` gains Unreal's call (`nodepth`: 24.67
+dB against 22.17 bilinear; it failed with -4 before the fix) and runs under Metal's validation in a row of its own (0
+messages). With 0027, a fresh clone, `WINEDEBUG=+err,+warn,+loaddll,+steamclient,warn+xess` (pointers and floats
+shortened):
+
+```
+warn:xess:init output 1728x1117, quality 102, flags 0x101, temp heaps 0 0, pipeline library 0
+warn:xess:execute flags 0x101, input 864x559, output 1728x1117; formats colour 26 depth 40 motion 34 output 26
+  mask 0; sizes colour 864x560 depth 864x560 motion 1728x1117 output 1728x1120; bases colour 0,0 depth 0,0 motion
+  0,0 mask 0,0 output 0,0; depth texture 0, exposure texture 0, mask 0; jitter -0.250000,0.166667 scale 1,1;
+  velocity scale 1,1; exposure 1.000000; reset 1
+```
+
+and no failed Execute. Conventions from it:
+- Velocity in pixels (bit 4 clear), at the output size (bit 0): the motion texture is 1728x1117, R16G16_FLOAT, velocity
+  scale 1. The bridge passes them as output pixels, current to previous (Ruling 2); their real units and sign, and the
+  NDC Y sign, can't be read off one dump: the maintainer's captures judge them (Task 5).
+- Jitter (-0.25, 0.17) in the first frame: input pixels within ±0.5, as XeSS defines it; its sign is likewise for the
+  captures. Not jittered motion vectors (bit 7 clear), so the jitter's sign inside them doesn't arise.
+- No depth, no inverted depth (bit 1 clear): `DepthReversed` doesn't arise; the bridge's depth is a constant 1.0.
+- Exposure: auto (bit 8), no exposure texture (bit 2 clear), `exposureScale` 1.0, so `PreExposure` stays literal
+  (Ruling 4): neutral.
+- Formats: colour and output R11G11B10_FLOAT (26), motion R16G16_FLOAT; no responsive mask. Init's guessed upscaler
+  (RGBA16F) is replaced at the first Execute, once.
+- Every base is 0, the output's included (`outputColorBase` 0,0; the output texture is 1728x1120 for a 1728x1117
+  output): MetalFX's direct path with a non-zero output offset still hasn't run in a game.
+
+**Measurements** (the same prefix after the logging run; the trace 6 s, `gpu-trace.py --label MetalFX_Temporal`;
+lobby FPS by `fps4.py` from 20 s and from 100 s after the lobby's `LoadMap`):
+
+| Run | Lobby FPS (+20 s / +100 s) | Frame period, GPU busy (ms) | Upscale GPU ms per frame (p90) | GPU idle just before / after (ms) |
+| --- | --- | --- | --- | --- |
+| 1 | 32.04 / 59.36 | 19.73, 17.45 | 0.94 (0.98) | 0.00 / 0.00 |
+| 2 | 59.98 / 59.80 | 16.66, 13.85 | 0.94 (0.97) | 0.00 / 0.00 |
+| 3 | (118 by the trace) | 8.45, 8.20 | 1.01 (1.07) | 0.00 / 0.00 |
+| 4 | 59.97 / 59.80 | 16.63, 14.41 | 0.93 (1.02) | 0.00 / 0.00 |
+| `DXMT_STATS=1` | 59.97 / 59.80 | 16.64, 14.33 | 0.95 (1.03) | 0.00 / 0.00 |
+| `DXMT_D3D12_PRIVATE=0` | 59.97 / 59.78 | 16.66, 14.59 | 0.97 (1.08) | 0.00 / 0.00 |
+
+- MetalFX labels its passes: the upscale is 3 compute passes a frame (`MetalFX_Temporal_BBR_Pre/Mid/PostProcessing`),
+  0.95 ms end to end with no idle inside; the presenter's spatial scaler (`MetalFX_Scale`, `MetalFX_Sharpen`) adds
+  0.57 ms. The lobby runs at its 60 FPS cap; run 1 was at ~32 for its first ~90 s, run 3 uncapped (`fps4.py`'s
+  frame-counter unwrap fails above ~100 FPS: 107.62 / 35.60). Run 3's lighter frames and run 1's slow start are not
+  explained.
+- `DXMT_STATS=1`: `upscale output copied` 0 over 46 reports (MetalFX writes SMITE's output directly), 1.0 temporal
+  upscale passes a frame. With `DXMT_D3D12_PRIVATE=0`: 12735 copied, FPS unchanged at the cap.
+- XeSS init (`Loading XeSS library` to `XeSS successfully initialized`): 1 ms in every run; Intel's own XeSS took 15.0 s
+  in the Gate S follow-up's prefix.
+
+**Split decision:** no split needed at 1728x1117 — the upscale costs ~0.95 ms of GPU time a frame and the GPU never
+idles before or after it (the spike's ~2.2 ms commit-to-start wait doesn't appear inline). Task 4 doesn't run unless
+the 2560x1440 runs say otherwise.
+
+Also run after 0027: both lanes of `make dxmt-check` (`dxmt-check: all passed` twice, 236 ok per lane, no FAIL; every
+other upscale and XeSS PSNR as in Task 2d), `make test` 239 passed, `make smoke` 15/15, `make bridge-check` 15 ok,
+the Wine series from a fresh fetch (27 of 27, the applied tree), the translator key unchanged. `gpu-trace.py` gains
+`--label SUBSTR`.

@@ -2,12 +2,18 @@
 # GPU time per frame of a running game, from a Metal System Trace (GPU overlap spec §7):
 #   python3 dxmt/tools/gpu-trace.py <pid> [seconds]         records <seconds> (default 5) of the process, then reports
 #   python3 dxmt/tools/gpu-trace.py <file.trace>            reports an existing trace
+#   ... [--label SUBSTR]                                    also the intervals whose label has SUBSTR (see below)
 #   python3 dxmt/tools/gpu-trace.py <PEX_Timeline_*.csv>    Unreal's frame times: median and 90th percentile
 # A trace report: frame period and GPU busy and idle time per frame (medians), and each GPU channel's busy share of
 # the window with its intervals added up (more: passes of that channel side by side), then the channels' sum against
 # their union (more: different channels side by side).
 # Then the GPU's idle time per frame by where it falls: between encoders, between command buffers, waiting for the CPU.
-import collections, csv, os, statistics as st, subprocess, sys, tempfile, xml.etree.ElementTree as ET
+# --label: per frame, the GPU time of the intervals whose label (Instruments' or the encoder's) has SUBSTR, and the
+# GPU's idle time just before the first of them and just after the last (none labelled: the labels there are). MetalFX
+# labels its own passes: a temporal upscale's are MetalFX_Temporal_*, the presenter's spatial ones MetalFX_Scale and
+# MetalFX_Sharpen.
+import bisect, collections, csv, itertools, os, re, statistics as st, subprocess, sys, tempfile
+import xml.etree.ElementTree as ET
 
 
 def rows(path):
@@ -37,27 +43,60 @@ def pex(path):
           f"p90 {frames[int(0.9 * (len(frames) - 1))]:.2f} ms")
 
 
-def trace(path):
+def fmt(el):
+    return el.attrib.get('fmt', '') if el is not None else ''
+
+
+def labelled(mine, label):
+    # mine: (start, end, channel, frame, cmdbuffer, label) of the game's intervals, sorted
+    hits = collections.defaultdict(list)
+    for iv in mine:
+        if label in iv[5]:
+            hits[iv[3]].append(iv)
+    if not hits:
+        bare = lambda name: re.sub(r'Command Buffer \d+:|\s*\(\w+ \(\d+\)\)|\s*0x[0-9a-f]+|\d+', '', name)
+        names = collections.Counter(bare(iv[5]) for iv in mine)
+        sys.exit(f"no interval labelled '{label}'; labels: " +
+                 ', '.join(f"{n!r} {c}" for n, c in names.most_common(12)))
+    starts = [iv[0] for iv in mine]
+    ends = list(itertools.accumulate((iv[1] for iv in mine), max))  # ends[i]: the latest end of mine[:i + 1]
+    gpu, before, after = [], [], []
+    for v in hits.values():
+        first, last = min(a for a, *_ in v), max(b for _, b, *_ in v)
+        gpu.append(union([(a, b) for a, b, *_ in v]) / 1e6)
+        i = bisect.bisect_left(starts, first)  # mine[:i] start before the first labelled interval
+        before.append(max(0, first - ends[i - 1]) / 1e6 if i else 0)
+        k = bisect.bisect_left(starts, last)  # mine[k] is the first to start once the last labelled one has ended
+        after.append(max(0, starts[k] - max(last, ends[k - 1])) / 1e6 if k < len(mine) else 0)
+    n = sum(len(v) for v in hits.values()) / len(hits)
+    m = lambda v: f"median {st.median(v):.2f} ms (p90 {sorted(v)[int(0.9 * (len(v) - 1))]:.2f})"
+    print(f"'{label}': {len(hits)} frames, {n:.1f} intervals per frame; GPU time per frame {m(gpu)}; "
+          f"GPU idle just before {m(before)}, just after {m(after)}")
+
+
+def trace(path, label=None):
     xml = os.path.join(tempfile.mkdtemp(), 'intervals.xml')
     with open(xml, 'w') as out:
         subprocess.run(['xcrun', 'xctrace', 'export', '--input', path, '--xpath',
                         '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]'],
                        check=True, stdout=out, stderr=subprocess.DEVNULL)
     # Every interval, nested ones too: Instruments puts some of our encoders' intervals one level down (about 0.6 ms
-    # of GPU work per frame in SMITE 2), and they are GPU work all the same. (start, end, channel, frame, cmdbuffer)
+    # of GPU work per frame in SMITE 2), and they are GPU work all the same.
+    # (start, end, channel, frame, cmdbuffer, label: Instruments' label and the encoder's)
     by_process = collections.defaultdict(list)
     for r in rows(xml):
         if len(r) <= 10 or r[3] is None:
             continue
         start = int(r[0].text)
-        by_process[r[10].attrib.get('fmt', '') if r[10] is not None else ''].append(
-            (start, start + int(r[1].text), r[2].text, r[3].text, r[15].text if len(r) > 15 and r[15] is not None else None))
+        by_process[fmt(r[10])].append(
+            (start, start + int(r[1].text), r[2].text, r[3].text, r[15].text if len(r) > 15 and r[15] is not None else None,
+             ' | '.join(x for x in (fmt(r[6]), fmt(r[12]) if len(r) > 12 else '') if x)))
     if not by_process:
         sys.exit('no GPU intervals in the trace')
     mine = max(by_process.values(), key=lambda v: sum(b - a for a, b, *_ in v))  # the game: the most GPU time
     window = max(b for _, b, *_ in mine) - min(a for a, *_ in mine)
     by_frame = collections.defaultdict(list)
-    for a, b, _, f, _ in mine:
+    for a, b, _, f, *_ in mine:
         by_frame[f].append((a, b))
     frames = sorted((min(a for a, _ in v), union(v)) for v in by_frame.values())[1:-1]  # whole frames only
     period = [(b[0] - a[0]) / 1e6 for a, b in zip(frames, frames[1:])]
@@ -98,16 +137,25 @@ def trace(path):
             end, before = iv[1], iv
     print('GPU idle per frame: ' + ', '.join(f"{k} {idle[k] / 1e6 / len(by_frame):.2f} ms"
                                              for k in ('between encoders', 'between command buffers', 'waiting for the CPU')))
+    if label is not None:
+        labelled(ordered, label)
 
 
-arg = sys.argv[1]
+args = sys.argv[1:]
+label = None
+if '--label' in args:
+    i = args.index('--label')
+    label = args[i + 1]
+    del args[i:i + 2]
+arg = args[0]
 if arg.endswith('.csv'):
     pex(arg)
 elif arg.endswith('.trace'):
-    trace(arg)
+    trace(arg, label)
 else:
     out = os.path.join(tempfile.mkdtemp(), 'gpu.trace')
     subprocess.run(['xcrun', 'xctrace', 'record', '--template', 'Metal System Trace', '--attach', arg,
-                    '--time-limit', f"{sys.argv[2] if len(sys.argv) > 2 else 5}s", '--output', out],
+                    '--time-limit', f"{args[1] if len(args) > 1 else 5}s", '--output', out],
                    check=True, stdout=subprocess.DEVNULL)
-    trace(out)
+    print(f"trace {out}")
+    trace(out, label)
