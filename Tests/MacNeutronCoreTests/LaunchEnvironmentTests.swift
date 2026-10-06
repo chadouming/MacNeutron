@@ -50,8 +50,8 @@ private let context = try! CompatContext(environment: ["STEAM_COMPAT_DATA_PATH":
     #expect(env["WINEDLLOVERRIDES"] == "dxgi=n,b;d3d10core=n,b;d3d11=n,b;d3d12=b;d3d9=b;d3d10=b;libxess=b;libxess_dx11=b")
 }
 
-// XeSS's DP4a path runs SMITE 2 at ~4 FPS on Apple GPUs: our stand-ins make games pick another upscaler.
-@Test func xessStandInsAreTheDefaultUnlessOptedOut() {
+// XeSS's DP4a path runs SMITE 2 at ~4 FPS on Apple GPUs: our builtin libxess answers XeSS with MetalFX instead.
+@Test func xessBridgeIsTheDefaultUnlessOptedOut() {
     func overrides(_ base: [String: String]) -> String? {
         LaunchEnvironment.build(base: base, context: context, backend: .dxmt, logging: false)["WINEDLLOVERRIDES"]
     }

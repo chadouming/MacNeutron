@@ -762,6 +762,29 @@ run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compu
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in the upscale" \
   "$(invalid upscale-val):$(grep -c '^upscale [a-z]* ok' "$WORK/upscale-val.txt" || true)" "0:4"
+# XeSS answered by MetalFX (spec §4.2, §7): Wine's builtin libxess.dll driven through XeSS's API. d3d12_xess loads it
+# by full path, the game's way, from a copy of itself named libxess.dll: only the launcher's libxess=b makes that the
+# builtin. Every quality mode at its input size beats bilinear; a re-initialised context, one destroyed before its list
+# runs, 20 more made and destroyed, and a history reset; Init's flags and the version calls; "unsupported" under wined3d.
+mkdir -p "$WORK/xess" && cp "$TESTS/d3d12_xess.exe" "$WORK/xess/libxess.dll"
+xessed() { grep -q "^xess $2 ok" "$WORK/$1.txt" && echo yes || { grep -m1 -E '^xess|failed' "$WORK/$1.txt" || echo none; }; }
+for m in aa:2560x1440 quality:1504x846 balanced:1280x720 performance:1112x626 ultraperf:854x480; do
+  run ours "xess-${m%:*}" dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" "${m%:*}"
+  expect "XeSS ${m%:*} asks for ${m#*:}" "$(grep -m1 "^xess ${m%:*} input" "$WORK/xess-${m%:*}.txt" || echo none)" \
+    "xess ${m%:*} input ${m#*:}"
+  expect "XeSS ${m%:*} upscales on MetalFX" "$(xessed "xess-${m%:*}" "${m%:*}")" yes
+done
+for m in cycles flags; do
+  run ours "xess-$m" dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" "$m"
+  expect "XeSS $m" "$(xessed "xess-$m" "$m")" yes
+done
+run ours xess-wd wined3d "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" unsupported
+expect "XeSS reports no device on wined3d" "$(xessed xess-wd unsupported)" yes
+export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
+run ours xess-val dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" performance cycles
+unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
+expect "Metal's validation rejects nothing in XeSS" \
+  "$(invalid xess-val):$(grep -c '^xess [a-z]* ok' "$WORK/xess-val.txt" || true)" "0:2"
 exit $fail
 ) > "$WORK/lane-E.log" 2>&1 & pE=$!
 

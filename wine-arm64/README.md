@@ -232,6 +232,9 @@ re-clone; that is why they wait for the rebase.
     device reported unsupported) is ours and stays local. The launcher loads them unless `MACNEUTRON_XESS=1`.
   - 0023 (msync's shm pages mapped from a zero hint; a failed mapping ends the wineserver or the process with a
     message instead of being used) is ours and stays local.
+  - 0024 (`dlls/libxess`: XeSS on D3D12 answered by MetalFX's temporal upscaler through DXMT's private interface,
+    DXMT patches 0004-0005) is ours and stays local. Its `xess.h` copies declarations from Intel's public headers
+    (github.com/intel/xess, branch `main`, MIT since commit de0fb9c) with Intel's MIT notice.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into

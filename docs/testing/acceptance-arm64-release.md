@@ -251,3 +251,35 @@ table is `cache_1987945399250107254` (FNV-1a of the key and `AIRCONV_VERSION`), 
 `precache:` line, reached the lobby (bridge `Result=Success`), and left the table at 27,178 entries. Also run:
 `make test` 239 passed, `wine-arm64: up to date`, `make smoke` 15/15, `dxmt/check.sh` (x64 lane) 200 ok 0 FAIL,
 `make bridge-check` 15 ok.
+
+## XeSS answered by MetalFX: the bridge (XeSS plan, Task 2)
+
+2026-10-06. Wine patch 0024 gives the builtin `libxess.dll` real D3D12 calls: a context per
+`xessD3D12CreateContext` on a device with DXMT's `IMTLD3D12DeviceExt` (DXMT patches 0004-0005), one MetalFX temporal
+upscaler per context made at `xessD3D12Init`, and `xessD3D12Execute` recording `TemporalUpscale` into the game's
+command list. Without DXMT (Wine's own D3D12) `xessD3D12CreateContext` still returns -1. `libxess_dx11.dll` keeps
+0022's stand-ins. Jitter and motion vectors follow Intel's XeSS-SR Developer Guide 2.0 (the jitter moves the samples
+by -jitter; motion vectors point from the current frame to the previous one) and pass to MetalFX unchanged; the
+plan's negated mapping scored below bilinear on the test (2.0x: 18.75 dB against 22.17; 24.68 with Intel's). SMITE 2's
+logging run (Task 3) still has to confirm what Unreal passes.
+
+`dxmt/tests/d3d12_xess.cpp` loads `libxess.dll` by full path from a copy of itself (only `libxess=b` makes that the
+builtin) and drives XeSS's API at 2560x1440, 64 jittered frames of the spike's scene. On the applied build
+(`dxmt/check.sh`, x64 lane, 223 ok 0 FAIL, `dxmt-check: all passed`):
+
+| Mode | Input | PSNR (dB) | Bilinear (dB) |
+| --- | --- | --- | --- |
+| aa (against each pixel's average) | 2560x1440 | 34.86 | 31.68 |
+| quality | 1504x846 | 26.38 | 22.04 |
+| balanced | 1280x720 | 24.68 | 22.17 |
+| performance | 1112x626 | 25.45 | 21.01 |
+| ultraperf | 854x480 | 23.66 | 19.18 |
+
+`cycles` (re-initialised context, destroyed before its list runs, 20 more made and destroyed, a history reset: 22.56
+dB against 24.68 converged and 22.17 bilinear), `flags` (bits 5 and 30 accepted, bit 9 -4, XeFX 0.0.0, version 2.0.1,
+a destroyed context -8) and `unsupported` on wined3d all ok; Metal's validation layer logged nothing over
+`performance cycles`. MetalFX on macOS 27.0.1 never returns a temporal upscaler's memory: a native program creating
+and releasing one keeps ~232 MB per upscaler (`currentAllocatedSize`; retain count 2 at creation), so the 20 contexts
+grow the GPU memory by ~5.2 GB whatever the bridge releases. Also run: `make test` 239 passed, `make smoke` 15/15,
+`make bridge-check` 15 ok, both series applied from a fresh fetch (Wine 24 of 24, DXMT 5 of 5), the translator key
+unchanged.
