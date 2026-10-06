@@ -783,7 +783,8 @@ expect "Metal's validation rejects nothing in the upscale" \
 # runs, 20 more made and destroyed (DXMT reuses their upscaler), A -> B -> A, a history reset, and 5 settings in turn
 # beside a live context (DXMT keeps 4 released); dynamic resolution keeping the upscaler and a new motion vector
 # format replacing it; Init's flags, with real frames for the ones that change what the inputs mean and for Unreal's
-# call (no depth texture), and the version calls; "unsupported" under wined3d. A failing mode's FAIL line shows.
+# call (no depth texture), and the version calls; Unreal's call on a COMPUTE list and with inverted depth; "unsupported"
+# under wined3d. A failing mode's FAIL line shows.
 mkdir -p "$WORK/xess" && cp "$TESTS/d3d12_xess.exe" "$WORK/xess/libxess.dll"
 xessed() {
   grep -q "^xess $2 ok" "$WORK/$1.txt" && echo yes ||
@@ -795,7 +796,7 @@ for m in aa:2560x1440 quality:1504x846 balanced:1280x720 performance:1112x626 ul
     "xess ${m%:*} input ${m#*:}"
   expect "XeSS ${m%:*} upscales on MetalFX" "$(xessed "xess-${m%:*}" "${m%:*}")" yes
 done
-for m in cycles reuse flags; do
+for m in cycles reuse flags nodepth; do
   run ours "xess-$m" dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" "$m"
   expect "XeSS $m" "$(xessed "xess-$m" "$m")" yes
 done
@@ -805,11 +806,14 @@ export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
 run ours xess-val dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" performance cycles
 # flags apart (the watchdog): its nodepth case is Unreal's call, the bridge's own depth (MetalFX wants it colour-sized)
 run ours xess-valf dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" flags
+run ours xess-valn dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" nodepth
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in XeSS" \
   "$(invalid xess-val):$(grep -c '^xess [a-z]* ok' "$WORK/xess-val.txt" || true)" "0:2"
 expect "nor in its flags, Unreal's call without depth included" \
   "$(invalid xess-valf):$(grep -c '^xess flags ok' "$WORK/xess-valf.txt" || true)" "0:1"
+expect "nor without depth on a COMPUTE list or with inverted depth" \
+  "$(invalid xess-valn):$(grep -c '^xess nodepth ok' "$WORK/xess-valn.txt" || true)" "0:1"
 exit $fail
 ) > "$WORK/lane-E.log" 2>&1 & pE=$!
 

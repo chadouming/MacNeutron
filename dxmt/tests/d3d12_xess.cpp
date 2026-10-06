@@ -12,18 +12,20 @@
 //       and before its list is submitted: the output is still right. 20 contexts made, upscaling a frame and destroyed.
 //       A history reset on a converged context's last frame: closer to bilinear than to the converged upscale.
 //       GPU memory (macOS 27.0.1's MetalFX never frees a temporal upscaler, ~230 MB each, so DXMT keeps released ones
-//       for the next of the same kind): another context made while the destroyed one's upscaler is still in the
-//       unsubmitted list gets a new one (early: more than 150 MB); the 20 contexts grow it by less than 300 MB (one
-//       upscaler at most); balanced and performance alternating 10 times on one context, by less than 300 MB (the
-//       performance one made once: the two held). With one context live, 5 other settings made and released in turn
-//       ("five": their upscalers), then the first 4 again: less than 100 MB (DXMT keeps 4 released besides the live
-//       one); the live context's output still beats bilinear. "xess cycles ok psnr <s> bilinear <b> reset <r>
-//       early <MB> growth <MB> ab <MB> five <MB> rerun <MB> live <s>/<b>"
+//       for the next of the same kind; the bridge makes one at a context's first Execute, Ruling 17): the two Inits
+//       grow it by less than 10 MB ("init"); another context's first Execute, while the destroyed one's upscaler is
+//       still in the unsubmitted list, gets a new one (early: more than 150 MB); the 20 contexts grow it by less than
+//       300 MB (one upscaler at most); balanced and performance alternating 10 times on one context, by less than
+//       300 MB (the performance one made once: the two held). With one context live, 5 other settings each upscaling a
+//       frame and released in turn ("five": their upscalers), then the first 4 again: less than 100 MB (DXMT keeps 4
+//       released besides the live one); the live context's output still beats bilinear. "xess cycles ok psnr <s>
+//       bilinear <b> reset <r> init <MB> early <MB> growth <MB> ab <MB> five <MB> rerun <MB> live <s>/<b>"
 //   reuse
-//       Balanced (1280x720) on 1440x810 textures: content 1280x720, 1152x648, then 1024x576 (dynamic resolution)
-//       keeps the upscaler; then RG32F motion vectors instead of RG16F make one new one. Both outputs beat bilinear.
-//       "xess reuse ok psnr <s> bilinear <b> psnr <s> bilinear <b> recreates 1" (upscalers made after Init, counted
-//       by a device wrapper the bridge reaches DXMT through)
+//       Balanced (1280x720) on 1440x810 textures: Init makes no upscaler, the first Execute one; content 1280x720,
+//       1152x648, then 1024x576 (dynamic resolution) keeps it; then RG32F motion vectors instead of RG16F make one new
+//       one. Both outputs beat bilinear. "xess reuse ok psnr <s> bilinear <b> psnr <s> bilinear <b> upscalers 0/1/2"
+//       (made by Init, by the end of the dynamic frames, in all; counted by a device wrapper the bridge reaches DXMT
+//       through)
 //   flags
 //       Init with bits 5 and 30 (external descriptor heap, profiling): SUCCESS; with bit 9: INVALID_ARGUMENT;
 //       xessGetIntelXeFXVersion 0.0.0, xessGetVersion 2.0.1; a destroyed context: INVALID_CONTEXT. Then 64 balanced
@@ -32,6 +34,10 @@
 //       pixels), each beating bilinear; then Unreal's call in SMITE 2 (Task 3): bits 0 and 8 (auto exposure) and no
 //       depth texture (Intel's header: optional with bit 0), beating bilinear.
 //       "xess flags ok inverted <s>/<b> ndc <s>/<b> jittered <s>/<b> highres <s>/<b> nodepth <s>/<b>"
+//   nodepth
+//       Unreal's call (bits 0 and 8, no depth texture) recorded on a COMPUTE list and queue (d3d12_upscale's compute),
+//       then with inverted depth too (bit 1: the bridge's depth at 0.0), 64 balanced frames each, beating bilinear.
+//       "xess nodepth ok compute <s>/<b> inverted <s>/<b>"
 //   unsupported
 //       (Wine's wined3d) xessD3D12CreateContext: UNSUPPORTED_DEVICE and a NULL context. "xess unsupported ok"
 // Anything else prints "xess <mode> FAIL ..." or a failed call.
@@ -46,6 +52,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 /* The XeSS declarations below (types and values) are from Intel's public inc/xess/xess.h and xess_d3d12.h
  * (github.com/intel/xess, branch main):
@@ -381,8 +388,8 @@ static void Init(xess_context_handle_t ctx, int quality, UINT w = OW, UINT h = O
     xess_d3d12_init_params_t p = {{w, h}, quality, flags};
     XESS(X.Init(ctx, &p));
 }
-static xess_2d_t Optimal(xess_context_handle_t ctx, int quality) {
-    xess_2d_t out = {OW, OH}, opt = {}, lo = {}, hi = {};
+static xess_2d_t Optimal(xess_context_handle_t ctx, int quality, UINT w = OW, UINT h = OH) {
+    xess_2d_t out = {w, h}, opt = {}, lo = {}, hi = {};
     XESS(X.GetOptimalInputResolution(ctx, &out, quality, &opt, &lo, &hi));
     return opt;
 }
@@ -429,21 +436,25 @@ static void Cycles() {
     // Re-initialised (another output size), then destroyed before the last list runs. Meanwhile another context of
     // the same kind can't have that upscaler: the list still uses it.
     xess_context_handle_t ctx = Create(g);
+    double before = GpuMB();
     Init(ctx, XESS_QUALITY_SETTING_BALANCED, 1920, 1080);
     Init(ctx, XESS_QUALITY_SETTING_BALANCED);
-    Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED));
+    double init = GpuMB() - before; // Init makes no upscaler (Ruling 17)
+    Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED)), second(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED));
     double early = 0;
     Run(fr, ctx, 0, kFrames, [&] {
         XESS(X.DestroyContext(ctx));
         double before = GpuMB();
         auto other = Create(g);
         Init(other, XESS_QUALITY_SETTING_BALANCED);
+        auto p = second.Record(0, true);
+        XESS(X.Execute(other, g.list, &p));
         early = GpuMB() - before;
         XESS(X.DestroyContext(other));
     });
     auto [s, b] = fr.Read(kFrames - 1);
     // Contexts made, used and destroyed.
-    double before = GpuMB();
+    before = GpuMB();
     for (int i = 0; i < 20; i++) {
         ctx = Create(g);
         Init(ctx, XESS_QUALITY_SETTING_BALANCED);
@@ -481,10 +492,16 @@ static void Cycles() {
                                                 {XESS_QUALITY_SETTING_PERFORMANCE, OW, OH},
                                                 {XESS_QUALITY_SETTING_ULTRA_PERFORMANCE, OW, OH},
                                                 {XESS_QUALITY_SETTING_BALANCED, 1920, 1080}};
+    std::vector<Frames> frames; // each setting's inputs: its first Execute makes its upscaler
+    frames.reserve(5);
+    for (auto &e : set) frames.emplace_back(g, Optimal(ctx, e.quality, e.w, e.h));
     auto Each = [&](int n) {
         for (int i = 0; i < n; i++) {
             auto other = Create(g);
             Init(other, set[i].quality, set[i].w, set[i].h);
+            auto p = frames[i].Record(0, true);
+            XESS(X.Execute(other, g.list, &p));
+            g.Submit();
             XESS(X.DestroyContext(other));
         }
     };
@@ -497,9 +514,10 @@ static void Cycles() {
     Run(fr, ctx, kFrames / 2, kFrames, [] {});
     auto [l, lb] = fr.Read(kFrames - 1);
     XESS(X.DestroyContext(ctx));
-    bool ok = s > b && r < (s + b) / 2 && early > 150 && growth < 300 && ab < 300 && rerun < 100 && l > lb;
-    printf("xess cycles %s psnr %.2f bilinear %.2f reset %.2f early %.0f growth %.0f ab %.0f five %.0f rerun %.0f "
-           "live %.2f/%.2f\n", ok ? "ok" : "FAIL", s, b, r, early, growth, ab, five, rerun, l, lb);
+    bool ok = s > b && r < (s + b) / 2 && init < 10 && early > 150 && growth < 300 && ab < 300 && rerun < 100 &&
+              l > lb;
+    printf("xess cycles %s psnr %.2f bilinear %.2f reset %.2f init %.0f early %.0f growth %.0f ab %.0f five %.0f "
+           "rerun %.0f live %.2f/%.2f\n", ok ? "ok" : "FAIL", s, b, r, init, early, growth, ab, five, rerun, l, lb);
 }
 
 // The bridge reaches DXMT only through the device's IMTLD3D12DeviceExt (DXMT's src/d3d12/d3d12_interfaces.hpp): a
@@ -544,7 +562,7 @@ static void Reuse() {
     xess_context_handle_t ctx = nullptr;
     XESS(X.CreateContext((ID3D12Device *)&device, &ctx));
     Init(ctx, XESS_QUALITY_SETTING_BALANCED); // 1280x720
-    device.ext.made = 0;
+    int init = device.ext.made;
     // Dynamic resolution: the content shrinks in textures larger than it.
     Inputs in;
     in.tw = 1440; in.th = 810;
@@ -562,9 +580,9 @@ static void Reuse() {
     Run(other, ctx, 0, kFrames, [] {});
     auto [s2, b2] = other.Read(kFrames - 1);
     XESS(X.DestroyContext(ctx));
-    bool ok = !kept && device.ext.made == 1 && s1 > b1 && s2 > b2;
-    printf("xess reuse %s psnr %.2f bilinear %.2f psnr %.2f bilinear %.2f recreates %d\n", ok ? "ok" : "FAIL", s1, b1,
-           s2, b2, device.ext.made);
+    bool ok = !init && kept == 1 && device.ext.made == 2 && s1 > b1 && s2 > b2;
+    printf("xess reuse %s psnr %.2f bilinear %.2f psnr %.2f bilinear %.2f upscalers %d/%d/%d\n", ok ? "ok" : "FAIL",
+           s1, b1, s2, b2, init, kept, device.ext.made);
     device.ext.real->Release();
 }
 
@@ -605,6 +623,38 @@ static void Flags() {
         ok = ok && s > b;
     }
     printf("xess flags %s%s\n", ok ? "ok" : "FAIL", psnrs.c_str());
+}
+
+// Unreal's call without depth on a COMPUTE list (Gpu's queue, allocator and list are DIRECT: COMPUTE ones instead),
+// then on a DIRECT one with inverted depth.
+static void Nodepth() {
+    std::string psnrs;
+    bool ok = true;
+    for (int k = 0; k < 2; k++) {
+        Gpu g;
+        if (k == 0) {
+            D3D12_COMMAND_QUEUE_DESC qd = {D3D12_COMMAND_LIST_TYPE_COMPUTE};
+            g.list->Release(); g.allocator->Release(); g.queue->Release();
+            CHECK(g.device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void **)&g.queue));
+            CHECK(g.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, __uuidof(ID3D12CommandAllocator),
+                                                   (void **)&g.allocator));
+            CHECK(g.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, g.allocator, nullptr,
+                                              __uuidof(ID3D12GraphicsCommandList), (void **)&g.list));
+        }
+        Inputs in;
+        in.highres = in.nodepth = true;
+        auto ctx = Create(g);
+        Init(ctx, XESS_QUALITY_SETTING_BALANCED, OW, OH, 1u << 0 | 1u << 8 | (k == 1 ? 1u << 1 : 0));
+        Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED), in);
+        Run(fr, ctx, 0, kFrames, [] {});
+        auto [s, b] = fr.Read(kFrames - 1);
+        XESS(X.DestroyContext(ctx));
+        char line[64];
+        snprintf(line, sizeof line, " %s %.2f/%.2f", k ? "inverted" : "compute", s, b);
+        psnrs += line;
+        ok = ok && s > b;
+    }
+    printf("xess nodepth %s%s\n", ok ? "ok" : "FAIL", psnrs.c_str());
 }
 
 // A device without DXMT's interface: Wine's own D3D12, or, where it makes none (no Vulkan), an object answering only
@@ -661,6 +711,7 @@ int main(int argc, char **argv) {
         else if (mode == "cycles") Cycles();
         else if (mode == "reuse") Reuse();
         else if (mode == "flags") Flags();
+        else if (mode == "nodepth") Nodepth();
         else if (mode == "unsupported") Unsupported();
         else { printf("unknown mode %s\n", mode.c_str()); return 2; }
     }
