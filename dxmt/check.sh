@@ -601,7 +601,8 @@ expect "a 3D texture written by compute, then sampled and loaded, matches D3DMet
 exit $fail
 ) > "$WORK/lane-D.log" 2>&1 & pD=$!
 
-# Lane E: the D3D11 cache table, vertex reads, ExecuteIndirect, timestamps, replay errors, FSR 3, D3DMetal, dxil-translate, bounds.
+# Lane E: the D3D11 cache table, vertex reads, ExecuteIndirect, timestamps, replay errors, FSR 3, D3DMetal, dxil-translate, bounds,
+# MetalFX upscaling.
 (
 LANE=E
 # 1b. The translation cache's table is named by the build (shader pre-caching spec §3.1): no table of
@@ -738,6 +739,27 @@ expect "buffer loads read zeros outside their views, in one check per load" \
   "$(grep '^bounds ' "$WORK/bounds.txt")" "bounds 5 6 7 8 0 0 0 0 0 0 0 0 0 0 0 0 13 14 15 16 0 0 0 0 20 19 20 0 0 0 0 0"
 expect "and as on D3DMetal but where a load straddles the view's end" \
   "$(grep '^bounds ' "$WORK/bounds-ref.txt")" "bounds 5 6 7 8 19 20 21 22 0 0 0 0 20 21 0 0 13 14 15 16 0 0 0 0 20 19 20 0 0 0 0 0"
+# XeSS answered by MetalFX (spec §4.1): DXMT's private D3D12 interface runs MetalFX's temporal upscaler in the command
+# list's order. 64 jittered frames of the spike's scene upscaled to 2560x1440 beat a bilinear upscale of the last input
+# against the unjittered scene (d3d12_upscale prints both PSNRs), at three ratios and with the inputs MetalFX can't
+# take directly (a depth/stencil depth, a render-target-only output, typeless motion vectors), on a COMPUTE list (with
+# a reactive mask); bad calls record nothing.
+upscaled() { grep -q "^upscale $2 ok" "$WORK/$1.txt" && echo yes || { grep -m1 -E '^upscale|failed' "$WORK/$1.txt" || echo none; }; }
+for r in 1.5 2.0 3.0; do
+  run ours "upscale-ratio-$r" dxmt "$TESTS/d3d12_upscale.exe" ratio "$r"
+  expect "DXMT upscales ratio $r" "$(upscaled "upscale-ratio-$r" "ratio $r")" yes
+done
+for m in depthstencil rtoutput compute bad; do
+  run ours "upscale-$m" dxmt "$TESTS/d3d12_upscale.exe" "$m"
+  expect "DXMT upscales $m" "$(upscaled "upscale-$m" "$m")" yes
+done
+run ours upscale-range dxmt "$TESTS/d3d12_upscale.exe" range
+expect "the device reports MetalFX's scale range" "$(grep '^range ' "$WORK/upscale-range.txt" || echo none)" "range 1.000 3.000"
+export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
+run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute bad
+unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
+expect "Metal's validation rejects nothing in the upscale" \
+  "$(invalid upscale-val):$(grep -c '^upscale [a-z]* ok' "$WORK/upscale-val.txt" || true)" "0:4"
 exit $fail
 ) > "$WORK/lane-E.log" 2>&1 & pE=$!
 
