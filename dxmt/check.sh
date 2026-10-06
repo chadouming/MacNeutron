@@ -92,10 +92,12 @@ done
 for p in $pids; do wait "$p" || die "creating a prefix failed"; done
 # Helpers the lanes share. invalid <run>: the Metal API validation errors (MTL_DEBUG_LAYER=1, logging instead of
 # aborting) a run logged; each has "Validation" in its first line, as does the line saying it's on (once a process),
-# which doesn't count. "off" when no such line says so: a run validation never switched on for can't count as clean.
+# which doesn't count. Frameworks' own debug-layer complaints (MetalFX: "outputTexture must have private storage
+# mode") don't say "Validation": every NSLog line (date, time, wine[pid:tid]) counts too. "off" when no such line says
+# so: a run validation never switched on for can't count as clean.
 invalid() {
   grep -q 'Metal API Validation Enabled' "$WORK/$1.txt" || { echo off; return 0; }
-  grep 'Validation' "$WORK/$1.txt" | grep -vc 'Metal API Validation Enabled' || true
+  grep -E 'Validation|^[0-9-]+ [0-9:.]+ wine[^ ]*\[' "$WORK/$1.txt" | grep -vc 'Metal API Validation Enabled' || true
 }
 same_pixels() {  # same_pixels <ours> <ref> [prefix]: yes when both drew ("<prefix> ok") and 12 pixels are within 1/255
   python3 - "$1" "$2" "${3:-}" <<'PY'
