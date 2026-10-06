@@ -8,6 +8,8 @@
 //   ratio <r>      r = 1.5, 2.0 or 3.0  "upscale ratio <r> ok psnr <scaler> bilinear <bilinear>" (ok: scaler wins)
 //   depthstencil   2.0x, a D32_FLOAT_S8X24_UINT depth, jittered motion vectors     "upscale depthstencil ok psnr ..."
 //   rtoutput       2.0x, an output with ALLOW_RENDER_TARGET only, R16G16_TYPELESS motion vectors   "upscale rtoutput ok ..."
+//   direct         2.0x, an output with ALLOW_UNORDERED_ACCESS only (XeSS's norm)                "upscale direct ok ..."
+//   placed         as direct, the output placed in a DEFAULT heap                                "upscale placed ok ..."
 //   compute        2.0x, recorded on a COMPUTE command list and queue, with a reactive mask      "upscale compute ok ..."
 //   typeless       2.0x, colour and output R16G16B16A16_TYPELESS (read as FLOAT)                "upscale typeless ok ..."
 //   typeless32     2.0x, colour and output R32G32B32A32_TYPELESS (DXMT keeps them as RGBA32Uint: read through
@@ -118,7 +120,7 @@ struct Upscale {
     DXGI_FORMAT depth = DXGI_FORMAT_D32_FLOAT, motion = DXGI_FORMAT_R16G16_FLOAT, mask = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT color = DXGI_FORMAT_R16G16B16A16_FLOAT, out = DXGI_FORMAT_R16G16B16A16_FLOAT; // 8 or 16 bytes a texel
     D3D12_RESOURCE_FLAGS output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-    bool jittered = false, exposure = false, compute = false, bad = false;
+    bool jittered = false, exposure = false, compute = false, bad = false, placed = false;
 };
 
 // A buffer to upload `rows` rows of `row` bytes into, its pitch Pitch(row).
@@ -196,7 +198,18 @@ static void Run(const Upscale &u) {
     ID3D12Resource *mask = u.mask ? g.Texture(Tex2D(iw, ih, u.mask), COPY_DEST) : nullptr;
     auto out_state = u.output & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
                                                                           : D3D12_RESOURCE_STATE_RENDER_TARGET;
-    ID3D12Resource *output = g.Texture(Tex2D(OW, OH, u.out, 1, u.output), out_state);
+    ID3D12Resource *output;
+    D3D12_RESOURCE_DESC od = Tex2D(OW, OH, u.out, 1, u.output);
+    if (u.placed) {
+        D3D12_RESOURCE_ALLOCATION_INFO ai = g.device->GetResourceAllocationInfo(0, 1, &od);
+        D3D12_HEAP_DESC hd = {ai.SizeInBytes, {D3D12_HEAP_TYPE_DEFAULT}, ai.Alignment, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES};
+        ID3D12Heap *heap;
+        CHECK(g.device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
+        CHECK(g.device->CreatePlacedResource(heap, 0, &od, out_state, nullptr, __uuidof(ID3D12Resource), (void **)&output));
+        heap->Release(); // the output holds it
+    } else {
+        output = g.Texture(od, out_state);
+    }
     ID3D12Resource *exposure = nullptr;
     if (u.exposure) { // 1x1 R16F holding 1.0
         exposure = g.Texture(Tex2D(1, 1, DXGI_FORMAT_R16_FLOAT), COPY_DEST);
@@ -363,6 +376,9 @@ int main(int argc, char **argv) {
         } else if (mode == "rtoutput") {
             u.output = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
             u.motion = DXGI_FORMAT_R16G16_TYPELESS;
+        } else if (mode == "direct" || mode == "placed") {
+            u.output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            u.placed = mode == "placed";
         } else if (mode == "compute") {
             u.compute = true;
             u.mask = DXGI_FORMAT_R8_UNORM;

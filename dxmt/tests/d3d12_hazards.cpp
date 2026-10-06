@@ -124,14 +124,21 @@ static void Dispatch(ID3D12PipelineState *pso, ID3D12Resource *b, UINT groups, U
     l->Dispatch(groups, 1, 1);
 }
 
-// A default-heap buffer of `size` zero bytes (UAV-capable), left in `state`.
-static ID3D12Resource *Zeroed(UINT64 size, D3D12_RESOURCE_STATES state) {
+// A default-heap buffer of `size` zero bytes (UAV-capable), left in `state`: committed, or placed at the start of `heap`.
+static ID3D12Resource *Zeroed(UINT64 size, D3D12_RESOURCE_STATES state, ID3D12Heap *heap = nullptr) {
     ID3D12Resource *upload = g->Buffer(D3D12_HEAP_TYPE_UPLOAD, size, D3D12_RESOURCE_STATE_GENERIC_READ);
     void *p;
     CHECK(upload->Map(0, nullptr, &p));
     memset(p, 0, size);
     upload->Unmap(0, nullptr);
-    ID3D12Resource *b = g->Buffer(D3D12_HEAP_TYPE_DEFAULT, size, COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    ID3D12Resource *b;
+    if (heap) {
+        D3D12_RESOURCE_DESC d = {D3D12_RESOURCE_DIMENSION_BUFFER, 0, size, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                                 D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        CHECK(g->device->CreatePlacedResource(heap, 0, &d, COPY_DEST, nullptr, __uuidof(ID3D12Resource), (void **)&b));
+    } else {
+        b = g->Buffer(D3D12_HEAP_TYPE_DEFAULT, size, COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    }
     g->list->CopyBufferRegion(b, 0, upload, 0, size);
     if (state != COPY_DEST)
         g->Barrier(b, COPY_DEST, state);
@@ -203,9 +210,10 @@ static void SameTarget() {
     printf("hazard same-target %g %g\n", Texel(0), Texel(1));
 }
 
-// A dispatch adds 1 per thread to word 0 (heavy); a copy elsewhere; a UAV barrier; a dispatch copies word 0 to word 1.
-static void Uav() {
-    ID3D12Resource *b = Zeroed(256, UA), *elsewhere = Zeroed(256, COPY_DEST), *zeros = Zeroed(256, COPY_SOURCE);
+// A dispatch adds 1 per thread to word 0 of `b` (heavy); a copy elsewhere; a UAV barrier; a dispatch copies word 0 to
+// word 1.
+static void UavOn(const char *name, ID3D12Resource *b) {
+    ID3D12Resource *elsewhere = Zeroed(256, COPY_DEST), *zeros = Zeroed(256, COPY_SOURCE);
     Dispatch(fill, b, 16384);
     g->list->CopyBufferRegion(elsewhere, 0, zeros, 0, 256);
     D3D12_RESOURCE_BARRIER barrier = {D3D12_RESOURCE_BARRIER_TYPE_UAV};
@@ -214,7 +222,15 @@ static void Uav() {
     Dispatch(count, b, 1);
     ReadBuffer(b, UA, 4, 4, 0);
     g->Submit();
-    printf("hazard uav %llu\n", Word(0, 4));
+    printf("hazard %s %llu\n", name, Word(0, 4));
+}
+static void Uav() { UavOn("uav", Zeroed(256, UA)); }
+// The same in a buffer placed in a DEFAULT heap (on our DXMT, Private like its heap), read back through READBACK.
+static void PlacedUav() {
+    D3D12_HEAP_DESC hd = {65536, {D3D12_HEAP_TYPE_DEFAULT}, 0, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS};
+    ID3D12Heap *heap;
+    CHECK(g->device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
+    UavOn("placed-uav", Zeroed(256, UA, heap));
 }
 
 // 16 copies of 5s into T2; a barrier COPY_DEST -> PIXEL_SHADER_RESOURCE; T1 = T2 sampled + 1.
@@ -1360,7 +1376,7 @@ int main(int argc, char **argv) {
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
         {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
         {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
-        {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}};
+        {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}, {"placed-uav", PlacedUav}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

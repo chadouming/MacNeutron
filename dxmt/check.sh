@@ -268,7 +268,7 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
   "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
-  "merge-indirect 10")
+  "merge-indirect 10" "placed-uav 1048576")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -755,13 +755,28 @@ for m in depthstencil rtoutput compute typeless typeless32 typeless10 bad; do
   run ours "upscale-$m" dxmt "$TESTS/d3d12_upscale.exe" "$m"
   expect "DXMT upscales $m" "$(upscaled "upscale-$m" "$m")" yes
 done
+# GPU-only heaps and the textures on them are Private (DXMT 0009), and a 2D UAV Metal can render to gets RenderTarget
+# usage: MetalFX writes a UAV-only output directly, committed or placed in a DEFAULT heap (DXMT_STATS counts the outputs
+# written to a scratch texture and copied instead); with DXMT_D3D12_PRIVATE=0 (all Shared) it's copied.
+copied() { awk '/^  upscale output copied /{n += $4} END {print n + 0}' "$WORK/$1/stats.txt" 2> /dev/null || echo none; }
+for r in direct:direct placed:placed shared:direct; do
+  n=${r%:*} m=${r#*:}
+  rm -rf "$WORK/upscale-$n-stats"; export DXMT_DXIL_DUMP="$WORK/upscale-$n-stats" DXMT_STATS=1
+  if [ $n = shared ]; then export DXMT_D3D12_PRIVATE=0; fi
+  run ours "upscale-$n" dxmt "$TESTS/d3d12_upscale.exe" "$m"
+  unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_PRIVATE
+done
+expect "MetalFX writes a private UAV output directly" "$(upscaled upscale-direct direct):$(copied upscale-direct-stats)" yes:0
+expect "and one placed in a DEFAULT heap" "$(upscaled upscale-placed placed):$(copied upscale-placed-stats)" yes:0
+expect "and copies it with DXMT_D3D12_PRIVATE=0" \
+  "$(upscaled upscale-shared direct):$(copied upscale-shared-stats | sed 's/^[1-9][0-9]*$/some/')" yes:some
 run ours upscale-range dxmt "$TESTS/d3d12_upscale.exe" range
 expect "the device reports MetalFX's scale range" "$(grep '^range ' "$WORK/upscale-range.txt" || echo none)" "range 1.000 3.000"
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
-run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute typeless32 typeless10 bad
+run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute typeless32 typeless10 bad direct placed
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in the upscale" \
-  "$(invalid upscale-val):$(grep -c '^upscale [a-z0-9]* ok' "$WORK/upscale-val.txt" || true)" "0:6"
+  "$(invalid upscale-val):$(grep -c '^upscale [a-z0-9]* ok' "$WORK/upscale-val.txt" || true)" "0:8"
 # XeSS answered by MetalFX (spec §4.2, §7): Wine's builtin libxess.dll driven through XeSS's API. d3d12_xess loads it
 # by full path, the game's way, from a copy of itself named libxess.dll: only the launcher's libxess=b makes that the
 # builtin. Every quality mode at its input size beats bilinear; a re-initialised context, one destroyed before its list

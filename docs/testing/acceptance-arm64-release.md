@@ -321,3 +321,21 @@ context still upscales after it, 24.68 against 22.17 bilinear. New rows: `upscal
 colour and output) 24.34 against 21.91, and `upscale bad` refusing a B8G8R8X8_TYPELESS and an R16G16_TYPELESS colour
 with E_INVALIDARG; both already passed on 0006 (they pin its behaviour). Metal's validation: 0 messages, 6 upscale
 modes and 2 XeSS modes ok.
+
+## XeSS answered by MetalFX: compressed scratch, private storage (XeSS plan, Task 2d)
+
+2026-10-06. DXMT patch 0008 gives the bridge's depth, motion vector and output scratch textures lossless compression
+(every access uses the scratch's own layout; `DXMT_D3D12_COMPRESSION=0` turns it off). DXMT patch 0009 (Rulings 11
+and 12) makes heaps the CPU can't see (DEFAULT, CUSTOM with no CPU pages) Private, with the committed textures on such
+heaps and the textures and buffers placed in them; committed buffers and CPU-visible heaps stay Shared; sizes are
+still asked for Shared (Private measured the same on the M5 Pro). A 2D UAV texture of a format Metal renders to also
+gets RenderTarget usage (MetalFX's output usage is 0x7), so MetalFX writes a UAV-only output directly; the scratch and
+copy stay for the outputs it can't write, counted by `DXMT_STATS` as `upscale output copied`.
+`DXMT_D3D12_PRIVATE=0` keeps everything Shared. Write/ReadFromSubresource refuse textures on GPU-only heaps.
+
+Both lanes of `make dxmt-check`: `dxmt-check: all passed`, no FAIL. New rows: `upscale direct` (committed UAV-only
+output) and `upscale placed` (placed in a DEFAULT heap) 24.90 against 22.17 bilinear with 0 outputs copied (the
+scratch path gave 24.90 in Task 2c); `upscale direct` with `DXMT_D3D12_PRIVATE=0` copies (64). `hazard placed-uav`
+(a buffer placed in a DEFAULT heap, written by a dispatch, copied to READBACK, mapped) reads 1048576, on our DXMT and
+on D3DMetal. Every other upscale and XeSS PSNR is unchanged; `xess cycles` reports `growth 0 ab 227` MB (Task 2c:
+`growth 28 ab 255`). Metal's validation: 0 messages in the upscale (8 modes), XeSS (2) and hazards runs.
