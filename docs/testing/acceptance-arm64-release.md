@@ -231,3 +231,23 @@ an offset. With it, msync on, none of 82 runs hung or printed `mach_vm_map faile
 the patch, 20 on the build of the commit that adds it, plus each prefix's first run). Also run on that build:
 `wine-arm64: up to date`, `check.sh boot fex g1-threads g1-seh msync x18 dxmt` all PASS, `make smoke` 15/15,
 `dxmt/check.sh` (x64 lane) 200 ok 0 FAIL, `make bridge-check` 15 ok.
+
+## Translator-keyed shader cache and replay stamp (Task C1)
+
+2026-10-05. DXMT's translation cache was keyed on `git describe` of its tree and the launcher's replay stamp on
+`DXMT/version`: a re-fetch of the same DXMT patches (git am makes new commits) missed every translated function and
+forced the replay, and an uncommitted airconv edit kept serving the old translations. Both now follow `lib.sh`'s
+`translator_key` (DXMT patch 0003; `DXMT/translator`; spec §14). `wine-arm64/tests/translator_key_test.sh` 17 ok (red
+on today's `git describe` keying: 12 FAIL). Two re-fetches of the real DXMT tree (HEADs `a41a976`, `89c7bd7`) gave
+one key, `148014f4…`, as did the dev and applied builds (`DXMT/version` `+dev` → `+5bb2319a456d`); a byte in
+`src/d3d12` kept it, one in `src/airconv` changed it. A key change without a meson setup regenerated
+`dxmt_translator_key.h` and recompiled `dxmt_shader_cache.cpp` alone (17 ninja steps).
+
+SMITE 2 on a clone of the perf study's compat folder (stamp `1fba8d2…+cd6d4065e615 26A434`), `env -i`, bridge on,
+`DXMT_SHADER_CACHE_PATH` in scratch, tool folder from `macneutron install`: the first launch logged
+`precache: Hemingway-Win64-Shipping.exe.pipelines exit=0 replay: 20730 pipelines (17408 graphics, 3322 compute),
+20730 created, 0 failed, 0 bad records, 6375 ms`, stamped `148014f4… 26A434`, and reached the lobby; the cache's one
+table is `cache_1987945399250107254` (FNV-1a of the key and `AIRCONV_VERSION`), 27,178 entries. The relaunch logged no
+`precache:` line, reached the lobby (bridge `Result=Success`), and left the table at 27,178 entries. Also run:
+`make test` 239 passed, `wine-arm64: up to date`, `make smoke` 15/15, `dxmt/check.sh` (x64 lane) 200 ok 0 FAIL,
+`make bridge-check` 15 ok.
