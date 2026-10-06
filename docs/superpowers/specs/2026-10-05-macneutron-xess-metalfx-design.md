@@ -86,8 +86,10 @@ instead of ~250.
 - A texture MetalFX can't take directly (a depth/stencil format, a packed colour format, an output without write
   usage): DXMT converts it into a scratch texture first and writes the output back; a supported mode never fails.
 - A bad call (size outside 1.0x-3.0x, a missing required texture, an unknown flag): Execute returns XeSS's error code
-  without encoding anything, logged once to the game log. Never a crash. A failed upscaler creation fails Init; Unreal
-  then falls back to its own anti-aliasing.
+  without encoding anything, logged once to the game log. Never a crash. Init checks the device and the scale range;
+  the upscaler itself is made at the first Execute, from the formats the game really passes (amended 2026-10-06:
+  Unreal's Init can't tell the bridge its formats, so an Init-time upscaler was a wasted ~230 MB). A failed creation
+  fails each Execute, logged once, instead of Init.
 - History lives per context; it resets when the game passes reset or the size changes.
 - One upscaler per context (~220-290 MB at 1440p).
 - **The 2.2 ms wait:** the upscale is encoded inline first (ordering first). Measured in SMITE 2 with a Metal System
