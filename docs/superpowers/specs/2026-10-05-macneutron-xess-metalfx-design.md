@@ -1,6 +1,6 @@
 # MacNeutron: XeSS answered by MetalFX
 
-Status: draft for the maintainer's review (2026-10-05).
+Status: approved by the maintainer (2026-10-05).
 
 ## 1. Goal
 
@@ -108,7 +108,7 @@ In SMITE 2 (scratch prefix, the maintainer's settings, Steam bridge on, lobby or
 1. The logging run (§5).
 2. Measurements at the maintainer's output size (2560x1440 on the external display): the upscale's GPU ms per frame
    and the wait's effect (Metal System Trace), lobby FPS, XeSS start-up time.
-3. Captures of the same scene with the bridge, for the maintainer to judge.
+3. Captures of a practice map with the bridge, from a session the maintainer drives, for the maintainer to judge.
 
 Ships as the default when: the upscale costs ≤ 5 ms of GPU time per frame at 1440p and the wait is handled (§6);
 the maintainer sees no defect they reject (ghosting, shimmer, wrong jitter) in captures and in a short practice match
@@ -126,11 +126,13 @@ they play themselves; a 30-minute practice-mode soak shows no crash or memory gr
   SMITE 2's Steam launch passes `-NOEAC`.
 - **Upstream:** DXMT doesn't take AI-written changes; patch 0004 stays in our series.
 
-## 9. Open questions for the maintainer
+## 9. Answers from the maintainer (2026-10-05)
 
-1. May the implementation read Intel's public `xess.h` and its licence (network access, read-only) to take exact
-   struct layouts and constants, or must they be derived only from observed calls?
-2. Captures: which scenes (the lobby, a practice map)?
+1. The implementation reads Intel's public `xess.h` and its licence (GitHub, read-only) for exact struct layouts and
+   constants, licence checked first; the logging run (§5) still confirms them against SMITE 2's real calls.
+2. Quality captures use a practice map only (motion and particles matter most for temporal upscaling). A practice
+   match needs input in the game's menus, so captures come from a session the maintainer drives (their own practice
+   match, §7), taken with the presenter's frame dump or a screen capture.
 
 ## 10. Out of scope
 
