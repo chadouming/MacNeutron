@@ -782,8 +782,8 @@ expect "Metal's validation rejects nothing in the upscale" \
 # builtin. Every quality mode at its input size beats bilinear; a re-initialised context, one destroyed before its list
 # runs, 20 more made and destroyed (DXMT reuses their upscaler), A -> B -> A, a history reset, and 5 settings in turn
 # beside a live context (DXMT keeps 4 released); dynamic resolution keeping the upscaler and a new motion vector
-# format replacing it; Init's flags, with real frames for the ones that change what the inputs mean, and the version
-# calls; "unsupported" under wined3d. A failing mode's FAIL line shows.
+# format replacing it; Init's flags, with real frames for the ones that change what the inputs mean and for Unreal's
+# call (no depth texture), and the version calls; "unsupported" under wined3d. A failing mode's FAIL line shows.
 mkdir -p "$WORK/xess" && cp "$TESTS/d3d12_xess.exe" "$WORK/xess/libxess.dll"
 xessed() {
   grep -q "^xess $2 ok" "$WORK/$1.txt" && echo yes ||
@@ -803,9 +803,13 @@ run ours xess-wd wined3d "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" unsu
 expect "XeSS reports no device on wined3d" "$(xessed xess-wd unsupported)" yes
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
 run ours xess-val dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" performance cycles
+# flags apart (the watchdog): its nodepth case is Unreal's call, the bridge's own depth (MetalFX wants it colour-sized)
+run ours xess-valf dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" flags
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in XeSS" \
   "$(invalid xess-val):$(grep -c '^xess [a-z]* ok' "$WORK/xess-val.txt" || true)" "0:2"
+expect "nor in its flags, Unreal's call without depth included" \
+  "$(invalid xess-valf):$(grep -c '^xess flags ok' "$WORK/xess-valf.txt" || true)" "0:1"
 exit $fail
 ) > "$WORK/lane-E.log" 2>&1 & pE=$!
 

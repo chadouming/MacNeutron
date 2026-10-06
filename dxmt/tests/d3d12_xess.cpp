@@ -29,7 +29,9 @@
 //       xessGetIntelXeFXVersion 0.0.0, xessGetVersion 2.0.1; a destroyed context: INVALID_CONTEXT. Then 64 balanced
 //       frames each with bit 1 (inverted depth, the depth 1 - d), bit 4 (NDC velocity: pixels / (0.5 w, -0.5 h)),
 //       bit 7 (jittered motion vectors: the jitter's change added) and bit 0 (motion vectors at 2560x1440, in output
-//       pixels), each beating bilinear. "xess flags ok inverted <s>/<b> ndc <s>/<b> jittered <s>/<b> highres <s>/<b>"
+//       pixels), each beating bilinear; then Unreal's call in SMITE 2 (Task 3): bits 0 and 8 (auto exposure) and no
+//       depth texture (Intel's header: optional with bit 0), beating bilinear.
+//       "xess flags ok inverted <s>/<b> ndc <s>/<b> jittered <s>/<b> highres <s>/<b> nodepth <s>/<b>"
 //   unsupported
 //       (Wine's wined3d) xessD3D12CreateContext: UNSUPPORTED_DEVICE and a NULL context. "xess unsupported ok"
 // Anything else prints "xess <mode> FAIL ..." or a failed call.
@@ -225,6 +227,7 @@ struct Inputs {
     bool ndc = false;      // bit 4: velocity in NDC of the content: pixels / (0.5 w, -0.5 h)
     bool jittered = false; // bit 7: velocity includes the jitter's change
     bool highres = false;  // bit 0: motion vectors at the output size, in output pixels
+    bool nodepth = false;  // no depth texture (with bit 0, as Unreal's XeSS plugin)
     DXGI_FORMAT motion = DXGI_FORMAT_R16G16_FLOAT; // or R32G32_FLOAT
     UINT tw = 0, th = 0;   // the input textures' size (0: the content's)
 };
@@ -313,7 +316,8 @@ struct Frames {
             g.Barrier(r, COPY_DEST, READ);
         uploaded = true;
         xess_d3d12_execute_params_t p = {};
-        p.pColorTexture = color; p.pVelocityTexture = motion; p.pDepthTexture = depth; p.pOutputTexture = output;
+        p.pColorTexture = color; p.pVelocityTexture = motion; p.pDepthTexture = in.nodepth ? nullptr : depth;
+        p.pOutputTexture = output;
         p.jitterOffsetX = jx; p.jitterOffsetY = jy;
         p.exposureScale = 1.0f;
         p.resetHistory = reset;
@@ -584,11 +588,11 @@ static void Flags() {
                fxr, fx.major, fx.minor, fx.patch, vr, v.major, v.minor, v.patch, stale, stale_destroy, null_destroy);
     // Real frames with each flag that changes what the inputs mean.
     std::string psnrs;
-    for (int k = 0; k < 4; k++) {
-        static const char *const names[] = {"inverted", "ndc", "jittered", "highres"};
-        static const uint32_t bits[] = {1u << 1, 1u << 4, 1u << 7, 1u << 0};
+    for (int k = 0; k < 5; k++) {
+        static const char *const names[] = {"inverted", "ndc", "jittered", "highres", "nodepth"};
+        static const uint32_t bits[] = {1u << 1, 1u << 4, 1u << 7, 1u << 0, 1u << 0 | 1u << 8};
         Inputs in;
-        in.inverted = k == 0; in.ndc = k == 1; in.jittered = k == 2; in.highres = k == 3;
+        in.inverted = k == 0; in.ndc = k == 1; in.jittered = k == 2; in.highres = k >= 3; in.nodepth = k == 4;
         ctx = Create(g);
         Init(ctx, XESS_QUALITY_SETTING_BALANCED, OW, OH, bits[k]);
         Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED), in);

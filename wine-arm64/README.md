@@ -237,6 +237,8 @@ re-clone; that is why they wait for the rebase.
     (github.com/intel/xess, branch `main`, MIT since commit de0fb9c) with Intel's MIT notice.
   - 0025 (`dlls/libxess`: notes on the bridge's lock and its conventions) is ours and stays local.
   - 0026 (`dlls/libxess`: the lock note reworded) is ours and stays local.
+  - 0027 (`dlls/libxess`: a far-plane depth for MetalFX when the game passes none, as Unreal does) is ours and
+    stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
