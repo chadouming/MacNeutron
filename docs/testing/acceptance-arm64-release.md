@@ -346,11 +346,12 @@ on D3DMetal. Every other upscale and XeSS PSNR is unchanged; `xess cycles` repor
 game defaults' `HWGameUserSettings.sav`, which selects XeSS; the clone alone keeps TAA), `env -i`, a tool folder from
 `macneutron install` with the dev `wine.app`, Steam bridge on, lobby only. The external display was off: every run
 below is on the built-in display, where the game's fullscreen window makes XeSS's output 1728x1117 (balanced, input
-864x559), not the player's 2560x1440. The 2560x1440 runs are still owed.
+864x559), not the player's 2560x1440. The 2560x1440 runs are Task 3c (Ruling 15).
 
 **Logging run.** `MACNEUTRON_LOG=1` doesn't show the bridge's parameter dumps: its `WINEDEBUG=+err,+warn` turns on
-channels named `err` and `warn`, not the warn class (`warn+xess` does). Hemingway.log still has the bridge's one-time
-messages, through the game's logging callback. The first run found the bridge refusing every frame:
+channels named `err` and `warn`, not the warn class (`warn+xess` does; since Task 3b the launcher's logging mode sets
+`warn+all,+loaddll,+steamclient`, Ruling 18). Hemingway.log still has the bridge's one-time messages, through the
+game's logging callback. The first run found the bridge refusing every frame:
 `LogXeSSSDK: Warning: xessD3D12Execute: … depth 0000000000000000, … input 864x559`, then `Failed to execute XeSS,
 result: -4` about 50 times a second. Unreal's XeSS plugin initialises with flags 0x101 (high-res motion vectors, auto
 exposure) and passes no depth texture, which XeSS's header allows with high-res motion vectors. Wine patch 0027 makes a
@@ -368,7 +369,8 @@ warn:xess:execute flags 0x101, input 864x559, output 1728x1117; formats colour 2
   velocity scale 1,1; exposure 1.000000; reset 1
 ```
 
-and no failed Execute. Conventions from it:
+and no failed Execute. Conventions from it (Ruling 16: the jitter's sign and the high-res motion vectors' units and sign
+are settled in Task 5's captures, not from a log):
 - Velocity in pixels (bit 4 clear), at the output size (bit 0): the motion texture is 1728x1117, R16G16_FLOAT, velocity
   scale 1. The bridge passes them as output pixels, current to previous (Ruling 2); their real units and sign, and the
   NDC Y sign, can't be read off one dump: the maintainer's captures judge them (Task 5).
@@ -378,16 +380,18 @@ and no failed Execute. Conventions from it:
 - Exposure: auto (bit 8), no exposure texture (bit 2 clear), `exposureScale` 1.0, so `PreExposure` stays literal
   (Ruling 4): neutral.
 - Formats: colour and output R11G11B10_FLOAT (26), motion R16G16_FLOAT; no responsive mask. Init's guessed upscaler
-  (RGBA16F) is replaced at the first Execute, once.
+  (RGBA16F) never matched them: since Wine 0028 (Ruling 17) Init makes none and the first Execute makes it from the
+  game's textures.
 - Every base is 0, the output's included (`outputColorBase` 0,0; the output texture is 1728x1120 for a 1728x1117
   output): MetalFX's direct path with a non-zero output offset still hasn't run in a game.
 
 **Measurements** (the same prefix after the logging run; the trace 6 s, `gpu-trace.py --label MetalFX_Temporal`;
-lobby FPS by `fps4.py` from 20 s and from 100 s after the lobby's `LoadMap`):
+lobby FPS by `fps4.py` from 20 s and from 100 s after the lobby's `LoadMap`), all at 1728x1117; the 2560x1440 runs are
+Task 3c (Ruling 15):
 
 | Run | Lobby FPS (+20 s / +100 s) | Frame period, GPU busy (ms) | Upscale GPU ms per frame (p90) | GPU idle just before / after (ms) |
 | --- | --- | --- | --- | --- |
-| 1 | 32.04 / 59.36 | 19.73, 17.45 | 0.94 (0.98) | 0.00 / 0.00 |
+| 1 | 32.04 / 59.37 (30 s window) | 19.73, 17.45 | 0.94 (0.98) | 0.00 / 0.00 |
 | 2 | 59.98 / 59.80 | 16.66, 13.85 | 0.94 (0.97) | 0.00 / 0.00 |
 | 3 | (118 by the trace) | 8.45, 8.20 | 1.01 (1.07) | 0.00 / 0.00 |
 | 4 | 59.97 / 59.80 | 16.63, 14.41 | 0.93 (1.02) | 0.00 / 0.00 |
@@ -402,7 +406,8 @@ lobby FPS by `fps4.py` from 20 s and from 100 s after the lobby's `LoadMap`):
 - `DXMT_STATS=1`: `upscale output copied` 0 over 46 reports (MetalFX writes SMITE's output directly), 1.0 temporal
   upscale passes a frame. With `DXMT_D3D12_PRIVATE=0`: 12735 copied, FPS unchanged at the cap.
 - XeSS init (`Loading XeSS library` to `XeSS successfully initialized`): 1 ms in every run; Intel's own XeSS took 15.0 s
-  in the Gate S follow-up's prefix.
+  in the Gate S follow-up's prefix. The MetalFX upscaler is made at the first Execute (Ruling 17), outside that
+  interval: ~13 ms warm, ~45 ms the first in a process.
 
 **Split decision:** no split needed at 1728x1117 — the upscale costs ~0.95 ms of GPU time a frame and the GPU never
 idles before or after it (the spike's ~2.2 ms commit-to-start wait doesn't appear inline). Task 4 doesn't run unless

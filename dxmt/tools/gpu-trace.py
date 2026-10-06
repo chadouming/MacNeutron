@@ -49,9 +49,13 @@ def fmt(el):
 
 def labelled(mine, label):
     # mine: (start, end, channel, frame, cmdbuffer, label) of the game's intervals, sorted
+    first = {}
+    for iv in mine:
+        first.setdefault(iv[3], iv[0])  # each frame's start: its first interval comes first
+    whole = set(sorted(first, key=first.get)[1:-1])  # whole frames only, as trace()
     hits = collections.defaultdict(list)
     for iv in mine:
-        if label in iv[5]:
+        if iv[3] in whole and label in iv[5]:
             hits[iv[3]].append(iv)
     if not hits:
         bare = lambda name: re.sub(r'Command Buffer \d+:|\s*\(\w+ \(\d+\)\)|\s*0x[0-9a-f]+|\d+', '', name)
@@ -145,6 +149,8 @@ args = sys.argv[1:]
 label = None
 if '--label' in args:
     i = args.index('--label')
+    if i + 1 == len(args):
+        sys.exit('usage: gpu-trace.py <pid> [seconds] | <file.trace> | <PEX_Timeline_*.csv> [--label SUBSTR]')
     label = args[i + 1]
     del args[i:i + 2]
 arg = args[0]
