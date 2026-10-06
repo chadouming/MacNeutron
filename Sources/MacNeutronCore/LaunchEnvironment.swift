@@ -13,7 +13,7 @@ public enum LaunchEnvironment {
         let xess = base["MACNEUTRON_XESS"] == "1" ? "" : ";libxess,libxess_dx11=b"
         env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides + xess, user: base["WINEDLLOVERRIDES"])
         if base["WINEDEBUG"] == nil {
-            env["WINEDEBUG"] = logging ? "+err,+warn,+loaddll,+steamclient" : "-all"
+            env["WINEDEBUG"] = logging ? "warn+all,+loaddll,+steamclient" : "-all"
         }
         // msync off means unset, whoever set it: Wine's client and server must agree on it.
         if base["MACNEUTRON_NO_MSYNC"] == "1" {
