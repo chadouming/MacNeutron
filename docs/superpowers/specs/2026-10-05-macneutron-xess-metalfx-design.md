@@ -70,7 +70,8 @@ instead of ~250.
   high-res or render-res motion vectors, jittered motion vectors, exposure texture or auto exposure, responsive mask)
   and checks the device and the scale range; the context's one MetalFX upscaler is made at the first Execute, from
   the textures' formats (amended 2026-10-07, as §6 and Ruling 19: Init has no formats). A re-Init releases the old
-  upscaler. `xessD3D12BuildPipelines` returns success at once.
+  upscaler. `xessD3D12BuildPipelines` returns success at once, after Init too (Ruling 33, amended 2026-10-07:
+  `xess_d3d12.h` places it between CreateContext and Init, but Unreal may build again before a re-Init).
 - `xessGetOptimalInputResolution(output, mode)`: XeSS 2.x's ratio per mode — Native AA 1.0, Ultra Quality Plus 1.3,
   Ultra Quality 1.5, Quality 1.7, Balanced 2.0, Performance 2.3, Ultra Performance 3.0 (from general knowledge;
   confirmed by §9 question 1 or the logging run) — within the device's 1.0x-3.0x; min and max as XeSS reports them.

@@ -23,10 +23,12 @@ enum PlayerData {
         catch { result.failed += 1 }
         let (oldUsers, skippedUsers) = users(in: old), newUsers = users(in: new).names
         result.failed += skippedUsers
-        for user in oldUsers {
-            // wineboot names the one user after $USER, and Wine reads only that one: every old user goes there, whatever
-            // the names (the first, by name, wins a file two have).
-            let target = newUsers.count == 1 ? newUsers[0] : user
+        // wineboot names the one user after $USER, and Wine reads only that one: every old user goes there, whatever
+        // the names. The old user of that name (the one Wine read) goes first, then by name: the first wins a file two
+        // have.
+        let live = newUsers.count == 1 ? newUsers[0] : nil
+        for user in oldUsers.filter({ $0 == live }) + oldUsers.filter({ $0 != live }) {
+            let target = live ?? user
             for folder in folders {
                 switch kind(old, "drive_c/users/\(user)/\(folder)") {
                 case .missing: continue

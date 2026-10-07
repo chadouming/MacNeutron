@@ -674,16 +674,41 @@ private func failedFirstPreparation() throws -> (PrefixManager, [String: String]
     #expect(newPrefixFile(manager, "steamuser/AppData/Local/G/s.sav") == "AppData/Local/G/s.sav")
     #expect(!FileManager.default.fileExists(atPath: leftover.path(percentEncoded: false)))
     #expect(launcherLog(manager).contains("note: carried the player's data from pfx.rosetta: 1 files, 3 registry keys\n"))
+
+    // Task FR2: a folder (not ours to remove) at the temporary name stops that copy; the file never reaches its real
+    // name by another way, and it is counted.
+    let (blocked, blockedEnv) = try failedFirstPreparation()
+    try write("game's", to: blocked.context.prefix.appending(path: "drive_c/users/steamuser/AppData/Local/G/.macneutron-carry/x"))
+    try blocked.prepare(environment: blockedEnv)
+    #expect(newPrefixFile(blocked, "steamuser/AppData/Local/G/s.sav") == nil)
+    #expect(newPrefixFile(blocked, "steamuser/AppData/Local/G/.macneutron-carry/x") == "game's")
+    #expect(launcherLog(blocked).contains("note: carried the player's data from pfx.rosetta: 0 files, 3 registry keys, 1 not carried\n"))
+}
+
+@Test func aPendingRecordThatCantBecomeTheMarkerIsRemoved() throws {
+    // Task FR2: the pending record outliving its carry would carry that prefix again into a live one (an arm64
+    // re-preparation stopped and retried); the marker is never read, so a failed rename unlinks the record.
+    let (manager, env) = try makeCarryManager(winebootMakingUser())
+    try rosettaPrefix(manager, files: ["AppData/Local/G/s.sav"])
+    try write("", to: manager.context.dataPath.appending(path: "player-data-carried/x"))
+    try manager.prepare(environment: env)
+    #expect(launcherLog(manager).contains("note: carried the player's data from pfx.rosetta: 1 files, 3 registry keys\n"))
+    #expect(!FileManager.default.fileExists(atPath: manager.context.dataPath.appending(path: "player-data-pending")
+        .path(percentEncoded: false)))
 }
 
 @Test func severalOldUsersAllGoToTheOneWineReads() throws {
-    // Task FR (#8): wineboot makes one user (named after $USER); every old user's files go there, the first user (by
-    // name) winning a file both have.
+    // Task FR (#8): wineboot makes one user (named after $USER); every old user's files go there. Task FR2: the old
+    // user of that name (the one Wine read) wins a file others have, then the first by name.
     let (manager, env) = try makeCarryManager(winebootMakingUser("player"))
     try rosettaPrefix(manager, user: "steamuser", files: ["AppData/Local/G/both.sav", "AppData/Local/G/steam.sav"])
     try rosettaPrefix(manager, user: "macuser", files: ["AppData/Local/G/both.sav", "Saved Games/G/mac.sav"])
+    try rosettaPrefix(manager, user: "player", files: ["AppData/Local/G/live.sav"])
+    try rosettaPrefix(manager, user: "aaa", files: ["AppData/Local/G/live.sav"])
     try write("macuser's", to: manager.context.prefix.appending(path: "drive_c/users/macuser/AppData/Local/G/both.sav"))
+    try write("player's", to: manager.context.prefix.appending(path: "drive_c/users/player/AppData/Local/G/live.sav"))
     try manager.prepare(environment: env)
+    #expect(newPrefixFile(manager, "player/AppData/Local/G/live.sav") == "player's")
     #expect(newPrefixFile(manager, "player/AppData/Local/G/both.sav") == "macuser's")
     #expect(newPrefixFile(manager, "player/AppData/Local/G/steam.sav") == "AppData/Local/G/steam.sav")
     #expect(newPrefixFile(manager, "player/Saved Games/G/mac.sav") == "Saved Games/G/mac.sav")

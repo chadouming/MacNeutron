@@ -806,7 +806,8 @@ expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WOR
 # for a synced one an air.wg.barrier), the device and texture ones at device scope whether or not they sync the group
 # (a barrier's memory flags only order within the group). dxil/barriers.hlsl's modes 8, 9, 2, 3, 10, 11:
 # air.atomic.fence flags:scope 2:1 (8), 5:3 (2 and 3), 7:3 (10 and 11), and 3 air.wg.barrier calls (9, 3, 11). The
-# runtime group can't tell (each fence is followed by a synced barrier). DXBC's (D3D11) the same, from dxbc/sync.hlsl.
+# runtime group can't tell (each fence is followed by a synced barrier). DXBC's (D3D11) the same, from dxbc/sync.hlsl,
+# at Metal 3.1 as the tool translates; the 3.2 path D3D11 takes on this hardware is covered only by the runtime groups.
 expect "DXIL barriers fence memory, at device scope for device memory" \
   "$(grep '^ok barriers\.dxil ' "$WORK/translate.txt" | grep -oE 'fence=[^ ]+ barrier=[0-9]+' || echo none)" \
   "fence=2:1,5:3,5:3,7:3,7:3 barrier=3"
@@ -1005,12 +1006,14 @@ LANE=A; P="$WORK/compat/ours-A/dxmt-pipelines"  # lane A's prefix: its d3d12_cac
 expect "the launcher records into the game's compat folder" "$([ -s "$P/d3d12_cache.exe.pipelines" ] && echo yes || echo no)" yes
 expect "and stamps the builds after the first session" "$(cut -d ' ' -f 1 "$P/replayed" 2> /dev/null)" "${V:-no DXMT/translator}"
 echo "old build" > "$P/replayed"
-LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; before=$(cat "$LLOG" 2> /dev/null | wc -l)
+# The launcher log's lines since the run's start, by their UTC second (after a 1 s wait no earlier line shares it),
+# from launcher.log.1 too: the log rotates at 1 MB, which may come mid-row.
+LLOG="$HOME/Library/Logs/MacNeutron/launcher.log"; sleep 1; since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 CACHE="$WORK/cache/e2e"
 cachetest e2e a
 unset CACHE
 expect "a changed build replays d3d12_cache's recording before the game" \
-  "$(tail -n +$((before + 1)) "$LLOG" | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
+  "$(cat "$LLOG.1" "$LLOG" 2> /dev/null | awk -v s="$since" '$1 >= s' | grep -cE 'precache: d3d12_cache\.exe\.pipelines exit=0 replay: [1-9][0-9]* pipelines .*, 0 failed, 0 bad records' || true)" 1
 expect "then the game only hits" "$(counters e2e)" "d3d12 shader cache: functions 3 hit 0 missed, reflections 3 hit 0 missed"
 expect "and draws as D3DMetal" "$(drawn e2e)" "$(drawn cache-ref-a)"
 expect "and the stamp holds the current builds" "$(cut -d ' ' -f 1 "$P/replayed")" "${V:-no DXMT/translator}"

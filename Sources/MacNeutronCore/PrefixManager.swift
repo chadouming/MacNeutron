@@ -41,7 +41,8 @@ public struct PrefixManager: Sendable {
     /// Written before wineboot, so a failed or stopped preparation is retried in place, never renamed.
     static let preparingStamp = "wine.app preparing"
     /// In the compat folder: the renamed prefix whose data is still to be carried, written before the rename, so a
-    /// launch stopped anywhere after it carries on the next one. After the carry it becomes `carriedMarker`.
+    /// launch stopped anywhere after it carries on the next one. After the carry it becomes `carriedMarker` (or is
+    /// removed).
     static let pendingRecord = "player-data-pending"
     /// The last carry's record (its prefix's name); nothing reads it.
     static let carriedMarker = "player-data-carried"
@@ -139,9 +140,12 @@ public struct PrefixManager: Sendable {
                                        to: context.prefix)
         log.append("note: carried the player's data from \(name): \(carried.files) files, \(carried.keys) registry keys"
                    + (carried.failed > 0 ? ", \(carried.failed) not carried" : ""))
-        // ponytail: if the rename fails, a later retry carries again, which never overwrites.
-        _ = rename(context.dataPath.appending(path: Self.pendingRecord).path(percentEncoded: false),
-                   context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false))
+        // A pending record left behind would carry this prefix again into a live one (a re-preparation stopped and
+        // retried); the marker is never read, so if it can't be renamed it goes.
+        let pending = context.dataPath.appending(path: Self.pendingRecord).path(percentEncoded: false)
+        if rename(pending, context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false)) != 0 {
+            unlink(pending)
+        }
     }
 
     /// Every launch: prefixes made before the bridge existed get it too, and a runtime update replaces it.
