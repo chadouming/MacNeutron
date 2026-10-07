@@ -443,7 +443,8 @@ XeSS Balanced, borderless 1728x1117). Each run: wait for the lobby's `LoadMap`, 
 leftover pids after any run). Every run had `DXMT_STATS=1`; from `base2` on its report was saved under `DXMT_DXIL_DUMP`
 (`base1`/`blits1` had no dump folder, so no report).
 Frame period and GPU busy are `gpu-trace.py`'s medians (p90 from the same per-frame lists); FPS is `dxmt/tools/fps.py`
-from 20 s after the lobby's `LoadMap` (its window includes the trace); the upscale is `--label MetalFX_Temporal`.
+from 20 s after the lobby's `LoadMap` for 60 s (it includes the trace, except for `bounds`, whose trace ran ~150 s after
+the lobby); the upscale is `--label MetalFX_Temporal`.
 
 **Uncapping the lobby.** The fresh `.sav` has no `LobbyMaxFPS` entry, so the game applies its 60 FPS lobby cap. The
 maintainer's old `.sav` (sp5/perf's `compat-x`) stores `LobbyMaxFPS` = `"0"` (version 1). The runs after `blits1`
@@ -467,8 +468,9 @@ map's size and count adjusted; nothing else changed); the game loaded it and ran
   timestamps their own encoder per frame (≈80 "several waiting", 16 "end of call", 4.7 "next encoder takes none")
   against 2.0 by default. It costs 0.45-0.47 ms of frame period (14.58-14.59 → 15.03-15.05), 0.15 ms of GPU busy and
   0.22-0.25 ms more GPU idle between encoders; 1.5 FPS by fps.py. The two default runs agree within 0.01 ms, as do
-  the two blits runs. The capped pair isn't a measure of either: at the cap the GPU clocks down, and `blits1`'s window
-  wasn't frontmost at the trace.
+  the two blits runs; the GPU's clock state isn't controlled, though (the counter run below, same default settings,
+  was 1.1 ms faster), so the 0.45 ms holds for this state and the sign for all. The capped pair isn't a measure of
+  either (frame time is the cap's), and `blits1`'s window wasn't frontmost at the trace.
 - **The split is still not needed (Task 4 doesn't run).** At 1728x1117 the upscale is 0.85-0.95 ms; at the 2560x1440
   arm (inferred output) it is 1.76 ms (p90 1.93), under the ≤ 5 ms criterion, and the GPU idle just before and just
   after it is 0.00 ms (p90 0.00) in every run with the upscale. The Retina arms' window and output size is the ini
@@ -483,14 +485,16 @@ map's size and count adjusted; nothing else changed); the game loaded it and ran
 - **XeSS Balanced vs native TAA at 2560x1440 (lobby; ini size, output inferred above):** 17.76 against 26.45 ms frame
   period, 16.56 against 24.86 ms GPU busy: XeSS through the bridge takes 8.7 ms off the lobby frame (55.9 against 36.6
   FPS). The TAA arm drops the `.sav`'s `XeSS` entry (both maps); no `MetalFX_Temporal` interval ran and DXMT counted
-  no temporal upscale. Its 36.6 FPS matches sp5's `p8` 2560x1440 TAA lobby (~36 FPS, gframe/synthesis.md). This is a
+  no temporal upscale. Its 26.45/24.86 ms match sp5's `p8` 2560x1440 TAA lobby (26.17 p10 / 25.23 ms busy, resfps/bound.md:39). This is a
   lobby number: gframe's ≈ −2 ms estimate is for a match frame, which this session didn't measure.
 - **Bounds checks: no-go for the `texture_buffer` form (gate 2).** `DXMT_DXIL_BOUNDS=off` keys its own shader cache
-  (`d3d12_shader_cache.cpp`), so it compiled afresh: its first stats report ran 8.4 FPS, and FPS was steady at 67-70 for
-  the last 40 s before the trace (150 s after the lobby). Frame
+  (`d3d12_shader_cache.cpp`), so it compiled afresh: its first stats report ran 8.4 FPS, and FPS was mostly 67-70 (one
+  61.7 report) for the last 40 s before the trace (150 s after the lobby; fps.py's 68.52 covers +20-80 s, the compile
+  settling). Frame
   14.54 ms and GPU busy 13.77 ms against 14.58-14.59 and 13.75-13.76 for the default; the Vertex channel is 8.0 % of
-  the window (≈1.16 ms a frame) against 7.8-7.9 % (≈1.14-1.15 ms): no gain within ±0.03 ms, far below the 0.15 ms
-  threshold. This is the lobby, not the m3/E7 match spot gate 2 names.
+  the window (≈1.16 ms a frame) against 7.8-7.9 % (≈1.14-1.15 ms): GPU busy and Vertex within ±0.03 ms (frame
+  0.04-0.05 ms), far below the 0.15 ms threshold. This is the lobby, not the m3/E7 match spot gate 2 names; Ruling 35
+  closes gate 2 on it (the static estimate, ≤ 0.1 ms, agrees).
 - **GPU counters (gate 1): not obtained.** A run with `--instrument 'Metal GPU Counters'` added to the Metal System
   Trace template (`--attach`) recorded the `gpu-counter-info` and `gpu-counter-value` tables with no rows. Its frame was
   13.50 ms (GPU busy 12.78 ms, upscale 0.78 ms), faster than the default runs, which isn't explained. Gate 1 stays open.
