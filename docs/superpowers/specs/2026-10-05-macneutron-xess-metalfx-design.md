@@ -94,7 +94,9 @@ instead of ~250.
   without encoding anything, logged once to the game log. Never a crash. Init checks the device and the scale range;
   the upscaler itself is made at the first Execute, from the formats the game really passes (amended 2026-10-06:
   Unreal's Init can't tell the bridge its formats, so an Init-time upscaler was a wasted ~230 MB). A failed creation
-  fails each Execute, logged once, instead of Init.
+  fails each Execute, logged once, instead of Init. The calls the bridge doesn't implement (the exposure-multiplier and
+  responsive-mask getters and setters) return `XESS_RESULT_ERROR_NOT_IMPLEMENTED` on a live context and write nothing
+  (Ruling 34, amended 2026-10-07: PreExposure stays literal, so a stored multiplier would claim an effect it lacks).
 - History lives per context; it resets when the game passes reset or the size changes.
 - One upscaler per context (~220-290 MB at 1440p).
 - **The 2.2 ms wait:** the upscale is encoded inline first (ordering first). Measured in SMITE 2 with a Metal System

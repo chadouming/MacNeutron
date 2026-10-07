@@ -807,7 +807,8 @@ expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WOR
 # (a barrier's memory flags only order within the group). dxil/barriers.hlsl's modes 8, 9, 2, 3, 10, 11:
 # air.atomic.fence flags:scope 2:1 (8), 5:3 (2 and 3), 7:3 (10 and 11), and 3 air.wg.barrier calls (9, 3, 11). The
 # runtime group can't tell (each fence is followed by a synced barrier). DXBC's (D3D11) the same, from dxbc/sync.hlsl,
-# at Metal 3.1 as the tool translates; the 3.2 path D3D11 takes on this hardware is covered only by the runtime groups.
+# at Metal 3.1 as the tool translates. No row runs the 3.2 path D3D11 takes on this hardware (dxbc_converter_base.cpp's
+# metal_version >= 3.2 branch): the runtime groups are DXIL only. ponytail: a D3D11 compute row of sync.hlsl vs D3DMetal.
 expect "DXIL barriers fence memory, at device scope for device memory" \
   "$(grep '^ok barriers\.dxil ' "$WORK/translate.txt" | grep -oE 'fence=[^ ]+ barrier=[0-9]+' || echo none)" \
   "fence=2:1,5:3,5:3,7:3,7:3 barrier=3"
