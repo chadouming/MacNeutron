@@ -794,8 +794,14 @@ fi
 run ref d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0
 expect "the frozen D3DMetal reference still runs" "$(grep -c 'avg frame' "$WORK/d3dmetal.txt" || true)" 1
 # 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
-"$TOOLS/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
+"$TOOLS/dxil-translate" "$ROOT/dxmt/tests/dxil" --flags > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "13/14"
+# Task F2: a DXIL barrier that doesn't sync the group (modes 8, 2, 10 in dxil/barriers.hlsl) still fences memory, as
+# Metal Shader Converter does: air.atomic.fence flags:scope 2:1, 5:3, 7:3; the synced modes after them stay 3
+# air.wg.barrier calls (Metal 3.1). The runtime group can't tell (each fence is followed by a synced barrier).
+expect "DXIL barriers that don't sync the group fence memory" \
+  "$(grep '^ok barriers\.dxil ' "$WORK/translate.txt" | grep -oE 'fence=[^ ]+ barrier=[0-9]+' || echo none)" \
+  "fence=2:1,5:3,7:3 barrier=3"
 "$TOOLS/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
 expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "32/32"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry

@@ -516,7 +516,9 @@ shader cache rebuilds once.
 - 0024: DXIL barriers without the sync bit (GroupMemoryBarrier 8, AllMemoryBarrier 10, DeviceMemoryBarrier 2)
   emit `air.atomic.fence` (they emitted nothing below Metal 3.2; mode 8 nothing at all). Offline: `dxil/barriers.hlsl`
   0 → 3 fences, SMITE 2's compute shader with 12 mode-8 barriers 0 → 12. The group matches D3DMetal (a guard: the
-  results can't depend on a fence alone).
+  results can't depend on a fence alone), so the fences have a row of their own: `dxil-translate --flags` now lists
+  each `air.atomic.fence` (flags:scope) and counts `air.wg.barrier`, and dxmt-check wants `fence=2:1,5:3,7:3
+  barrier=3` for `barriers.dxil` (RED against airconv at 0023: `fence=- barrier=3`).
 - 0025: `DXMT_DXIL_BOUNDS=off` (measurement only) drops the typed `Buffer<>` read checks and the raw and structured
   ones; the shader cache keys it apart. `bounds` with it reads past views (`5 6 7 8 19 20 21 22 21 22 23 24 20 21 0 0
   13 14 15 16 17 18 19 20 20 19 20 0 1 2 3 4`, every read inside the test's buffer) and inside them as without it;

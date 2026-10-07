@@ -3,7 +3,8 @@
 // render pipeline with a pass-through vertex function; geometry: a mesh pipeline with a vertex shader from the folder
 // whose outputs cover its inputs (geometry shaders are translated last). The root signature comes from the shaders'
 // own resources. With --flags, each result line also counts the fast-math flags left in the translated AIR
-// (nnan, ninf, fast compares; reassoc, contract, arcp), for checking what the translator keeps.
+// (nnan, ninf, fast compares; reassoc, contract, arcp), for checking what the translator keeps, after its memory
+// fences (each air.atomic.fence's flags:scope, in order) and its air.wg.barrier count.
 #import <Metal/Metal.h>
 #define BOOL WIN_BOOL // airconv's Windows headers define BOOL as int; Objective-C's is signed char
 #include "airconv_public.h"
@@ -64,7 +65,8 @@ std::vector<uint32_t> RootSignature(const std::vector<Resource> &resources) {
 }
 
 struct Flags {
-  unsigned nnan = 0, ninf = 0, cmp = 0, reassoc = 0, contract = 0, arcp = 0;
+  unsigned nnan = 0, ninf = 0, cmp = 0, reassoc = 0, contract = 0, arcp = 0, barriers = 0;
+  std::string fences; // "flags:scope" of each air.atomic.fence, comma-separated
 };
 
 struct Result {
@@ -92,7 +94,17 @@ void CountFlags(const void *data, size_t size, Flags &flags) {
   }
   for (auto &function : **module)
     for (auto &block : function)
-      for (auto &inst : block)
+      for (auto &inst : block) {
+        if (auto call = llvm::dyn_cast<llvm::CallInst>(&inst); call && call->getCalledFunction()) {
+          auto name = call->getCalledFunction()->getName();
+          auto arg = [&](unsigned i) {
+            auto c = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(i));
+            return c ? std::to_string(c->getZExtValue()) : std::string("?");
+          };
+          if (name == "air.atomic.fence")
+            flags.fences += (flags.fences.empty() ? "" : ",") + arg(0) + ":" + arg(2);
+          flags.barriers += name == "air.wg.barrier";
+        }
         if (llvm::isa<llvm::FPMathOperator>(&inst)) {
           auto f = inst.getFastMathFlags();
           flags.nnan += f.noNaNs();
@@ -102,6 +114,7 @@ void CountFlags(const void *data, size_t size, Flags &flags) {
           flags.contract += f.allowContract();
           flags.arcp += f.allowReciprocal();
         }
+      }
 }
 
 // A vertex shader seen in the folder, for pairing with geometry shaders: its bytecode and output semantics.
@@ -362,7 +375,8 @@ int main(int argc, char **argv) {
       if (ms > slowest_ms)
         slowest_ms = ms, slowest = name;
       if (count_flags)
-        printf("ok %s %s %.1f nnan=%u ninf=%u cmp=%u reassoc=%u contract=%u arcp=%u\n", name.c_str(), r.stage, ms,
+        printf("ok %s %s %.1f fence=%s barrier=%u nnan=%u ninf=%u cmp=%u reassoc=%u contract=%u arcp=%u\n",
+               name.c_str(), r.stage, ms, r.flags.fences.empty() ? "-" : r.flags.fences.c_str(), r.flags.barriers,
                r.flags.nnan, r.flags.ninf, r.flags.cmp, r.flags.reassoc, r.flags.contract, r.flags.arcp);
       else
         printf("ok %s %s %.1f\n", name.c_str(), r.stage, ms);
