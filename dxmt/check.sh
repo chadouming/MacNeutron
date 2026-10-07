@@ -268,7 +268,7 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
   "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
-  "merge-indirect 10" "placed-uav 1048576")
+  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -292,6 +292,14 @@ run ours hazards-validation dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "and under Metal validation" "$(hazards hazards-validation)" "$want"
 expect "which rejects nothing (nodraw's only draw has no instances)" "$(invalid hazards-validation)" 0
+# A texture placed in a heap holds it (DXMT 0011): the app's release of the heap (Release still answers 0, as on
+# D3DMetal) destroys nothing while the texture lives, so the heap stays resident.
+rm -rf "$WORK/heap-stats"; export DXMT_DXIL_DUMP="$WORK/heap-stats" DXMT_STATS=1
+run ours heap-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" heap-released
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "a heap released while a texture placed in it lives stays" \
+  "$(grep -c '^  heaps destroyed ' "$WORK/heap-stats/stats.txt" 2> /dev/null || true):$(hazards heap-stats)" \
+  "0:hazard heap-released 0 257"
 # Overlap happens when asked for (GPU overlap spec §3.8): with DXMT_D3D12_OVERLAP=1, passes into different targets
 # with no barrier between them leave their boundaries free to overlap; by default (strict order) none is, and every
 # encoder joins.
@@ -398,6 +406,8 @@ LANE=C
 # 2. A D3D12 program presents through our d3d12.dll (D3DMetal would report shader model 6.x).
 run ours clear dxmt "$TESTS/d3d12_clear.exe" 300
 expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' "$WORK/clear.txt" || true)" 1
+expect "ResizeBuffers keeps the swapchain flags it's given (0: those it had)" \
+  "$(grep '^resize flags' "$WORK/clear.txt" || echo none)" "resize flags 0x2 0x2"
 # DXMT_DUMP_FRAMES=<n>: a pass dump takes n consecutive frames (a one-frame glitch is hard to catch with one F9).
 rm -rf "$WORK/clear-dump"; export DXMT_DXIL_DUMP="$WORK/clear-dump" DXMT_DUMP_FRAME=5 DXMT_DUMP_FRAMES=3
 run ours clear-dump dxmt "$TESTS/d3d12_clear.exe" 20
@@ -562,6 +572,9 @@ same_lines() {  # same_lines <prefix>: d3d12_api's lines starting with <prefix> 
   [ -n "$a" ] && [ "$a" = "$b" ] && echo yes || echo "no: ours [$a] D3DMetal [$b]"
 }
 for s in markers cachedblob nulldsv list1 heap1 residency multifence feature library; do expect "d3d12_api $s answers as D3DMetal" "$(same_lines $s)" yes; done
+# D3D12 refuses Map where the CPU can't see the heap (D3DMetal maps a CUSTOM heap with no CPU pages anyway).
+expect "Map refuses a buffer in a heap the CPU can't see" "$(grep '^map ' "$WORK/api-ours.txt" || echo none)" \
+  "map custom-na 80070057 0 default 80070057 0 upload 00000000 1"
 expect "our DXMT claims no raytracing, mesh shaders, VRS or sampler feedback" \
   "$(grep '^caps ' "$WORK/api-ours.txt" || true)" "caps rt=0 mesh=0 vrs=0 sfb=0"
 # Batch 2: copies between formats D3D12 lets reinterpret.
@@ -636,38 +649,39 @@ expect "and on D3DMetal" "$(grep '^indirect dispatch' "$WORK/indirect-ref.txt" |
 # E10: draw signatures that set nothing but the draw: vertices fetched from StartVertexLocation (or index plus
 # BaseVertexLocation), instances from StartInstanceLocation, ByteStride and the argument and index buffer offsets kept,
 # an instance count of 0 drawing nothing, a count buffer capping the call, and an index buffer placed where a released
-# buffer was.
+# buffer was. Then vertex buffer views as arguments, for slot 2 of a pipeline using slots 0 and 2 (DXMT 0010).
 native=$(printf 'indirect %s\n' "native-draw 2,0:107 3,0:100 4,0:100 2,1:108" "counted 2,0:107 2,1:108" \
   "native-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108" \
-  "aliased-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108")
+  "aliased-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108" "vbv-gap 2,0:107 3,0:300 2,1:108")
 expect "indirect draws read from the argument buffer draw what D3D12 says" \
-  "$(grep -E '^indirect (native|counted|aliased)' "$WORK/indirect-ours.txt" || echo none)" "$native"
-expect "and on D3DMetal" "$(grep -E '^indirect (native|counted|aliased)' "$WORK/indirect-ref.txt" || echo 'D3DMetal printed nothing')" "$native"
+  "$(grep -E '^indirect (native|counted|aliased|vbv)' "$WORK/indirect-ours.txt" || echo none)" "$native"
+expect "and on D3DMetal" "$(grep -E '^indirect (native|counted|aliased|vbv)' "$WORK/indirect-ref.txt" || echo 'D3DMetal printed nothing')" "$native"
 export DXMT_D3D12_INDIRECT=icb
 indirect indirect-icb dxmt
 unset DXMT_D3D12_INDIRECT
-expect "and with DXMT_D3D12_INDIRECT=icb" "$(grep -E '^indirect (ok|native|counted|aliased)' "$WORK/indirect-icb.txt" || echo none)" \
+expect "and with DXMT_D3D12_INDIRECT=icb" "$(grep -E '^indirect (ok|native|counted|aliased|vbv)' "$WORK/indirect-icb.txt" || echo none)" \
   "$(printf 'indirect ok 8 0\n%s' "$native")"
 # DXMT_STATS: every D3D12 call counted and timed per thread, encoder boundaries with and without a barrier, written to
 # <capture folder>/stats.txt (at exit when nothing presents).
 rm -rf "$WORK/stats"; export DXMT_DXIL_DUMP="$WORK/stats" DXMT_STATS=1
 indirect indirect-stats dxmt
 unset DXMT_DXIL_DUMP DXMT_STATS
-expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16388 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
+expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16389 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 expect "and every encoder boundary, barrier or not" \
   "$(grep -cE '^  encoder boundaries [1-9][0-9]*, [0-9]+ with no barrier$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 # E10: the 8192 single draws and the three uncounted calls draw from the argument buffer, with no indirect command buffer
-# nor resolver pass; the dispatches' (1024 a frame) and the counted call's are reused once their allocator is reset.
+# nor resolver pass; the dispatches' (1024 a frame), the counted call's and the vertex buffer views' (a resolver pass
+# each) are reused once their allocator is reset.
 # With DXMT_D3D12_INDIRECT=icb, every draw call's render pass resolves its commands in one compute pass before it.
 expect "uncounted indirect draws read the argument buffer, with no indirect command buffer" \
   "$(grep -oE '(ExecuteIndirect native|indirect command buffers created|indirect resolve passes) [0-9]+' "$WORK/stats/stats.txt" 2> /dev/null | sort | tr '\n' ';')" \
-  "ExecuteIndirect native 8195;indirect command buffers created 1025;indirect resolve passes 1;"
+  "ExecuteIndirect native 8195;indirect command buffers created 1026;indirect resolve passes 2;"
 rm -rf "$WORK/stats-icb"; export DXMT_DXIL_DUMP="$WORK/stats-icb" DXMT_STATS=1 DXMT_D3D12_INDIRECT=icb
 indirect indirect-stats-icb dxmt
 unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_INDIRECT
 expect "and with DXMT_D3D12_INDIRECT=icb, one resolver pass per render pass" \
   "$(grep -oE '(ExecuteIndirect native|indirect resolve passes) [0-9]+' "$WORK/stats-icb/stats.txt" 2> /dev/null | tr '\n' ';')" \
-  "indirect resolve passes 12;"
+  "indirect resolve passes 13;"
 # GPU timestamps by D3D12's rules (D3DMetal has none), and a timestamp between draws never splits their pass.
 rm -rf "$WORK/ts"; export DXMT_DXIL_DUMP="$WORK/ts" DXMT_DUMP_FRAME=0
 run ours ts-ours dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
@@ -756,35 +770,51 @@ for m in depthstencil rtoutput compute typeless typeless32 typeless10 bad; do
   expect "DXMT upscales $m" "$(upscaled "upscale-$m" "$m")" yes
 done
 # GPU-only heaps and the textures on them are Private (DXMT 0009), and a 2D UAV Metal can render to gets RenderTarget
-# usage: MetalFX writes a UAV-only output directly, committed or placed in a DEFAULT heap (DXMT_STATS counts the outputs
-# written to a scratch texture and copied instead); with DXMT_D3D12_PRIVATE=0 (all Shared) it's copied.
-copied() { awk '/^  upscale output copied /{n += $4} END {print n + 0}' "$WORK/$1/stats.txt" 2> /dev/null || echo none; }
-for r in direct:direct placed:placed shared:direct; do
+# usage: MetalFX writes a UAV-only output directly, committed, placed in a DEFAULT heap, or at an offset in a larger one
+# (XeSS's outputColorBase), as well as through a scratch texture and a copy (DXMT_STATS counts the outputs copied), which
+# it does with DXMT_D3D12_PRIVATE=0 (all Shared): the same PSNR within 0.05 dB. An input MetalFX can't read as it is
+# (a depth/stencil depth) is copied first; readable ones aren't.
+copied() { awk "/^  upscale ${2:-output} copied /{n += \$4} END {print n + 0}" "$WORK/$1/stats.txt" 2> /dev/null || echo none; }
+psnr() { awk '/^upscale .* ok psnr /{print $5}' "$WORK/$1.txt" 2> /dev/null; }
+near() {  # near <run> <run>: both upscaled, their PSNRs within 0.05 dB
+  awk -v a="$(psnr "$1")" -v b="$(psnr "$2")" \
+    'BEGIN { d = a - b; print (a != "" && b != "" && d <= 0.05 + 1e-9 && -d <= 0.05 + 1e-9) ? "yes" : "no: " a " vs " b }'
+}
+for r in direct:direct placed:placed shared:direct offset:direct-offset shared-offset:direct-offset ds:depthstencil; do
   n=${r%:*} m=${r#*:}
   rm -rf "$WORK/upscale-$n-stats"; export DXMT_DXIL_DUMP="$WORK/upscale-$n-stats" DXMT_STATS=1
-  if [ $n = shared ]; then export DXMT_D3D12_PRIVATE=0; fi
+  case $n in shared*) export DXMT_D3D12_PRIVATE=0 ;; esac
   run ours "upscale-$n" dxmt "$TESTS/d3d12_upscale.exe" "$m"
   unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_PRIVATE
 done
-expect "MetalFX writes a private UAV output directly" "$(upscaled upscale-direct direct):$(copied upscale-direct-stats)" yes:0
-expect "and one placed in a DEFAULT heap" "$(upscaled upscale-placed placed):$(copied upscale-placed-stats)" yes:0
+expect "MetalFX writes a private UAV output directly" "$(near upscale-direct upscale-shared):$(copied upscale-direct-stats)" yes:0
+expect "and one placed in a DEFAULT heap" "$(near upscale-placed upscale-shared):$(copied upscale-placed-stats)" yes:0
 expect "and copies it with DXMT_D3D12_PRIVATE=0" \
   "$(upscaled upscale-shared direct):$(copied upscale-shared-stats | sed 's/^[1-9][0-9]*$/some/')" yes:some
+expect "and writes at an offset in a larger output, directly or through the copy" \
+  "$(near upscale-offset upscale-shared-offset):$(copied upscale-offset-stats):$(copied upscale-shared-offset-stats | sed 's/^[1-9][0-9]*$/some/')" \
+  yes:0:some
+expect "a depth/stencil depth is copied for MetalFX, readable inputs aren't" \
+  "$(upscaled upscale-ds depthstencil):$(copied upscale-ds-stats input | sed 's/^[1-9][0-9]*$/some/'):$(copied upscale-direct-stats input)" \
+  yes:some:0
 run ours upscale-range dxmt "$TESTS/d3d12_upscale.exe" range
 expect "the device reports MetalFX's scale range" "$(grep '^range ' "$WORK/upscale-range.txt" || echo none)" "range 1.000 3.000"
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
 run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute typeless32 typeless10 bad direct placed
+run ours upscale-valo dxmt "$TESTS/d3d12_upscale.exe" direct-offset # apart: 9 modes take ~60 s alone (the watchdog)
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in the upscale" \
   "$(invalid upscale-val):$(grep -c '^upscale [a-z0-9]* ok' "$WORK/upscale-val.txt" || true)" "0:8"
+expect "nor at an output offset" "$(invalid upscale-valo):$(grep -c '^upscale direct-offset ok' "$WORK/upscale-valo.txt" || true)" "0:1"
 # XeSS answered by MetalFX (spec §4.2, §7): Wine's builtin libxess.dll driven through XeSS's API. d3d12_xess loads it
 # by full path, the game's way, from a copy of itself named libxess.dll: only the launcher's libxess=b makes that the
 # builtin. Every quality mode at its input size beats bilinear; a re-initialised context, one destroyed before its list
 # runs, 20 more made and destroyed (DXMT reuses their upscaler), A -> B -> A, a history reset, and 5 settings in turn
 # beside a live context (DXMT keeps 4 released); dynamic resolution keeping the upscaler and a new motion vector
 # format replacing it; Init's flags, with real frames for the ones that change what the inputs mean and for Unreal's
-# call (no depth texture), and the version calls; Unreal's call on a COMPUTE list and with inverted depth; "unsupported"
-# under wined3d. A failing mode's FAIL line shows.
+# call (no depth texture), and the version calls; Unreal's call on a COMPUTE list and with inverted depth, the bridge's
+# own depth read back at the far plane (1.0, inverted 0.0); "unsupported" under wined3d. A failing mode's FAIL line
+# shows.
 mkdir -p "$WORK/xess" && cp "$TESTS/d3d12_xess.exe" "$WORK/xess/libxess.dll"
 xessed() {
   grep -q "^xess $2 ok" "$WORK/$1.txt" && echo yes ||

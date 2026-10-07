@@ -5,7 +5,8 @@
 // indirect dispatches of 1 to 4 groups whose threads count themselves (as Niagara's GPU simulation). Prints "indirect ok <frames> <cells left unpainted over all frames>" and
 // "indirect dispatch <threads counted> <threads dispatched>".
 // With vsid and psid, also the cells (x,y:tag) that ExecuteIndirect calls paint on a 32x8 target (Draws below):
-// "indirect native-draw", "indirect counted", "indirect native-indexed" and "indirect aliased-indexed".
+// "indirect native-draw", "indirect counted", "indirect native-indexed", "indirect aliased-indexed" and
+// "indirect vbv-gap".
 #include "d3d12_common.hpp"
 #include <string>
 
@@ -13,25 +14,30 @@
 // ExecuteIndirect and prints the painted cells: vertex v (its index in a per-vertex stream of 0, 1, 2...) of instance i
 // paints cell (v / 3, i) with the instance's tag, 100 + its index in the per-instance stream.
 static void Draws(Gpu &gpu, ID3D12RootSignature *root, const std::vector<char> &vs, const std::vector<char> &ps) {
-    D3D12_INPUT_ELEMENT_DESC streams[2] = {
-        {"VERT", 0, DXGI_FORMAT_R32_UINT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"TAG", 0, DXGI_FORMAT_R32_UINT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1}};
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC gd = {};
-    gd.pRootSignature = root;
-    gd.VS = {vs.data(), vs.size()};
-    gd.PS = {ps.data(), ps.size()};
-    gd.InputLayout = {streams, 2};
-    gd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    gd.SampleMask = UINT_MAX;
-    gd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    gd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    gd.RasterizerState.DepthClipEnable = TRUE;
-    gd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    gd.NumRenderTargets = 1;
-    gd.RTVFormats[0] = DXGI_FORMAT_R32_UINT;
-    gd.SampleDesc.Count = 1;
-    ID3D12PipelineState *pso;
-    CHECK(gpu.device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&pso));
+    // The pipeline, its tags in IA slot `tag_slot`.
+    auto pipeline = [&](UINT tag_slot) {
+        D3D12_INPUT_ELEMENT_DESC streams[2] = {
+            {"VERT", 0, DXGI_FORMAT_R32_UINT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"TAG", 0, DXGI_FORMAT_R32_UINT, tag_slot, 0, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1}};
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC gd = {};
+        gd.pRootSignature = root;
+        gd.VS = {vs.data(), vs.size()};
+        gd.PS = {ps.data(), ps.size()};
+        gd.InputLayout = {streams, 2};
+        gd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        gd.SampleMask = UINT_MAX;
+        gd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        gd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        gd.RasterizerState.DepthClipEnable = TRUE;
+        gd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        gd.NumRenderTargets = 1;
+        gd.RTVFormats[0] = DXGI_FORMAT_R32_UINT;
+        gd.SampleDesc.Count = 1;
+        ID3D12PipelineState *pso;
+        CHECK(gpu.device->CreateGraphicsPipelineState(&gd, __uuidof(ID3D12PipelineState), (void **)&pso));
+        return pso;
+    };
+    ID3D12PipelineState *pso = pipeline(1);
     auto signature = [&](D3D12_INDIRECT_ARGUMENT_TYPE type, UINT stride) {
         D3D12_INDIRECT_ARGUMENT_DESC arg = {type};
         D3D12_COMMAND_SIGNATURE_DESC sd = {stride, 1, &arg, 0};
@@ -147,6 +153,31 @@ static void Draws(Gpu &gpu, ID3D12RootSignature *root, const std::vector<char> &
         l->IASetIndexBuffer(&placed_ibv);
         first->Release();
         l->ExecuteIndirect(indexed, 4, indexed_args, 32, nullptr, 0);
+    });
+
+    // A vertex buffer argument for slot 2 of a layout using slots 0 and 2 (DXMT's shaders read a table of the used
+    // slots only), slot 2 bound to other tags (200 + index) beforehand: two records, each a view of slot 2 then a draw.
+    // 3 vertices from 6, 2 instances from 7 on the tags (cell 2, tags 107 108); 3 from 9, 1 instance from 0 on 300 +
+    // index (cell 3, tag 300).
+    ID3D12PipelineState *gap = pipeline(2);
+    UINT stale[16], later[16];
+    for (UINT i = 0; i < 16; i++) { stale[i] = 200 + i; later[i] = 300 + i; }
+    ID3D12Resource *stale_buffer = upload(stale, sizeof(stale)), *later_buffer = upload(later, sizeof(later));
+    D3D12_VERTEX_BUFFER_VIEW stale_vbv = {stale_buffer->GetGPUVirtualAddress(), sizeof(stale), 4};
+    D3D12_INDIRECT_ARGUMENT_DESC vb_draw[2] = {{D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW},
+                                               {D3D12_INDIRECT_ARGUMENT_TYPE_DRAW}};
+    vb_draw[0].VertexBuffer.Slot = 2;
+    D3D12_COMMAND_SIGNATURE_DESC vsd = {sizeof(D3D12_VERTEX_BUFFER_VIEW) + sizeof(D3D12_DRAW_ARGUMENTS), 2, vb_draw, 0};
+    ID3D12CommandSignature *vb_signature;
+    CHECK(gpu.device->CreateCommandSignature(&vsd, nullptr, __uuidof(ID3D12CommandSignature), (void **)&vb_signature));
+    struct { D3D12_VERTEX_BUFFER_VIEW view; D3D12_DRAW_ARGUMENTS draw; } vb_records[2] = {
+        {{tag_buffer->GetGPUVirtualAddress(), sizeof(tags), 4}, {3, 2, 6, 7}},
+        {{later_buffer->GetGPUVirtualAddress(), sizeof(later), 4}, {3, 1, 9, 0}}};
+    ID3D12Resource *vb_args = upload(vb_records, sizeof(vb_records));
+    run("vbv-gap", [&](ID3D12GraphicsCommandList *l) {
+        l->SetPipelineState(gap);
+        l->IASetVertexBuffers(2, 1, &stale_vbv);
+        l->ExecuteIndirect(vb_signature, 2, vb_args, 0, nullptr, 0);
     });
 }
 

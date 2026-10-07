@@ -82,6 +82,31 @@ static void Heap1() {
     printf("heap1 %08lx\n", (unsigned long)d4->CreateHeap1(&hd, nullptr, __uuidof(ID3D12Heap), (void **)&heap));
 }
 
+// Map on a buffer placed in a heap the CPU can't see (CUSTOM with no CPU pages, DEFAULT) fails; in an UPLOAD one it
+// maps. Each: the creation's or Map's result, and whether Map gave a pointer.
+static void MapGuard() {
+    auto placed = [](D3D12_HEAP_PROPERTIES props, D3D12_RESOURCE_STATES state, const char *name) {
+        D3D12_HEAP_DESC hd = {65536, props, 0, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS};
+        D3D12_RESOURCE_DESC bd = {D3D12_RESOURCE_DIMENSION_BUFFER, 0, 256, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                                  D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+        ID3D12Heap *heap = nullptr;
+        ID3D12Resource *b = nullptr;
+        void *p = nullptr;
+        HRESULT hr = gpu->device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap);
+        if (SUCCEEDED(hr))
+            hr = gpu->device->CreatePlacedResource(heap, 0, &bd, state, nullptr, __uuidof(ID3D12Resource), (void **)&b);
+        if (SUCCEEDED(hr))
+            hr = b->Map(0, nullptr, &p);
+        printf(" %s %08lx %d", name, (unsigned long)hr, p != nullptr);
+    };
+    D3D12_HEAP_PROPERTIES custom = {D3D12_HEAP_TYPE_CUSTOM, D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE, D3D12_MEMORY_POOL_L0};
+    printf("map");
+    placed(custom, D3D12_RESOURCE_STATE_COMMON, "custom-na");
+    placed({D3D12_HEAP_TYPE_DEFAULT}, D3D12_RESOURCE_STATE_COMMON, "default");
+    placed({D3D12_HEAP_TYPE_UPLOAD}, D3D12_RESOURCE_STATE_GENERIC_READ, "upload");
+    printf("\n");
+}
+
 static void Residency() {
     ID3D12Device1 *d1; ID3D12Device3 *d3;
     CHECK(gpu->device->QueryInterface(__uuidof(ID3D12Device1), (void **)&d1));
@@ -222,5 +247,6 @@ int main(int argc, char **argv) {
     if (Section("markers")) Markers();
     if (Section("cachedblob")) CachedBlob(root);
     if (Section("nulldsv")) NullDsv(root);
+    if (Section("map")) MapGuard();
     return 0;
 }

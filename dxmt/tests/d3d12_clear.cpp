@@ -1,7 +1,8 @@
 // Clears and presents N frames through Direct3D 12 (DXMT fork spec §6):
 //   d3d12_clear.exe [frames]
 // Prints the adapter, what Unreal Engine's SM6 check reads (shader model, binding tier, feature level, wave ops,
-// 64-bit atomics) and the average frame time.
+// 64-bit atomics) and the average frame time. Then "resize flags <flags> <flags>": the swapchain's flags after a
+// ResizeBuffers given ALLOW_MODE_SWITCH, then after one given 0.
 #define WIDL_EXPLICIT_AGGREGATE_RETURNS  // D3D12 methods that return structs: the MSVC ABI under mingw
 #include <windows.h>
 #include <d3d12.h>
@@ -111,5 +112,13 @@ int main(int argc, char **argv) {
     QueryPerformanceCounter(&t1);
     printf("presented %d/%d frames, avg frame %.3f ms\n", presented, frames,
            (t1.QuadPart - t0.QuadPart) * 1000.0 / freq.QuadPart / frames);
+    // ResizeBuffers takes the flags it's given, and keeps the ones it had when given 0.
+    for (UINT i = 0; i < count; i++) buffers[i]->Release();
+    DXGI_SWAP_CHAIN_DESC1 given = {}, kept = {};
+    CHECK(swap->ResizeBuffers(0, 640, 360, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+    CHECK(swap->GetDesc1(&given));
+    CHECK(swap->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0));
+    CHECK(swap->GetDesc1(&kept));
+    printf("resize flags 0x%x 0x%x\n", given.Flags, kept.Flags);
     return 0;
 }

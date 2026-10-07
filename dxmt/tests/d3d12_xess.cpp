@@ -36,8 +36,9 @@
 //       "xess flags ok inverted <s>/<b> ndc <s>/<b> jittered <s>/<b> highres <s>/<b> nodepth <s>/<b>"
 //   nodepth
 //       Unreal's call (bits 0 and 8, no depth texture) recorded on a COMPUTE list and queue (d3d12_upscale's compute),
-//       then with inverted depth too (bit 1: the bridge's depth at 0.0), 64 balanced frames each, beating bilinear.
-//       "xess nodepth ok compute <s>/<b> inverted <s>/<b>"
+//       then with inverted depth too (bit 1: the bridge's depth at 0.0), 64 balanced frames each, beating bilinear;
+//       the bridge's depth read back after, every texel 1.0 (inverted: 0.0; -1: no depth was seen).
+//       "xess nodepth ok compute <s>/<b> depth 1.0 <texels off> inverted <s>/<b> depth 0.0 <texels off>"
 //   unsupported
 //       (Wine's wined3d) xessD3D12CreateContext: UNSUPPORTED_DEVICE and a NULL context. "xess unsupported ok"
 // Anything else prints "xess <mode> FAIL ..." or a failed call.
@@ -625,8 +626,55 @@ static void Flags() {
     printf("xess flags %s%s\n", ok ? "ok" : "FAIL", psnrs.c_str());
 }
 
+// The bridge's own depth (Unreal passes none) reaches DXMT only in TemporalUpscale's desc: the list's
+// IMTLD3D12CommandListExt (DXMT's object) gets a copy of its method table whose TemporalUpscale keeps the desc's Depth
+// (MTL_TEMPORAL_UPSCALE_D3D12_DESC's second field) before calling DXMT's. Once per list.
+static const GUID kListExt = {0x5690e8a7, 0x51a1, 0x4b37, {0x8b, 0xbd, 0x73, 0x0d, 0x0f, 0xdb, 0x2c, 0xec}};
+using UpscaleFn = HRESULT(STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, const void *);
+static UpscaleFn dxmt_upscale;
+static ID3D12Resource *bridge_depth;
+static HRESULT STDMETHODCALLTYPE KeepDepth(IUnknown *self, IUnknown *scaler, const void *desc) {
+    bridge_depth = ((ID3D12Resource *const *)desc)[1];
+    return dxmt_upscale(self, scaler, desc);
+}
+static void HookDepth(ID3D12GraphicsCommandList *list) {
+    static void *table[4]; // IUnknown's 3, TemporalUpscale
+    IUnknown *ext;
+    CHECK(list->QueryInterface(kListExt, (void **)&ext));
+    void **dxmt = *(void ***)ext;
+    memcpy(table, dxmt, sizeof table);
+    dxmt_upscale = (UpscaleFn)dxmt[3];
+    table[3] = (void *)KeepDepth;
+    *(void ***)ext = table;
+    ext->Release();
+    bridge_depth = nullptr;
+}
+// The depth the bridge passed (w x h, D32_FLOAT, in NON_PIXEL_SHADER_RESOURCE): its texels not equal to `want`.
+static size_t DepthOff(Gpu &g, UINT w, UINT h, float want) {
+    if (!bridge_depth) return (size_t)-1;
+    UINT pitch = Pitch(w * 4);
+    ID3D12Resource *rb = g.Buffer(D3D12_HEAP_TYPE_READBACK, (UINT64)pitch * h, COPY_DEST);
+    g.Barrier(bridge_depth, READ, COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {bridge_depth, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    src.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION dst = {rb, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    dst.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_TYPELESS, w, h, 1, pitch};
+    g.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    g.Barrier(bridge_depth, COPY_SOURCE, READ);
+    g.Submit();
+    uint8_t *p;
+    CHECK(rb->Map(0, nullptr, (void **)&p));
+    size_t off = 0;
+    for (UINT y = 0; y < h; y++)
+        for (UINT x = 0; x < w; x++)
+            off += ((float *)(p + (size_t)y * pitch))[x] != want;
+    rb->Unmap(0, nullptr);
+    rb->Release();
+    return off;
+}
+
 // Unreal's call without depth on a COMPUTE list (Gpu's queue, allocator and list are DIRECT: COMPUTE ones instead),
-// then on a DIRECT one with inverted depth.
+// then on a DIRECT one with inverted depth. The bridge's depth is read back after: 1.0 everywhere (inverted: 0.0).
 static void Nodepth() {
     std::string psnrs;
     bool ok = true;
@@ -641,6 +689,7 @@ static void Nodepth() {
             CHECK(g.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, g.allocator, nullptr,
                                               __uuidof(ID3D12GraphicsCommandList), (void **)&g.list));
         }
+        HookDepth(g.list);
         Inputs in;
         in.highres = in.nodepth = true;
         auto ctx = Create(g);
@@ -648,11 +697,13 @@ static void Nodepth() {
         Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED), in);
         Run(fr, ctx, 0, kFrames, [] {});
         auto [s, b] = fr.Read(kFrames - 1);
+        size_t off = DepthOff(g, fr.iw, fr.ih, k ? 0.0f : 1.0f);
         XESS(X.DestroyContext(ctx));
-        char line[64];
-        snprintf(line, sizeof line, " %s %.2f/%.2f", k ? "inverted" : "compute", s, b);
+        char line[96];
+        snprintf(line, sizeof line, " %s %.2f/%.2f depth %s %zd", k ? "inverted" : "compute", s, b, k ? "0.0" : "1.0",
+                 (ptrdiff_t)off);
         psnrs += line;
-        ok = ok && s > b;
+        ok = ok && s > b && !off;
     }
     printf("xess nodepth %s%s\n", ok ? "ok" : "FAIL", psnrs.c_str());
 }

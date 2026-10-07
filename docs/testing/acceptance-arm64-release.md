@@ -417,3 +417,30 @@ Also run after 0027: both lanes of `make dxmt-check` (`dxmt-check: all passed` t
 other upscale and XeSS PSNR as in Task 2d), `make test` 239 passed, `make smoke` 15/15, `make bridge-check` 15 ok,
 the Wine series from a fresh fetch (27 of 27, the applied tree), the translator key unchanged. `gpu-trace.py` gains
 `--label SUBSTR`.
+
+## DXMT runtime fixes from the reviews and studies (XeSS plan, Task F1)
+
+2026-10-06 (Ruling 21). DXMT patches 0010-0015, each with a row in `dxmt/check.sh`:
+- 0010: ExecuteIndirect's resolver writes a VERTEX_BUFFER_VIEW argument at the slot's entry in the table of the slots
+  the pipeline uses (it wrote the raw slot). `indirect vbv-gap` (slot 2 of a pipeline using slots 0 and 2) drew the
+  IA-bound tags before (`2,0:207 3,0:200 2,1:208`) and draws D3DMetal's `2,0:107 3,0:300 2,1:108` now.
+- 0011: a placed texture or buffer holds a private reference on its heap, so an app's release of the heap no longer
+  takes it out of the residency set while its resources live (`Release` still answers 0, as on D3DMetal).
+  `hazard heap-released` renders, samples and reads back 257 before and after (a destroyed heap showed nothing here);
+  `DXMT_STATS` counted `heaps destroyed 1` before and none now.
+- 0012: buffer `Map` refuses every heap the CPU can't see (a buffer placed in a CUSTOM heap with no CPU pages returned
+  S_OK and a null pointer; D3DMetal maps it); `DXMT_D3D12_PRIVATE=0` also drops the RenderTarget usage 0009 gave
+  renderable 2D UAVs (Ruling 14).
+- 0013: the upscale's begin and end blits, and any blit or compute encoder left without commands, carry a 4-byte fill
+  of a scratch buffer, as timestamp blits do, so Metal can't drop them with their fences.
+- 0014: `DXMT_STATS` counts `upscale input copied` (a depth/stencil depth: 64 of 64; readable inputs: 0).
+- 0015: ResizeBuffers keeps the swapchain flags it's given (`resize flags 0x2 0x2`; `0x0 0x0` before), and vsync
+  pacing re-reads the window's display's refresh rate at ResizeBuffers and on leaving fullscreen (it was the creation
+  display's, and off after leaving fullscreen). Not tested: no check moves a window between displays.
+
+Bridge rows: `upscale direct` and `placed` match the copy path (`DXMT_D3D12_PRIVATE=0`) within 0.05 dB (24.90 each);
+`upscale direct-offset` writes at (64, 32) of a 2624x1472 output directly (0 copies) at 24.90, as the copy path;
+`xess nodepth` reads the bridge's own depth back: every texel 1.0 (inverted: 0.0).
+
+Both lanes of `make dxmt-check`: `dxmt-check: all passed` twice, 244 ok per lane (Task 3b: 238), no FAIL; every
+other upscale and XeSS PSNR as in Task 3b. The translator key is unchanged (no airconv change).

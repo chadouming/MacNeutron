@@ -10,6 +10,7 @@
 //   rtoutput       2.0x, an output with ALLOW_RENDER_TARGET only, R16G16_TYPELESS motion vectors   "upscale rtoutput ok ..."
 //   direct         2.0x, an output with ALLOW_UNORDERED_ACCESS only (XeSS's norm)                "upscale direct ok ..."
 //   placed         as direct, the output placed in a DEFAULT heap                                "upscale placed ok ..."
+//   direct-offset  as direct, at (64, 32) of a 2624x1472 output (outputColorBase)        "upscale direct-offset ok ..."
 //   compute        2.0x, recorded on a COMPUTE command list and queue, with a reactive mask      "upscale compute ok ..."
 //   typeless       2.0x, colour and output R16G16B16A16_TYPELESS (read as FLOAT)                "upscale typeless ok ..."
 //   typeless32     2.0x, colour and output R32G32B32A32_TYPELESS (DXMT keeps them as RGBA32Uint: read through
@@ -121,6 +122,7 @@ struct Upscale {
     DXGI_FORMAT color = DXGI_FORMAT_R16G16B16A16_FLOAT, out = DXGI_FORMAT_R16G16B16A16_FLOAT; // 8 or 16 bytes a texel
     D3D12_RESOURCE_FLAGS output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     bool jittered = false, exposure = false, compute = false, bad = false, placed = false;
+    UINT ox = 0, oy = 0; // where in the output (that much larger) the upscale goes
 };
 
 // A buffer to upload `rows` rows of `row` bytes into, its pitch Pitch(row).
@@ -199,7 +201,7 @@ static void Run(const Upscale &u) {
     auto out_state = u.output & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
                                                                           : D3D12_RESOURCE_STATE_RENDER_TARGET;
     ID3D12Resource *output;
-    D3D12_RESOURCE_DESC od = Tex2D(OW, OH, u.out, 1, u.output);
+    D3D12_RESOURCE_DESC od = Tex2D(OW + u.ox, OH + u.oy, u.out, 1, u.output);
     if (u.placed) {
         D3D12_RESOURCE_ALLOCATION_INFO ai = g.device->GetResourceAllocationInfo(0, 1, &od);
         D3D12_HEAP_DESC hd = {ai.SizeInBytes, {D3D12_HEAP_TYPE_DEFAULT}, ai.Alignment, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES};
@@ -267,6 +269,7 @@ static void Run(const Upscale &u) {
         MTL_TEMPORAL_UPSCALE_D3D12_DESC ud = {};
         ud.Color = color; ud.Depth = depth; ud.MotionVector = motion; ud.Exposure = exposure; ud.ReactiveMask = mask;
         ud.Output = output;
+        ud.OutputOffsetX = u.ox; ud.OutputOffsetY = u.oy;
         ud.InputContentWidth = iw; ud.InputContentHeight = ih;
         ud.JitterOffsetX = -jx; ud.JitterOffsetY = -jy;
         ud.MotionVectorScaleX = ud.MotionVectorScaleY = 1.0f;
@@ -300,7 +303,8 @@ static void Run(const Upscale &u) {
     src.SubresourceIndex = 0;
     D3D12_TEXTURE_COPY_LOCATION dst = {rb, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
     dst.PlacedFootprint.Footprint = {u.out, OW, OH, 1, pitch};
-    g.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    D3D12_BOX box = {u.ox, u.oy, 0, u.ox + OW, u.oy + OH, 1};
+    g.list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
     g.Submit();
     uint16_t *p;
     CHECK(rb->Map(0, nullptr, (void **)&p));
@@ -376,9 +380,10 @@ int main(int argc, char **argv) {
         } else if (mode == "rtoutput") {
             u.output = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
             u.motion = DXGI_FORMAT_R16G16_TYPELESS;
-        } else if (mode == "direct" || mode == "placed") {
+        } else if (mode == "direct" || mode == "placed" || mode == "direct-offset") {
             u.output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             u.placed = mode == "placed";
+            if (mode == "direct-offset") { u.ox = 64; u.oy = 32; }
         } else if (mode == "compute") {
             u.compute = true;
             u.mask = DXGI_FORMAT_R8_UNORM;

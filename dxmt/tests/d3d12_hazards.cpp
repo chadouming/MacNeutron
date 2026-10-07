@@ -233,6 +233,29 @@ static void PlacedUav() {
     UavOn("placed-uav", Zeroed(256, UA, heap));
 }
 
+// A texture placed in a DEFAULT heap the app releases at once: as in D3D12, the texture keeps its heap (and DXMT the
+// heap's memory resident). Rendered (heavy), then sampled through a descriptor into T1 + 1, as rt-read. Prints whether
+// the heap was still referenced after the app's release, and T1's texel.
+static void HeapReleased() {
+    D3D12_HEAP_DESC hd = {32 << 20, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+                          D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES};
+    ID3D12Heap *heap;
+    CHECK(g->device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
+    D3D12_RESOURCE_DESC desc = Tex2D(kSize, kSize, kFormat, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    ID3D12Resource *p;
+    CHECK(g->device->CreatePlacedResource(heap, 0, &desc, RT, nullptr, __uuidof(ID3D12Resource), (void **)&p));
+    bool kept = heap->Release() > 0;
+    Target P = MakeTarget(p);
+    Clear(P);
+    Pass(P, add, 1, 256);
+    g->Barrier(p, RT, PSR);
+    Pass(T[1], sample, 1, 1, &P);
+    g->Barrier(p, PSR, RT);
+    Read(T[1], RT, 512, 512, 0);
+    g->Submit();
+    printf("hazard heap-released %d %g\n", kept, Texel(0));
+}
+
 // 16 copies of 5s into T2; a barrier COPY_DEST -> PIXEL_SHADER_RESOURCE; T1 = T2 sampled + 1.
 static void CopyRead() {
     const UINT pitch = kSize * 8;
@@ -1376,7 +1399,8 @@ int main(int argc, char **argv) {
         {"fence-transitive", FenceTransitive}, {"fence-custom", FenceCustom}, {"fence-lower", FenceLower},
         {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
         {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
-        {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}, {"placed-uav", PlacedUav}};
+        {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}, {"placed-uav", PlacedUav},
+        {"heap-released", HeapReleased}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)
