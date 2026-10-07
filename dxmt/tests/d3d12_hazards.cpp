@@ -233,19 +233,24 @@ static void PlacedUav() {
     UavOn("placed-uav", Zeroed(256, UA, heap));
 }
 
-// A texture placed in a DEFAULT heap the app releases at once: as in D3D12, the texture keeps its heap (and DXMT the
-// heap's memory resident). Rendered (heavy), then sampled through a descriptor into T1 + 1, as rt-read. Prints whether
-// the heap was still referenced after the app's release, and T1's texel. The texture is released after the readback,
-// and the heap with it (DXMT_STATS: "heaps destroyed 1", this mode alone).
+// Two textures placed in DEFAULT heaps the app releases at once: as in D3D12, each texture keeps its heap (and DXMT the
+// heap's memory resident). The first is rendered (heavy), then sampled through a descriptor into T1 + 1, as rt-read.
+// Prints whether a heap was still referenced after the app's release, and T1's texel. The first texture is released
+// after the readback, and its heap with it; the second lives on, and its heap with it (DXMT_STATS, this mode alone:
+// "heaps destroyed 1"; 2 if placed textures didn't hold their heaps).
 static void HeapReleased() {
     D3D12_HEAP_DESC hd = {32 << 20, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
                           D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES};
-    ID3D12Heap *heap;
-    CHECK(g->device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
     D3D12_RESOURCE_DESC desc = Tex2D(kSize, kSize, kFormat, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
-    ID3D12Resource *p;
-    CHECK(g->device->CreatePlacedResource(heap, 0, &desc, RT, nullptr, __uuidof(ID3D12Resource), (void **)&p));
-    bool kept = heap->Release() > 0;
+    ID3D12Resource *placed[2];
+    bool kept = false;
+    for (auto &r : placed) {
+        ID3D12Heap *heap;
+        CHECK(g->device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
+        CHECK(g->device->CreatePlacedResource(heap, 0, &desc, RT, nullptr, __uuidof(ID3D12Resource), (void **)&r));
+        kept |= heap->Release() > 0;
+    }
+    ID3D12Resource *p = placed[0];
     Target P = MakeTarget(p);
     Clear(P);
     Pass(P, add, 1, 256);
@@ -254,8 +259,23 @@ static void HeapReleased() {
     g->Barrier(p, PSR, RT);
     Read(T[1], RT, 512, 512, 0);
     g->Submit();
-    p->Release();
+    p->Release(); // placed[1] lives on
     printf("hazard heap-released %d %g\n", kept, Texel(0));
+}
+
+// A timestamp sampled and never resolved, its query heap released once the fence passed (a profiler turned off): our
+// DXMT writes the query's value on the CPU after the command buffer completes, so the fence waits for that write
+// (DXMT_STATS: "fence signals deferred to the CPU 1", this mode alone).
+static void Sampled() {
+    D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1};
+    ID3D12QueryHeap *heap;
+    CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    Clear(T[0]);
+    Pass(T[0], add, 1, 1);
+    g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    g->Submit();
+    heap->Release();
+    printf("hazard sampled 1\n");
 }
 
 // 16 copies of 5s into T2; a barrier COPY_DEST -> PIXEL_SHADER_RESOURCE; T1 = T2 sampled + 1.
@@ -1490,7 +1510,7 @@ int main(int argc, char **argv) {
         {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
         {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
         {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}, {"placed-uav", PlacedUav},
-        {"heap-released", HeapReleased}, {"ts-many", TimestampMany}};
+        {"heap-released", HeapReleased}, {"ts-many", TimestampMany}, {"sampled", Sampled}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

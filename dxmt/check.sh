@@ -268,7 +268,7 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
   "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
-  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257" "ts-many 1")
+  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257" "ts-many 1" "sampled 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -295,7 +295,8 @@ expect "and under Metal validation" "$(hazards hazards-validation)" "$want"
 expect "which rejects nothing (nodraw's only draw has no instances)" "$(invalid hazards-validation)" 0
 # A texture placed in a heap holds it (DXMT 0011): the app's release of the heap (Release still answers 0, as on
 # D3DMetal) destroys nothing while the texture lives, so the heap stays resident; the texture's release, after the
-# readback, destroys it (no leak).
+# readback, destroys it (no leak). Two heaps, each with a texture, both released; one texture released: 1 heap
+# destroyed (2 if textures didn't hold their heaps, 0 if the last release leaked it).
 rm -rf "$WORK/heap-stats"; export DXMT_DXIL_DUMP="$WORK/heap-stats" DXMT_STATS=1
 run ours heap-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" heap-released
 unset DXMT_DXIL_DUMP DXMT_STATS
@@ -922,6 +923,15 @@ run ours deferred-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" deferred
 unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a signal behind no pending timestamps stays on the GPU" \
   "$(grep -oE 'fence signals deferred to the CPU [0-9]+' "$WORK/deferred-stats/stats.txt" 2> /dev/null)" "fence signals deferred to the CPU 1"
+# Task F4: a call that samples timestamps without resolving them owes their values too (the queue writes them into
+# the query heap once its command buffer completes), so its fence waits for that: the app may release the heap once
+# the fence passed (d3d12_hazards sampled alone).
+rm -rf "$WORK/sampled-stats"; export DXMT_DXIL_DUMP="$WORK/sampled-stats" DXMT_STATS=1
+run ours sampled-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" sampled
+unset DXMT_DXIL_DUMP DXMT_STATS
+expect "a signal after timestamps sampled without a resolve waits for their values" \
+  "$(grep -oE 'fence signals deferred to the CPU [0-9]+' "$WORK/sampled-stats/stats.txt" 2> /dev/null):$(grep '^hazard ' "$WORK/sampled-stats.txt")" \
+  "fence signals deferred to the CPU 1:hazard sampled 1"
 # 10. The launcher (spec §3.7; gate L1): recordings land in the compat folder and the first session stamps the builds;
 #     with another build in the stamp, the next launch replays every recording before the game, which then only hits.
 #     (d3d12_cache's recording there holds every mode section 7 ran: a, rt, layout and root.)
