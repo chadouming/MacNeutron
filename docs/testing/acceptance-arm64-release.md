@@ -432,6 +432,65 @@ other upscale and XeSS PSNR as in Task 2d), `make test` 239 passed, `make smoke`
 the Wine series from a fresh fetch (27 of 27, the applied tree), the translator key unchanged. `gpu-trace.py` gains
 `--label SUBSTR`.
 
+### Built-in display session (Task 3c)
+
+2026-10-07, 12:13-12:39, the built-in display only (the external one is unavailable). SMITE 2 through a scratch tool
+folder from `.build/release/macneutron install` with the current dev `wine.app` (DXMT 0029, Wine 0029), `env -i`,
+Steam bridge on, main lobby only, camera idle. Prefixes are APFS clones of Task 3's `compat-l3` (fresh game defaults:
+XeSS Balanced, borderless 1728x1117). Each run: wait for the lobby's `LoadMap`, bring the game window to the front
+(System Events, every 10 s; the game was frontmost at the trace in every run but `blits1`), wait 60 s (150 s for
+`bounds`), record a 6 s Metal System Trace, copy Hemingway.log, stop (`wineserver -k`/`-w`, `WINEMSYNC=1`; no
+leftover pids after any run). Every run had `DXMT_STATS=1`; from `base2` on its report was saved under `DXMT_DXIL_DUMP`
+(`base1`/`blits1` had no dump folder, so no report).
+Frame period and GPU busy are `gpu-trace.py`'s medians (p90 from the same per-frame lists); FPS is `dxmt/tools/fps.py`
+from 20 s after the lobby's `LoadMap` (its window includes the trace); the upscale is `--label MetalFX_Temporal`.
+
+**Uncapping the lobby.** The fresh `.sav` has no `LobbyMaxFPS` entry, so the game applies its 60 FPS lobby cap. The
+maintainer's old `.sav` (sp5/perf's `compat-x`) stores `LobbyMaxFPS` = `"0"` (version 1). The runs after `blits1`
+use the fresh `.sav` with that one entry added to its `SavedSettingVersions` and `SavedSettingsConfig` maps (each
+map's size and count adjusted; nothing else changed); the game loaded it and ran the lobby at 65-72 FPS. `base1` and
+`blits1` ran before that, at the cap.
+
+| Arm | Setup | FPS (fps.py / stats median) | Frame period ms (p90) | GPU busy ms (p90) | Upscale GPU ms (p90) | Timestamps given their own encoder per frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| `base1` (capped) | default | 59.43 / — | 16.65 (17.07) | 13.50 (13.76) | 0.95 (0.98) | — |
+| `blits1` (capped) | `DXMT_D3D12_TIMESTAMP_BLITS=1` | 59.30 / — | 16.62 (17.10) | 14.18 (14.53) | 0.94 (1.01) | — |
+| `base2` | default | 67.96 / 65.5 | 14.59 (15.20) | 13.76 (14.12) | 0.95 (0.98) | 2.0 |
+| `blits2` | `DXMT_D3D12_TIMESTAMP_BLITS=1` | 66.43 / 65.0 | 15.05 (15.65) | 13.90 (14.26) | 0.93 (0.97) | 100.6 |
+| `base3` | default | 68.34 / 66.3 | 14.58 (15.20) | 13.75 (14.12) | 0.94 (0.97) | 2.0 |
+| `blits3` | `DXMT_D3D12_TIMESTAMP_BLITS=1` | 66.92 / 65.1 | 15.03 (15.60) | 13.91 (14.24) | 0.85 (0.95) | 100.8 |
+| `r-xess` | RetinaMode, windowed 2560x1440, XeSS Balanced | 55.93 / 55.9 | 17.76 (18.59) | 16.56 (16.96) | 1.76 (1.93) | 2.0 |
+| `r-taa` | as `r-xess`, TAA | 36.63 / 36.9 | 26.45 (27.78) | 24.86 (25.34) | none (no temporal upscale) | 2.0 |
+| `bounds` | `DXMT_DXIL_BOUNDS=off` | 68.52 / 67.7 | 14.54 (15.20) | 13.77 (14.13) | 0.93 (0.96) | 2.0 |
+
+- **B4 (timestamps ride the next encoder) is kept.** Uncapped A/B/A/B: `DXMT_D3D12_TIMESTAMP_BLITS=1` gives 100.6-100.8
+  timestamps their own encoder per frame (≈80 "several waiting", 16 "end of call", 4.7 "next encoder takes none")
+  against 2.0 by default. It costs 0.45-0.47 ms of frame period (14.58-14.59 → 15.03-15.05), 0.15 ms of GPU busy and
+  0.22-0.25 ms more GPU idle between encoders; 1.5 FPS by fps.py. The two default runs agree within 0.01 ms, as do
+  the two blits runs. The capped pair isn't a measure of either: at the cap the GPU clocks down, and `blits1`'s window
+  wasn't frontmost at the trace.
+- **The split is still not needed (Task 4 doesn't run).** At 1728x1117 the upscale is 0.85-0.95 ms; at the 2560x1440
+  arm it is 1.76 ms (p90 1.93), under the ≤ 5 ms criterion, and the GPU idle just before and just after it is 0.00 ms
+  (p90 0.00) in every run with the upscale. 1.76 ms is what pixel scaling from 0.95 ms at 1728x1117 predicts for 2560x1440 (1.81 ms).
+  The output size itself wasn't logged (`WINEDEBUG=warn+xess` went nowhere without the launcher's logging mode): with
+  RetinaMode the game saw a 3456x2234 desktop (`CacheSupportedResolutions`), and a 3456x2234 output would predict
+  ≈3.8 ms, so the upscale ran at 2560x1440 or close to it. The TAA arm, the same prefix but for the `.sav`'s `XeSS`
+  entry, runs at sp5's `p8` 2560x1440 TAA lobby rate (below), which corroborates the 2560x1440 window.
+- **XeSS Balanced vs native TAA at 2560x1440 (lobby):** 17.76 against 26.45 ms frame period, 16.56 against 24.86 ms GPU
+  busy: XeSS through the bridge takes 8.7 ms off the lobby frame (55.9 against 36.6 FPS). The TAA arm drops the
+  `.sav`'s `XeSS` entry (both maps); no `MetalFX_Temporal` interval ran and DXMT counted no temporal upscale. Its
+  36.6 FPS matches sp5's `p8` 2560x1440 TAA lobby (~36 FPS, gframe/synthesis.md). This is a lobby number: gframe's ≈ −2 ms
+  estimate is for a match frame, which this session didn't measure.
+- **Bounds checks: no-go for the `texture_buffer` form (gate 2).** `DXMT_DXIL_BOUNDS=off` keys its own shader cache
+  (`d3d12_shader_cache.cpp`), so it compiled afresh: its first stats report ran 8.4 FPS, and FPS was steady at 67-70 for
+  the last 40 s before the trace (150 s after the lobby). Frame
+  14.54 ms and GPU busy 13.77 ms against 14.58-14.59 and 13.75-13.76 for the default; the Vertex channel is 8.0 % of
+  the window (≈1.16 ms a frame) against 7.8-7.9 % (≈1.14-1.15 ms): no gain within ±0.03 ms, far below the 0.15 ms
+  threshold. This is the lobby, not the m3/E7 match spot gate 2 names.
+- **GPU counters (gate 1): not obtained.** A run with `--instrument 'Metal GPU Counters'` added to the Metal System
+  Trace template (`--attach`) recorded the `gpu-counter-info` and `gpu-counter-value` tables with no rows. Its frame was
+  13.50 ms (GPU busy 12.78 ms, upscale 0.78 ms), faster than the default runs, which isn't explained. Gate 1 stays open.
+
 ## DXMT runtime fixes from the reviews and studies (XeSS plan, Task F1)
 
 2026-10-06 (Ruling 21). DXMT patches 0010-0015, each with a row in `dxmt/check.sh`:
