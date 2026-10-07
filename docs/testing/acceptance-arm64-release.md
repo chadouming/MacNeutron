@@ -346,7 +346,14 @@ on D3DMetal. Every other upscale and XeSS PSNR is unchanged; `xess cycles` repor
 game defaults' `HWGameUserSettings.sav`, which selects XeSS; the clone alone keeps TAA), `env -i`, a tool folder from
 `macneutron install` with the dev `wine.app`, Steam bridge on, lobby only. The external display was off: every run
 below is on the built-in display, where the game's fullscreen window makes XeSS's output 1728x1117 (balanced, input
-864x559), not the player's 2560x1440. The 2560x1440 runs are Task 3c (Ruling 15).
+864x559), not the player's 2560x1440. The 2560x1440 runs are Task 3c (Ruling 15). *Corrected in Task F3:* run 3 left
+the lobby for the Jungle Practice match (`game-m3.log:5485` LoadMap of the match lobby with transition tag
+JunglePractice, `:11790` SeamlessTravel to the practice map), so its trace is an in-match frame, not an uncapped lobby;
+it is the only arm64 in-match trace (1728x1117 output, XeSS Balanced, input 864x559). The in-game Resolution setting
+doesn't change the render size in borderless (windowed fullscreen, `FullscreenMode=1`): the game saves it, but the
+back buffer stays at the desktop size, so only resolution scale or the upscaler's quality changes what the GPU renders
+(the XeSS plan's resolution study; in the one logged session with a real change, on 0.1.0, 2560x1440 → 1920x1080 and
+back, FPS stayed at 86-92 and the presenter saw no smaller drawable).
 
 **Logging run.** `MACNEUTRON_LOG=1` doesn't show the bridge's parameter dumps: its `WINEDEBUG=+err,+warn` turns on
 channels named `err` and `warn`, not the warn class (`warn+xess` does; since Task 3b the launcher's logging mode sets
@@ -386,23 +393,27 @@ are settled in Task 5's captures, not from a log):
   output): MetalFX's direct path with a non-zero output offset still hasn't run in a game.
 
 **Measurements** (the same prefix after the logging run; the trace 6 s, `gpu-trace.py --label MetalFX_Temporal`;
-lobby FPS by `fps4.py` from 20 s and from 100 s after the lobby's `LoadMap`), all at 1728x1117; the 2560x1440 runs are
-Task 3c (Ruling 15):
+lobby FPS by `fps4.py` from 20 s and from 100 s after the lobby's `LoadMap`, run 3's corrected by `dxmt/tools/fps.py`),
+all at 1728x1117; the 2560x1440 runs are Task 3c (Ruling 15):
 
 | Run | Lobby FPS (+20 s / +100 s) | Frame period, GPU busy (ms) | Upscale GPU ms per frame (p90) | GPU idle just before / after (ms) |
 | --- | --- | --- | --- | --- |
 | 1 | 32.04 / 59.37 (30 s window) | 19.73, 17.45 | 0.94 (0.98) | 0.00 / 0.00 |
 | 2 | 59.98 / 59.80 | 16.66, 13.85 | 0.94 (0.97) | 0.00 / 0.00 |
-| 3 | (118 by the trace) | 8.45, 8.20 | 1.01 (1.07) | 0.00 / 0.00 |
+| 3 (match) | — / 118.96 in the match (118 by the trace) | 8.45, 8.20 | 1.01 (1.07) | 0.00 / 0.00 |
 | 4 | 59.97 / 59.80 | 16.63, 14.41 | 0.93 (1.02) | 0.00 / 0.00 |
 | `DXMT_STATS=1` | 59.97 / 59.80 | 16.64, 14.33 | 0.95 (1.03) | 0.00 / 0.00 |
 | `DXMT_D3D12_PRIVATE=0` | 59.97 / 59.78 | 16.66, 14.59 | 0.97 (1.08) | 0.00 / 0.00 |
 
 - MetalFX labels its passes: the upscale is 3 compute passes a frame (`MetalFX_Temporal_BBR_Pre/Mid/PostProcessing`),
   0.95 ms end to end with no idle inside; the presenter's spatial scaler (`MetalFX_Scale`, `MetalFX_Sharpen`) adds
-  0.57 ms. The lobby runs at its 60 FPS cap; run 1 was at ~32 for its first ~90 s, run 3 uncapped (`fps4.py`'s
-  frame-counter unwrap fails above ~100 FPS: 107.62 / 35.60). Run 3's lighter frames and run 1's slow start are not
-  explained.
+  0.57 ms. The lobby runs at its 60 FPS cap; run 1 was at ~32 for its first ~90 s. Run 3 was in the Jungle Practice
+  match at 118-121 FPS (every dense log sample; the 120 Hz panel), not an uncapped lobby, which explains its lighter
+  frames. *Corrected in Task F3:* `fps4.py`'s 35.60 for run 3's +100 s window is a frame-counter wrap artefact, not a
+  rate: Unreal logs the frame counter mod 1000, and fps4.py counted log gaps of 9-29 s (over 1000 frames at 120 FPS)
+  mod 1000. `dxmt/tools/fps.py` leaves out gaps that could hide a wrap: 118.96 for that window, and the lobby runs as
+  before within 0.2 FPS. Its +20 s window (107.62) mixes the lobby's 60 FPS with draft and loading bursts of 120-310
+  (fps.py: 139.18 over the 19 s it can count), so it isn't a rate of either. Run 1's slow start is not explained.
 - `DXMT_STATS=1`: `upscale output copied` 0 over 46 reports (MetalFX writes SMITE's output directly), 1.0 temporal
   upscale passes a frame. With `DXMT_D3D12_PRIVATE=0`: 12735 copied, FPS unchanged at the cap.
 - XeSS init (`Loading XeSS library` to `XeSS successfully initialized`): 1 ms in every run; Intel's own XeSS took 15.0 s
@@ -527,3 +538,31 @@ shader cache rebuilds once.
 Both lanes of `make dxmt-check` on the applied build (0026): `dxmt-check: all passed` twice, 257 ok per lane (225
 rows, 32 dxil-probe lines), no FAIL. `vbv-null` is one more ExecuteIndirect with a resolver pass, so the stats rows now
 want 16390 calls, 3 resolve passes and 14 with `DXMT_D3D12_INDIRECT=icb`.
+
+## Presenter, records and tools (XeSS plan, Task F3)
+
+2026-10-07 (Rulings 21, 28). DXMT patch 0027; the translator key is unchanged (`b3eea49c…`).
+- F2's open question: DXC's `-Gis` (IEEE strictness) marks every `mad` precise. `dxil/mad.hlsl` compiled with it has
+  `!dx.precise` on both FMads (without it, one), and the entry point's shader flags read 16 in both (raw buffers;
+  DisableMathRefactoring, 2, is never set), so 0022's `dx.precise` test already keeps `-Gis` shaders unfused and a
+  module-flag gate would never fire. No airconv change. The dxmt-check row that counts the fast-math flags of vertex
+  and geometry shaders is now named for what it checks: `vertex and geometry shaders carry no reassoc, contract or
+  arcp flags` (a non-precise mad's `air.fma` is an explicit call).
+- 0027: `IASetVertexBuffers` with no views unbinds the slots (it returned early, leaving the old views bound). `vsread
+  unbind` (slots 1 and 3 bound to data, then `IASetVertexBuffers(1, 3, NULL)`) read `1,2,3,4 1,2,0,1 3,4,1,1.5
+  1.07374e+09,0,0,1` before and reads `1,2,3,4 0,0,0,1 0,0,0,0 0,0,0,1` now, as unbound slots do. D3DMetal ignores
+  such a call (it reads the old data), so the row has no D3DMetal twin.
+- The presenter still scales into a texture of its own and copies it into the overlay's drawable (gframe's B1 not
+  done): a CAMetalLayer drawable has managed storage (`framebufferOnly` or not; measured on this Mac), and MetalFX's
+  spatial scaler wants a private output. Scaling straight into the drawable drew the right picture but 199 Metal
+  validation messages in 200 frames ("outputTexture must have private storage mode"), so it isn't shipped.
+- Task 3's section above is corrected: run 3 was the Jungle Practice match, `fps4.py`'s 35.60 is a counter-wrap
+  artefact (118-121), and the in-game Resolution in borderless doesn't change the render size.
+- `dxmt/tools/fps.py` (from `fps4.py`): frame rate from an Unreal log's mod-1000 frame counter, leaving out log gaps
+  that could hide a wrap (longer than 1000 frames at 1.5x the window's highest rate between lines 0.5-2 s apart). Run 3
+  +100 s: 118.96 (fps4.py 35.60); the lobby runs of Task 3 read 59.61-59.98 (fps4.py 59.80-59.98).
+- `dxmt/tools/gpu-trace.py` stops with `too few whole frames` when a trace has fewer than 2 whole frames (4 in all: the
+  first and last are cut off, and a frame period needs two), instead of a `statistics` traceback.
+
+
+Both lanes of `make dxmt-check` on the applied build (0027): `dxmt-check: all passed` twice, 264 ok per lane, no FAIL.

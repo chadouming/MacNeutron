@@ -697,6 +697,10 @@ expect "unbound vertex buffer slots read zeros, widened by their format" "$(grep
 expect "and on D3DMetal" "$(grep '^vsread ia' "$WORK/vsia-ref.txt" || echo 'D3DMetal printed nothing')" "vsread ia $ia"
 expect "and in D3D11" "$(grep '^d3d11 ia' "$WORK/vsia11-ours.txt" || echo none)" "d3d11 ia $ia"
 expect "and in D3D11 on D3DMetal" "$(grep '^d3d11 ia' "$WORK/vsia11-ref.txt" || echo 'D3DMetal printed nothing')" "d3d11 ia $ia"
+# Task F3: IASetVertexBuffers(1, 3, NULL) unbinds slots 1-3 bound to data before, which then read as above (D3DMetal
+# ignores such a call: its slots keep their data, 1,2,3,4 1,2,0,1 3,4,1,1.5 1.07374e+09,0,0,1; not pinned).
+run ours vsunbind dxmt "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vsia.dxil" "Z:$S/vsread.ps.dxil" unbind
+expect "vertex buffer slots set with no views read zeros" "$(grep '^vsread unbind' "$WORK/vsunbind.txt" || echo none)" "vsread unbind $ia"
 # Unreal draws grass and GPU particles with ExecuteIndirect: 1024 of them in one render pass, 8 frames, none lost.
 indirect() { run ours "$1" "$2" "$TESTS/d3d12_indirect.exe" "Z:$S/indirect.vs.dxil" "Z:$S/indirect.ps.dxil" \
   "Z:$S/indirect.cs.dxil" "Z:$S/indirect.vsid.dxil" "Z:$S/indirect.psid.dxil"; }
@@ -805,13 +809,15 @@ expect "DXIL barriers that don't sync the group fence memory" \
 "$TOOLS/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
 expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "32/32"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
-# shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
-# the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it). (A non-precise mad
-# becomes an explicit fma since Task F2, a call with no flags: the same in every shader lowered from the same DXIL.)
+# shaders also carry no reassoc, contract or arcp flags, as airconv's DXBC path, so LLVM fuses or reorders nothing on
+# its own: a depth prepass and a base pass then compute the same positions, and their depth EQUAL test holds (grass
+# flickered in SMITE 2 without it). The row checks those flags only: since Task F2 a non-precise mad is an explicit
+# air.fma (a call with no flags, the same in every shader lowered from the same DXIL; DXC's -Gis marks every mad
+# precise, so no fma there).
 "$TOOLS/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
   "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "32:32"
-expect "vertex and geometry shaders keep their math unfused" \
+expect "vertex and geometry shaders carry no reassoc, contract or arcp flags" \
   "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 11
 # E5: a raw or structured buffer load is bounds-checked once for all its components, those the shader reads
 # (shaders/bounds.hlsl: a 16-dword view from dword 4 and a 4-element view, over buffers holding 1..32). In bounds (the

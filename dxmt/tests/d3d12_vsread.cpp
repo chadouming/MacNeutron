@@ -6,6 +6,8 @@
 //   d3d12_vsread.exe <vsia.dxil> <ps.dxil> ia   (Task F2) the vertex shader reads the input assembler instead: slot 0
 // bound to (1, 2, 3, 4), slot 1 never bound (R32G32_FLOAT and R32G32B32A32_FLOAT), slot 3 a null view (R32_UINT).
 // Prints "vsread ia <a> <b> <c> <d>"; D3D: unbound slots read zeros, widened by the format: (0,0,0,1) and (0,0,0,0).
+//   d3d12_vsread.exe <vsia.dxil> <ps.dxil> unbind   (Task F3) as ia, but slots 1 and 3 are bound to data first, then
+// IASetVertexBuffers(1, 3, NULL) unbinds slots 1-3: "vsread unbind ..." reads as ia does.
 #include "d3d12_common.hpp"
 
 static uint16_t Half(float f) {  // exact for the small multiples of 1/4 used here
@@ -17,8 +19,8 @@ static uint16_t Half(float f) {  // exact for the small multiples of 1/4 used he
 }
 
 int main(int argc, char **argv) {
-    bool ia = argc == 4 && !strcmp(argv[3], "ia");
-    if (argc != 3 && !ia) { printf("usage: d3d12_vsread.exe <vs.dxil> <ps.dxil> [ia]\n"); return 2; }
+    bool unbind = argc == 4 && !strcmp(argv[3], "unbind"), ia = unbind || (argc == 4 && !strcmp(argv[3], "ia"));
+    if (argc != 3 && !ia) { printf("usage: d3d12_vsread.exe <vs.dxil> <ps.dxil> [ia|unbind]\n"); return 2; }
     std::vector<char> vs = Load(argv[1]), ps = Load(argv[2]);
     if (vs.empty() || ps.empty()) { printf("can't read the shaders\n"); return 1; }
     Gpu gpu;
@@ -145,7 +147,13 @@ int main(int argc, char **argv) {
         CHECK(structs->Map(0, &none, (void **)&p)); memcpy(p, a, 16); structs->Unmap(0, nullptr);
         D3D12_VERTEX_BUFFER_VIEW views[4] = {{structs->GetGPUVirtualAddress(), 16, 0}, {}, {}, {0, 0, 64}};
         list->IASetVertexBuffers(0, 1, &views[0]);
-        list->IASetVertexBuffers(3, 1, &views[3]);
+        if (unbind) {  // slots 1 and 3 read (1, 2, 3, 4) and its bits until the NULL call unbinds slots 1-3
+            views[1] = views[3] = views[0];
+            list->IASetVertexBuffers(1, 3, &views[1]);
+            list->IASetVertexBuffers(1, 3, nullptr);
+        } else {
+            list->IASetVertexBuffers(3, 1, &views[3]);
+        }
     }
     list->DrawInstanced(3, 1, 0, 0);
     for (int i = 0; i < 4; i++) {
@@ -158,7 +166,7 @@ int main(int argc, char **argv) {
     gpu.Submit();
     float *r; D3D12_RANGE whole = {0, 4 * 1024};
     CHECK(readback->Map(0, &whole, (void **)&r));
-    printf(ia ? "vsread ia" : "vsread ok");
+    printf(unbind ? "vsread unbind" : ia ? "vsread ia" : "vsread ok");
     for (int i = 0; i < 4; i++) {
         const float *t = r + (i * 1024 + 2 * 256 + 2 * 16) / 4;  // texel (2,2)
         printf(" %g,%g,%g,%g", t[0], t[1], t[2], t[3]);

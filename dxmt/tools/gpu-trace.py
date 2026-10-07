@@ -103,6 +103,8 @@ def trace(path, label=None):
     for a, b, _, f, *_ in mine:
         by_frame[f].append((a, b))
     frames = sorted((min(a for a, _ in v), union(v)) for v in by_frame.values())[1:-1]  # whole frames only
+    if len(frames) < 2:  # a frame period needs two whole frames (the first and last frames are cut off)
+        sys.exit(f"too few whole frames: {len(frames)} of {len(by_frame)} frames in the trace; record a longer one")
     period = [(b[0] - a[0]) / 1e6 for a, b in zip(frames, frames[1:])]
     busy = [u / 1e6 for _, u in frames[:-1]]
     idle = [p - u for p, u in zip(period, busy)]
