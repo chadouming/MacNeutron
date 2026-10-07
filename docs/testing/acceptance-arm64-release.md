@@ -485,8 +485,9 @@ map's size and count adjusted; nothing else changed); the game loaded it and ran
 - **XeSS Balanced vs native TAA at 2560x1440 (lobby; ini size, output inferred above):** 17.76 against 26.45 ms frame
   period, 16.56 against 24.86 ms GPU busy: XeSS through the bridge takes 8.7 ms off the lobby frame (55.9 against 36.6
   FPS). The TAA arm drops the `.sav`'s `XeSS` entry (both maps); no `MetalFX_Temporal` interval ran and DXMT counted
-  no temporal upscale. Its 26.45/24.86 ms match sp5's `p8` 2560x1440 TAA lobby (26.17 p10 / 25.23 ms busy, resfps/bound.md:39). This is a
-  lobby number: gframe's ≈ −2 ms estimate is for a match frame, which this session didn't measure.
+  no temporal upscale. Its 26.45/24.86 ms match sp5's `p8` 2560x1440 TAA lobby (26.17 p10 / 25.23 ms busy,
+  resfps/bound.md:39). This is a lobby number: gframe's ≈ −2 ms estimate is for a match frame, which this session didn't
+  measure.
 - **Bounds checks: no-go for the `texture_buffer` form (gate 2).** `DXMT_DXIL_BOUNDS=off` keys its own shader cache
   (`d3d12_shader_cache.cpp`), so it compiled afresh: its first stats report ran 8.4 FPS, and FPS was mostly 67-70 (one
   61.7 report) for the last 40 s before the trace (150 s after the lobby; fps.py's 68.52 covers +20-80 s, the compile
