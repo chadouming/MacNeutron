@@ -459,7 +459,7 @@ map's size and count adjusted; nothing else changed); the game loaded it and ran
 | `blits2` | `DXMT_D3D12_TIMESTAMP_BLITS=1` | 66.43 / 65.0 | 15.05 (15.65) | 13.90 (14.26) | 0.93 (0.97) | 100.6 |
 | `base3` | default | 68.34 / 66.3 | 14.58 (15.20) | 13.75 (14.12) | 0.94 (0.97) | 2.0 |
 | `blits3` | `DXMT_D3D12_TIMESTAMP_BLITS=1` | 66.92 / 65.1 | 15.03 (15.60) | 13.91 (14.24) | 0.85 (0.95) | 100.8 |
-| `r-xess` | RetinaMode, windowed 2560x1440, XeSS Balanced | 55.93 / 55.9 | 17.76 (18.59) | 16.56 (16.96) | 1.76 (1.93) | 2.0 |
+| `r-xess` | RetinaMode, ini windowed 2560x1440 (output inferred), XeSS Balanced | 55.93 / 55.9 | 17.76 (18.59) | 16.56 (16.96) | 1.76 (1.93) | 2.0 |
 | `r-taa` | as `r-xess`, TAA | 36.63 / 36.9 | 26.45 (27.78) | 24.86 (25.34) | none (no temporal upscale) | 2.0 |
 | `bounds` | `DXMT_DXIL_BOUNDS=off` | 68.52 / 67.7 | 14.54 (15.20) | 13.77 (14.13) | 0.93 (0.96) | 2.0 |
 
@@ -470,17 +470,21 @@ map's size and count adjusted; nothing else changed); the game loaded it and ran
   the two blits runs. The capped pair isn't a measure of either: at the cap the GPU clocks down, and `blits1`'s window
   wasn't frontmost at the trace.
 - **The split is still not needed (Task 4 doesn't run).** At 1728x1117 the upscale is 0.85-0.95 ms; at the 2560x1440
-  arm it is 1.76 ms (p90 1.93), under the ≤ 5 ms criterion, and the GPU idle just before and just after it is 0.00 ms
-  (p90 0.00) in every run with the upscale. 1.76 ms is what pixel scaling from 0.95 ms at 1728x1117 predicts for 2560x1440 (1.81 ms).
-  The output size itself wasn't logged (`WINEDEBUG=warn+xess` went nowhere without the launcher's logging mode): with
-  RetinaMode the game saw a 3456x2234 desktop (`CacheSupportedResolutions`), and a 3456x2234 output would predict
-  ≈3.8 ms, so the upscale ran at 2560x1440 or close to it. The TAA arm, the same prefix but for the `.sav`'s `XeSS`
-  entry, runs at sp5's `p8` 2560x1440 TAA lobby rate (below), which corroborates the 2560x1440 window.
-- **XeSS Balanced vs native TAA at 2560x1440 (lobby):** 17.76 against 26.45 ms frame period, 16.56 against 24.86 ms GPU
-  busy: XeSS through the bridge takes 8.7 ms off the lobby frame (55.9 against 36.6 FPS). The TAA arm drops the
-  `.sav`'s `XeSS` entry (both maps); no `MetalFX_Temporal` interval ran and DXMT counted no temporal upscale. Its
-  36.6 FPS matches sp5's `p8` 2560x1440 TAA lobby (~36 FPS, gframe/synthesis.md). This is a lobby number: gframe's ≈ −2 ms
-  estimate is for a match frame, which this session didn't measure.
+  arm (inferred output) it is 1.76 ms (p90 1.93), under the ≤ 5 ms criterion, and the GPU idle just before and just
+  after it is 0.00 ms (p90 0.00) in every run with the upscale. The Retina arms' window and output size is the ini
+  setting, not a logged 2560x1440: with RetinaMode the game saw a 3456x2234 desktop (`CacheSupportedResolutions`) and
+  logged `ApplyResolution - Applying Resolution 1117,1728` four times in each Retina run (game-r-xess.log and
+  game-r-taa.log :1401/1422/1454/1901), the same as `base2`; no log line says 2560x1440 (the `.sav`'s `Resolution`
+  entry is an index, left alone, and `WINEDEBUG=warn+xess` printed nothing without the launcher's logging mode). The
+  output is inferred at ≈3.6-3.7 MP: 1.76 ms is 1.85-1.89 times the 0.93-0.95 ms at 1728x1117 (2560x1440 predicts 1.81
+  ms, a 1728x1117 output 0.95 ms, a 3456x2234 one ≈3.8 ms), and the TAA arm, the same prefix but for the `.sav`'s
+  `XeSS` entry, runs at `p8`'s 2560x1440 TAA lobby numbers (26.45/24.86 against 26.17 p10/27.44 median and 25.23 ms
+  frame/busy, resfps/bound.md:39). Even a 3456x2234 output stays under 5 ms.
+- **XeSS Balanced vs native TAA at 2560x1440 (lobby; ini size, output inferred above):** 17.76 against 26.45 ms frame
+  period, 16.56 against 24.86 ms GPU busy: XeSS through the bridge takes 8.7 ms off the lobby frame (55.9 against 36.6
+  FPS). The TAA arm drops the `.sav`'s `XeSS` entry (both maps); no `MetalFX_Temporal` interval ran and DXMT counted
+  no temporal upscale. Its 36.6 FPS matches sp5's `p8` 2560x1440 TAA lobby (~36 FPS, gframe/synthesis.md). This is a
+  lobby number: gframe's ≈ −2 ms estimate is for a match frame, which this session didn't measure.
 - **Bounds checks: no-go for the `texture_buffer` form (gate 2).** `DXMT_DXIL_BOUNDS=off` keys its own shader cache
   (`d3d12_shader_cache.cpp`), so it compiled afresh: its first stats report ran 8.4 FPS, and FPS was steady at 67-70 for
   the last 40 s before the trace (150 s after the lobby). Frame
