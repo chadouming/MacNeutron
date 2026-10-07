@@ -279,6 +279,18 @@ OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
 THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## Intel XeSS headers (in Wine: `libxess.dll`)
+
+Wine patch 0024's `dlls/libxess/xess.h` copies the XeSS declarations the bridge implements from Intel's public headers
+`inc/xess/xess.h` and `inc/xess/xess_d3d12.h` (`https://github.com/intel/xess.git`, branch `main`, MIT since commit
+`de0fb9c`), with their notice, under the MIT licence below:
+
+```
+Copyright (c) 2026 Intel Corporation
+
+SPDX-License-Identifier: MIT
+```
+
 ## The MIT licence
 
 The terms of the MIT entries above, with each entry's copyright line (the text of FEX's `LICENSE`):

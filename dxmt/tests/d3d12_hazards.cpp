@@ -235,20 +235,19 @@ static void PlacedUav() {
 
 // Two textures placed in DEFAULT heaps the app releases at once: as in D3D12, each texture keeps its heap (and DXMT the
 // heap's memory resident). The first is rendered (heavy), then sampled through a descriptor into T1 + 1, as rt-read.
-// Prints whether a heap was still referenced after the app's release, and T1's texel. The first texture is released
-// after the readback, and its heap with it; the second lives on, and its heap with it (DXMT_STATS, this mode alone:
-// "heaps destroyed 1"; 2 if placed textures didn't hold their heaps).
+// Prints T1's texel. The first texture is released after the readback, and its heap with it; the second lives on, and
+// its heap with it (DXMT_STATS, this mode alone: "heaps destroyed 1"; 2 if placed textures didn't hold their heaps).
+// Heap->Release() answers 0 either way (Ruling 24: the texture's hold is private), so it isn't printed (Task FR).
 static void HeapReleased() {
     D3D12_HEAP_DESC hd = {32 << 20, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
                           D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES};
     D3D12_RESOURCE_DESC desc = Tex2D(kSize, kSize, kFormat, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     ID3D12Resource *placed[2];
-    bool kept = false;
     for (auto &r : placed) {
         ID3D12Heap *heap;
         CHECK(g->device->CreateHeap(&hd, __uuidof(ID3D12Heap), (void **)&heap));
         CHECK(g->device->CreatePlacedResource(heap, 0, &desc, RT, nullptr, __uuidof(ID3D12Resource), (void **)&r));
-        kept |= heap->Release() > 0;
+        heap->Release();
     }
     ID3D12Resource *p = placed[0];
     Target P = MakeTarget(p);
@@ -260,7 +259,7 @@ static void HeapReleased() {
     Read(T[1], RT, 512, 512, 0);
     g->Submit();
     p->Release(); // placed[1] lives on
-    printf("hazard heap-released %d %g\n", kept, Texel(0));
+    printf("hazard heap-released %g\n", Texel(0));
 }
 
 // A timestamp sampled and never resolved, its query heap released once the fence passed (a profiler turned off): our

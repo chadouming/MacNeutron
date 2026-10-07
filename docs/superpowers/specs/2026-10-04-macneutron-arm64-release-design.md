@@ -592,9 +592,11 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   rename, once step 7's `wineserver -w` has run and before the full stamp, the fresh prefix gets the renamed one's
   player data, read-only. First the old `user.reg`'s sections under `Software\<Vendor>`, for a vendor other than Wine,
   Microsoft, Classes, Policies and Valve, that the new one has no section of, appended verbatim (atomically). Then, for
-  each `drive_c/users/<name>` but `Public` (one old user goes to the one new user whatever the names), the files under
-  `AppData/Local`, `AppData/LocalLow`, `AppData/Roaming`, `Documents` and `Saved Games` it doesn't have, cloned
-  (`COPYFILE_CLONE`), never overwriting, without `AppData/Local/Temp` and Wine's `AppData/Local/Microsoft` and
+  each `drive_c/users/<name>` but `Public` (every old user goes to the new prefix's one user, which Wine reads, whatever
+  the names, the first by name winning a file two have; amended 2026-10-07), the files under `AppData/Local`,
+  `AppData/LocalLow`, `AppData/Roaming`, `Documents` and `Saved Games` it doesn't have, cloned (`COPYFILE_CLONE`) under
+  a temporary name and renamed into place (a carry killed mid-copy leaves no part-file under the real name), never
+  overwriting, without `AppData/Local/Temp` and Wine's `AppData/Local/Microsoft` and
   `AppData/Roaming/Microsoft`. Every path is looked at with `lstat`, component by component from the prefix on both
   sides, so no link is followed or written through at any level, the user folders and `AppData` included (Wine links
   `Documents` and others to the Mac's folders, which hold their data already). An item that can't be carried is
@@ -603,10 +605,11 @@ spec's text didn't match the code. Where §§1-13 say otherwise, this section wi
   side (counted once per folder; the old prefix's own link of the folder, as Wine makes for `Documents`, is skipped
   without counting: its data is on the Mac), a folder that can't be listed or made, a file that can't be read or cloned or
   vanished, and a link or special file inside the folders. It logs `note: carried the player's data from <name>: <n>
-  files, <k> registry keys[, <m> not carried]` and the launch goes on. A preparation stopped after the rename (the
-  stamp reads `wine.app preparing`) carries on its in-place retry, from the highest-numbered `pfx.rosetta…` in the
-  compat folder, once: `player-data-carried` in the compat folder, written after every carry, stops a later retry from
-  carrying again; each rename removes it, so each rename carries once. Not carried: other hives (`system.reg`) and files elsewhere in `drive_c` (a game saving beside its
+  files, <k> registry keys[, <m> not carried]` and the launch goes on. The rename writes the new name to
+  `player-data-pending` in the compat folder before it moves `pfx`, so a launch stopped anywhere after it carries on the
+  next one, from that prefix, once: after the carry the record becomes `player-data-carried`. Only a pending record
+  carries: an arm64 prefix prepared again (and stopped) never takes data from a `pfx.rosetta…` beside it (amended
+  2026-10-07). Not carried: other hives (`system.reg`) and files elsewhere in `drive_c` (a game saving beside its
   exe or in `ProgramData`).
 - **§3.6, §3.7 (2026-10-05, Task X1):** `WINEDLLOVERRIDES` also names `libxess,libxess_dx11=b`, merged like the
   backend's entries (a user's own entries for them win), unless `MACNEUTRON_XESS=1`. Wine patch 0022's builtins stand

@@ -193,7 +193,7 @@ In the main lobby alone, both runtimes run at ~36 FPS.)
 defaults (XeSS, ~4 FPS). The launcher now carries the player's data into it (spec §14, amending §3.4 step 1): the user
 folders' `AppData/Local`, `AppData/LocalLow`, `AppData/Roaming`, `Documents` and `Saved Games` files it lacks, cloned,
 never overwriting, and the games' `HKCU\Software\<Vendor>` keys from `user.reg`. On a clone of the scratch Rosetta-era
-prefix, a launch logged `note: carried the player's data from pfx.rosetta (17 files, 1 registry keys)`; SMITE 2's
+prefix, a launch logged `note: carried the player's data from pfx.rosetta: 17 files, 1 registry keys`; SMITE 2's
 `Saved` folder matched the old one, and the Unreal Engine key survived the wineserver's next save of `user.reg`.
 
 ## XeSS default (Task X1)
@@ -257,7 +257,8 @@ table is `cache_1987945399250107254` (FNV-1a of the key and `AIRCONV_VERSION`), 
 2026-10-06. Wine patch 0024 gives the builtin `libxess.dll` real D3D12 calls: a context per
 `xessD3D12CreateContext` on a device with DXMT's `IMTLD3D12DeviceExt` (DXMT patches 0004-0005), one MetalFX temporal
 upscaler per context made at `xessD3D12Init`, and `xessD3D12Execute` recording `TemporalUpscale` into the game's
-command list. Without DXMT (Wine's own D3D12) `xessD3D12CreateContext` still returns -1. `libxess_dx11.dll` keeps
+command list. On a device without DXMT's interface `xessD3D12CreateContext` still returns -1 (the check's run passes an
+object without it: under wined3d, Wine made no D3D12 device). `libxess_dx11.dll` keeps
 0022's stand-ins. Jitter and motion vectors follow Intel's XeSS-SR Developer Guide 2.0 (the jitter moves the samples
 by -jitter; motion vectors point from the current frame to the previous one) and pass to MetalFX unchanged; the
 plan's negated mapping scored below bilinear on the test (2.0x: 18.75 dB against 22.17; 24.68 with Intel's). SMITE 2's
@@ -277,7 +278,7 @@ builtin) and drives XeSS's API at 2560x1440, 64 jittered frames of the spike's s
 
 `cycles` (re-initialised context, destroyed before its list runs, 20 more made and destroyed, a history reset: 22.56
 dB against 24.68 converged and 22.17 bilinear), `flags` (bits 5 and 30 accepted, bit 9 -4, XeFX 0.0.0, version 2.0.1,
-a destroyed context -8) and `unsupported` on wined3d all ok; Metal's validation layer logged nothing over
+a destroyed context -8) and `unsupported` (an object without DXMT's interface) all ok; Metal's validation layer logged nothing over
 `performance cycles`. MetalFX on macOS 27.0.1 never returns a temporal upscaler's memory: a native program creating
 and releasing one keeps ~232 MB per upscaler (`currentAllocatedSize`; retain count 2 at creation), so the 20 contexts
 grow the GPU memory by ~5.2 GB whatever the bridge releases. Also run: `make test` 239 passed, `make smoke` 15/15,
@@ -569,3 +570,38 @@ want 16390 calls, 3 resolve passes and 14 with `DXMT_D3D12_INDIRECT=icb`.
   first and last are cut off, and a frame period needs two), instead of a `statistics` traceback.
 
 Both lanes of `make dxmt-check` on the applied build (0027): `dxmt-check: all passed` twice, 264 ok per lane, no FAIL.
+
+## The final review's findings (XeSS plan, Task FR)
+
+2026-10-07 (Ruling 32). DXMT patches 0028-0029, Wine patch 0029; the translator key changes a second time before any
+release: `b3eea49c…` → `735ba5c4…`.
+- 0028: DeviceMemoryBarrierWithGroupSync and AllMemoryBarrierWithGroupSync fence device memory at Metal 3.1 (D3D12's
+  version), then wait for the group, as Metal Shader Converter does; the fence used to come only at 3.2, so a group
+  could read another group's stale results after the barrier. `dxil/barriers.hlsl` translates to
+  `fence=2:1,5:3,5:3,7:3,7:3 barrier=3` (was `fence=2:1,5:3,7:3`). D3D11's DXBC sync does the same, and its
+  GroupMemoryBarrier (a TGSM fence without the group sync) fences now (it emitted nothing): `dxbc/sync.hlsl`, compiled
+  by Wine's D3DCompile into `sync.dxbc`, gave `fence=-` and gives the same line. `dxil-translate` takes DXBC compute
+  shaders (`.dxbc`) for this.
+- 0029: a command allocator released without a Reset runs its encoders' destructors. An XeSS Execute recorded into
+  such an allocator's list kept its MetalFX upscaler from DXMT's pool: the next context's first Execute grew GPU
+  memory by 232 MB; now by 0.
+- Wine 0029 (`libxess`): Execute refuses (-4) a missing exposure texture or responsive mask that Init's flags ask for
+  (it returned 0); the calls MetalFX has nothing for (exposure multiplier, responsive mask clip, legacy scale factors,
+  network choice, dumps, profiling) answer a live context -7 NOT_IMPLEMENTED (was -8); native AA at 1728x1117 asks
+  for 1728x1117 (was 1728x1116, a whole-frame resample: 35.26 dB against 31.83 now, 29.27 against 26.77 then); a
+  callback registered at ERROR gets refusals at ERROR (it got none); xessGetPipelineBuildStatus answers -12 after Init
+  (was 0).
+- Tests that couldn't fail: `heap-released` no longer prints the heap's Release() answer (always 0, Ruling 24; the
+  DXMT_STATS row discriminates); `nodepth` no longer reads the inverted depth back: fresh memory reads 0.0 uncleared
+  too (a build that skipped that clear passed, even with a far plane at 1.0 released just before); the check's
+  `lone` prints `no stats` when a run wrote none.
+- The launcher's player-data carry: the rename writes `player-data-pending` before it moves `pfx`, and only that
+  record carries, so an interrupted re-preparation of an arm64 prefix takes nothing from a `pfx.rosetta` beside it,
+  and a launch stopped between the rename and the preparing stamp still carries; files are copied under a temporary
+  name and renamed into place; several old users all go to the one user Wine reads.
+- `licenses/NOTICES.md` quotes the Intel notice of the XeSS headers `libxess.dll` is built from; `licences_test.sh`
+  checks for it.
+
+Both lanes of `make dxmt-check` on the applied build (DXMT 0029, Wine 0029): `dxmt-check: all passed`, 264 ok per lane,
+no FAIL. (The first ARM64EC run's replay row read 0: the launcher log rotated at 1 MB between that run's line count and
+its replay, so the row read the new, one-line file; the replay line was in `launcher.log.1`, and the lane rerun passed.)

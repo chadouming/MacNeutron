@@ -241,6 +241,9 @@ re-clone; that is why they wait for the rebase.
     stays local.
   - 0028 (`dlls/libxess`: the MetalFX upscaler made at the first Execute, not at Init; a refused Execute records
     nothing) is ours and stays local.
+  - 0029 (`dlls/libxess`: refused Executes missing a texture Init's flags ask for, NOT_IMPLEMENTED for the calls
+    MetalFX has nothing for, native AA at an odd output size, the logging callback's ERROR level, the pipeline
+    build status after Init) is ours and stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
@@ -265,5 +268,5 @@ re-clone; that is why they wait for the rebase.
     the date before importing another. This is not legal advice.
 - Each patch taken or derived from another tree names its source in its message (0006's is given above, since its message
   doesn't). Patch files keep their original authors.
-- **DXMT** is LGPL-2.1+; our patches to it are too. 0001-0027 are ours.
+- **DXMT** is LGPL-2.1+; our patches to it are too. 0001-0029 are ours.
 - Upstream FEX and DXMT refuse AI-authored contributions: no patches go upstream (issue reports only).

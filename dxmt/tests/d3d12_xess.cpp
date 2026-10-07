@@ -2,11 +2,12 @@
 // The library is loaded by full path, the game's way: check.sh passes a copy of this program named libxess.dll (a PE
 // that isn't XeSS), so the run fails unless the launcher's libxess=b makes Wine load its builtin instead.
 //   d3d12_xess.exe <path to libxess.dll> <mode>...
-//   aa | quality | balanced | performance | ultraperf
-//       "xess <m> input <w>x<h>" (xessGetOptimalInputResolution for 2560x1440), then 64 jittered frames of the
-//       spike's scene (d3d12_upscale.cpp's) through xessD3D12Execute: "xess <m> ok psnr <xess> bilinear <bilinear>"
-//       (ok: the upscale beats a bilinear upscale of the last input against the scene: unjittered, or for aa, whose
-//       "bilinear" is the last input itself, each pixel's average)
+//   aa | quality | balanced | performance | ultraperf | aaodd
+//       "xess <m> input <w>x<h>" (xessGetOptimalInputResolution for 2560x1440; aaodd: aa for 1728x1117, the built-in
+//       display's odd height, Task FR), then 64 jittered frames of the spike's scene (d3d12_upscale.cpp's) through
+//       xessD3D12Execute: "xess <m> ok psnr <xess> bilinear <bilinear>" (ok: the upscale beats a bilinear upscale of
+//       the last input against the scene: unjittered, or for aa, whose "bilinear" is the last input itself, each
+//       pixel's average)
 //   cycles
 //       Init twice on one context (1920x1080, then 2560x1440), 64 frames, the context destroyed after the last Execute
 //       and before its list is submitted: the output is still right. 20 contexts made, upscaling a frame and destroyed.
@@ -37,8 +38,21 @@
 //   nodepth
 //       Unreal's call (bits 0 and 8, no depth texture) recorded on a COMPUTE list and queue (d3d12_upscale's compute),
 //       then with inverted depth too (bit 1: the bridge's depth at 0.0), 64 balanced frames each, beating bilinear;
-//       the bridge's depth read back after, every texel 1.0 (inverted: 0.0; -1: no depth was seen).
-//       "xess nodepth ok compute <s>/<b> depth 1.0 <texels off> inverted <s>/<b> depth 0.0 <texels off>"
+//       the first run's depth read back after, every texel 1.0 (-1: no depth was seen). The inverted one isn't read
+//       back: fresh memory already reads 0.0, so an uncleared depth would pass (Task FR, measured with a build that
+//       skips that clear, even after a far plane at 1.0 was just released).
+//       "xess nodepth ok compute <s>/<b> depth 1.0 <texels off> inverted <s>/<b>"
+//   allocator
+//       (Task FR) Balanced's first Execute recorded into a list of another allocator, run, and that list and allocator
+//       released without a Reset, the context destroyed; then a new context's first Execute: DXMT reuses the released
+//       upscaler, so GPU memory grows by less than 150 MB (a new one is ~230 MB). "xess allocator ok growth <MB>"
+//   api
+//       (Task FR) XeSS's API contract beside the frames: xessGetPipelineBuildStatus before xessD3D12BuildPipelines,
+//       after it, after Init and after another BuildPipelines; Execute without the exposure texture its Init flag 2
+//       asks for, and without the responsive mask flag 3 asks for; the level a logging callback registered at ERROR
+//       gets an Init refusal at, and how many calls; the calls the bridge doesn't implement on a live context, then
+//       one on a destroyed context. "xess api status <a>/<b>/<c>/<d> exposure <r> mask <r> log <calls>:<level>
+//       unimplemented <r>,... stale <r>" (check.sh pins the values)
 //   unsupported
 //       (Wine's wined3d) xessD3D12CreateContext: UNSUPPORTED_DEVICE and a NULL context. "xess unsupported ok"
 // Anything else prints "xess <mode> FAIL ..." or a failed call.
@@ -119,6 +133,9 @@ enum { XESS_QUALITY_SETTING_ULTRA_PERFORMANCE = 100, XESS_QUALITY_SETTING_PERFOR
        XESS_QUALITY_SETTING_BALANCED = 102, XESS_QUALITY_SETTING_QUALITY = 103, XESS_QUALITY_SETTING_AA = 106 };
 enum { XESS_RESULT_SUCCESS = 0, XESS_RESULT_ERROR_UNSUPPORTED_DEVICE = -1, XESS_RESULT_ERROR_INVALID_ARGUMENT = -4,
        XESS_RESULT_ERROR_INVALID_CONTEXT = -8 };
+enum { XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE = 1 << 2, XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK = 1 << 3 };
+enum { XESS_LOGGING_LEVEL_ERROR = 3 };
+typedef void (*xess_app_log_callback_t)(const char *message, int loggingLevel);
 /* End of Intel's declarations. */
 static_assert(sizeof(xess_d3d12_execute_params_t) == 136 && sizeof(xess_d3d12_init_params_t) == 64, "XeSS layout");
 
@@ -131,9 +148,13 @@ static struct {
     int (*GetOptimalInputResolution)(xess_context_handle_t, const xess_2d_t *, int, xess_2d_t *, xess_2d_t *, xess_2d_t *);
     int (*GetIntelXeFXVersion)(xess_context_handle_t, xess_version_t *);
     int (*GetVersion)(xess_version_t *);
+    int (*GetPipelineBuildStatus)(xess_context_handle_t);
+    int (*SetLoggingCallback)(xess_context_handle_t, int, xess_app_log_callback_t);
 } X;
+static HMODULE xess_dll;
 
-static const UINT OW = 2560, OH = 1440, kFrames = 64;
+static UINT OW = 2560, OH = 1440; // the output: aaodd sets 1728x1117
+static const UINT kFrames = 64;
 static const auto COPY_DEST = D3D12_RESOURCE_STATE_COPY_DEST, READ = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                   COPY_SOURCE = D3D12_RESOURCE_STATE_COPY_SOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
@@ -521,6 +542,89 @@ static void Cycles() {
            "rerun %.0f live %.2f/%.2f\n", ok ? "ok" : "FAIL", s, b, r, init, early, growth, ab, five, rerun, l, lb);
 }
 
+// An allocator released without a Reset still lets go of what its lists recorded (DXMT's allocator destructor runs
+// the encoders' destructors): the upscaler goes back to DXMT's pool.
+static void Allocator() {
+    Gpu g;
+    auto ctx = Create(g);
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED);
+    Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED));
+    auto p = fr.Record(0, true);
+    g.Submit(); // the uploads
+    ID3D12CommandAllocator *allocator;
+    ID3D12GraphicsCommandList *list;
+    CHECK(g.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator),
+                                           (void **)&allocator));
+    CHECK(g.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr,
+                                      __uuidof(ID3D12GraphicsCommandList), (void **)&list));
+    XESS(X.Execute(ctx, list, &p));
+    CHECK(list->Close());
+    ID3D12CommandList *lists[] = {list};
+    g.queue->ExecuteCommandLists(1, lists);
+    CHECK(g.queue->Signal(g.fence, ++g.value));
+    HANDLE done = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    CHECK(g.fence->SetEventOnCompletion(g.value, done));
+    if (WaitForSingleObject(done, 10000) != WAIT_OBJECT_0) Fail("timeout", 0);
+    CloseHandle(done);
+    XESS(X.DestroyContext(ctx));
+    list->Release();
+    allocator->Release(); // never reset
+    double before = GpuMB();
+    ctx = Create(g);
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED);
+    Run(fr, ctx, 1, 2, [] {});
+    double growth = GpuMB() - before;
+    XESS(X.DestroyContext(ctx));
+    printf("xess allocator %s growth %.0f\n", growth < 150 ? "ok" : "FAIL", growth);
+}
+
+static int log_calls, log_level = -1;
+static void LogCallback(const char *, int level) { log_calls++; log_level = level; }
+
+static void Api() {
+    Gpu g;
+    // Pipeline build status: only between BuildPipelines and Init (xess.h).
+    auto ctx = Create(g);
+    int status[4];
+    status[0] = X.GetPipelineBuildStatus(ctx);
+    XESS(X.BuildPipelines(ctx, nullptr, true, 0));
+    status[1] = X.GetPipelineBuildStatus(ctx);
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED);
+    status[2] = X.GetPipelineBuildStatus(ctx);
+    XESS(X.BuildPipelines(ctx, nullptr, true, 0));
+    status[3] = X.GetPipelineBuildStatus(ctx);
+    // A texture an Init flag asks for, missing at Execute.
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED, OW, OH, XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE);
+    Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED));
+    auto p = fr.Record(0, true);
+    int exposure = X.Execute(ctx, g.list, &p);
+    Init(ctx, XESS_QUALITY_SETTING_BALANCED, OW, OH, XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK);
+    int mask = X.Execute(ctx, g.list, &p);
+    g.Submit();
+    // An Init refusal (an unknown flag: this run's first) reaches a callback registered at ERROR.
+    XESS(X.SetLoggingCallback(ctx, XESS_LOGGING_LEVEL_ERROR, LogCallback));
+    xess_d3d12_init_params_t bad = {{OW, OH}, XESS_QUALITY_SETTING_BALANCED, 1u << 9};
+    if (X.Init(ctx, &bad) != XESS_RESULT_ERROR_INVALID_ARGUMENT) Fail("unknown flag accepted", 0);
+    // The exports the bridge doesn't implement, on a live context (their arguments as xess.h and xess_debug.h type
+    // them; none is read), then one on a destroyed context.
+    static const char *const unimplemented[] = {
+        "xessForceLegacyScaleFactors", "xessGetExposureMultiplier", "xessSetExposureMultiplier",
+        "xessGetMaxResponsiveMaskValue", "xessSetMaxResponsiveMaskValue", "xessSelectNetworkModel", "xessStartDump",
+        "xessGetProfilingData", "xessD3D12GetProfilingData", "xessD3D12GetResourcesToDump"};
+    using Fn = int (*)(xess_context_handle_t, void *);
+    float value = 0;
+    std::string codes;
+    for (auto *name : unimplemented) {
+        auto fn = (Fn)GetProcAddress(xess_dll, name);
+        if (!fn) Fail(name, 0);
+        codes += (codes.empty() ? "" : ",") + std::to_string(fn(ctx, &value));
+    }
+    XESS(X.DestroyContext(ctx));
+    int stale = ((Fn)GetProcAddress(xess_dll, "xessGetExposureMultiplier"))(ctx, &value);
+    printf("xess api status %d/%d/%d/%d exposure %d mask %d log %d:%d unimplemented %s stale %d\n", status[0], status[1],
+           status[2], status[3], exposure, mask, log_calls, log_level, codes.c_str(), stale);
+}
+
 // The bridge reaches DXMT only through the device's IMTLD3D12DeviceExt (DXMT's src/d3d12/d3d12_interfaces.hpp): a
 // device standing in for the real one answers it with a wrapper counting the upscalers made.
 struct IMTLD3D12TemporalScaler : IUnknown {};
@@ -676,7 +780,7 @@ static size_t DepthOff(Gpu &g, UINT w, UINT h, float want) {
 }
 
 // Unreal's call without depth on a COMPUTE list (Gpu's queue, allocator and list are DIRECT: COMPUTE ones instead),
-// then on a DIRECT one with inverted depth. The bridge's depth is read back after: 1.0 everywhere (inverted: 0.0).
+// then on a DIRECT one with inverted depth. The first one's bridge depth is read back after: 1.0 everywhere.
 static void Nodepth() {
     std::string psnrs;
     bool ok = true;
@@ -699,11 +803,11 @@ static void Nodepth() {
         Frames fr(g, Optimal(ctx, XESS_QUALITY_SETTING_BALANCED), in);
         Run(fr, ctx, 0, kFrames, [] {});
         auto [s, b] = fr.Read(kFrames - 1);
-        size_t off = DepthOff(g, fr.iw, fr.ih, k ? 0.0f : 1.0f);
+        size_t off = k ? 0 : DepthOff(g, fr.iw, fr.ih, 1.0f);
         XESS(X.DestroyContext(ctx));
         char line[96];
-        snprintf(line, sizeof line, " %s %.2f/%.2f depth %s %zd", k ? "inverted" : "compute", s, b, k ? "0.0" : "1.0",
-                 (ptrdiff_t)off);
+        if (k) snprintf(line, sizeof line, " inverted %.2f/%.2f", s, b);
+        else snprintf(line, sizeof line, " compute %.2f/%.2f depth 1.0 %zd", s, b, (ptrdiff_t)off);
         psnrs += line;
         ok = ok && s > b && !off;
     }
@@ -735,7 +839,7 @@ static void Unsupported() {
 int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 3) { printf("usage: d3d12_xess.exe <libxess.dll> <mode>...\n"); return 2; }
-    HMODULE xess = LoadLibraryA(argv[1]);
+    HMODULE xess = xess_dll = LoadLibraryA(argv[1]);
     if (!xess) { printf("xess FAIL LoadLibrary %s: %lu\n", argv[1], GetLastError()); return 1; }
     static const char *const exports[] = {
         "xessD3D12CreateContext", "xessD3D12BuildPipelines", "xessD3D12Init", "xessD3D12GetInitParams",
@@ -754,6 +858,8 @@ int main(int argc, char **argv) {
     get(X.GetOptimalInputResolution, "xessGetOptimalInputResolution");
     get(X.GetIntelXeFXVersion, "xessGetIntelXeFXVersion");
     get(X.GetVersion, "xessGetVersion");
+    get(X.GetPipelineBuildStatus, "xessGetPipelineBuildStatus");
+    get(X.SetLoggingCallback, "xessSetLoggingCallback");
     for (int a = 2; a < argc; a++) {
         mode = argv[a];
         if (mode == "aa") Quality(XESS_QUALITY_SETTING_AA);
@@ -761,10 +867,13 @@ int main(int argc, char **argv) {
         else if (mode == "balanced") Quality(XESS_QUALITY_SETTING_BALANCED);
         else if (mode == "performance") Quality(XESS_QUALITY_SETTING_PERFORMANCE);
         else if (mode == "ultraperf") Quality(XESS_QUALITY_SETTING_ULTRA_PERFORMANCE);
+        else if (mode == "aaodd") { OW = 1728; OH = 1117; Quality(XESS_QUALITY_SETTING_AA); OW = 2560; OH = 1440; }
         else if (mode == "cycles") Cycles();
         else if (mode == "reuse") Reuse();
         else if (mode == "flags") Flags();
         else if (mode == "nodepth") Nodepth();
+        else if (mode == "allocator") Allocator();
+        else if (mode == "api") Api();
         else if (mode == "unsupported") Unsupported();
         else { printf("unknown mode %s\n", mode.c_str()); return 2; }
     }

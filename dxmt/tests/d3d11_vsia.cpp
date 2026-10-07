@@ -2,6 +2,8 @@
 // translator code): slot 0 bound to (1, 2, 3, 4), slot 1 never bound (R32G32_FLOAT and R32G32B32A32_FLOAT), slot 3
 // unbound by a null buffer (R32_UINT). The shaders are compiled at run time (D3DCompile, the system's d3dcompiler_47).
 //   d3d11_vsia.exe   prints "d3d11 ia <a> <b> <c> <d>", four floats each, from texel (2,2) of four RGBA32F targets.
+//   d3d11_vsia.exe compile <in.hlsl> <entry> <target> <out>   compiles a file with the same D3DCompile and writes the
+//                    bytecode (Task FR: dxbc/sync.dxbc, a DXBC shader for dxil-translate's offline rows).
 // D3D: unbound slots read zeros, widened by the format: (0,0,0,1) for b and d, (0,0,0,0) for c.
 #include <windows.h>
 #include <d3d11.h>
@@ -38,7 +40,29 @@ static ID3DBlob *Compile(const char *entry, const char *target) {
     return code;
 }
 
-int main() {
+static int CompileFile(char **argv) {
+    FILE *f = fopen(argv[2], "rb");
+    if (!f) { printf("can't read %s\n", argv[2]); return 1; }
+    static char source[65536];
+    size_t n = fread(source, 1, sizeof source, f);
+    fclose(f);
+    ID3DBlob *code = nullptr, *errors = nullptr;
+    HRESULT hr = D3DCompile(source, n, argv[2], nullptr, nullptr, argv[3], argv[4], 0, 0, &code, &errors);
+    if (FAILED(hr)) {
+        printf("D3DCompile failed 0x%08lx %s\n", (unsigned long)hr, errors ? (const char *)errors->GetBufferPointer() : "");
+        return 1;
+    }
+    f = fopen(argv[5], "wb");
+    if (!f || fwrite(code->GetBufferPointer(), 1, code->GetBufferSize(), f) != code->GetBufferSize() || fclose(f)) {
+        printf("can't write %s\n", argv[5]);
+        return 1;
+    }
+    printf("compiled %s: %zu bytes\n", argv[5], (size_t)code->GetBufferSize());
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 6 && !strcmp(argv[1], "compile")) return CompileFile(argv);
     ID3D11Device *device; ID3D11DeviceContext *ctx;
     CHECK(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,
                             nullptr, &ctx));

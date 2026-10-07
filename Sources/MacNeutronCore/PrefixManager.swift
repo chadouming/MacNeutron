@@ -40,7 +40,10 @@ public struct PrefixManager: Sendable {
     public static func stamp(identity: String, msync: Bool) -> String { "wine.app \(identity) msync=\(msync ? 1 : 0)" }
     /// Written before wineboot, so a failed or stopped preparation is retried in place, never renamed.
     static let preparingStamp = "wine.app preparing"
-    /// In the compat folder, written after the player's data was carried (or that failed): a retry carries no more.
+    /// In the compat folder: the renamed prefix whose data is still to be carried, written before the rename, so a
+    /// launch stopped anywhere after it carries on the next one. After the carry it becomes `carriedMarker`.
+    static let pendingRecord = "player-data-pending"
+    /// The last carry's record (its prefix's name); nothing reads it.
     static let carriedMarker = "player-data-carried"
 
     /// Prepares the prefix when it is missing or another `wine.app` prepared it; stops a wineserver left in the other
@@ -65,14 +68,15 @@ public struct PrefixManager: Sendable {
                 log.append("note: msync changed, stopped the prefix's wineserver")
                 try want.write(to: context.versionFile, atomically: true, encoding: .utf8)
             } else {
-                // An arm64 Wine doesn't adopt an x86_64 Wine's prefix.
+                // An arm64 Wine doesn't adopt an x86_64 Wine's prefix. Only a rename carries: a preparation stopped
+                // after one (its pending record says which) carries on its retry; an arm64 prefix prepared again
+                // never does, whatever pfx.rosetta lies beside it.
                 var carryFrom: String?
                 if exists, recorded?.hasPrefix("wine.app ") != true {
                     carryFrom = try renameRosettaPrefix()
-                } else if recorded == Self.preparingStamp,
-                          !fm.fileExists(atPath: context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false)) {
-                    // A first preparation stopped after the rename, before the carry.
-                    carryFrom = newestRosettaPrefix()
+                } else {
+                    carryFrom = (try? String(contentsOf: context.dataPath.appending(path: Self.pendingRecord), encoding: .utf8))
+                        .flatMap { $0.hasPrefix("pfx.rosetta") && !$0.contains("/") ? $0 : nil }
                 }
                 try Self.preparingStamp.write(to: context.versionFile, atomically: true, encoding: .utf8)
                 try prepareNew(environment: environment)
@@ -114,7 +118,7 @@ public struct PrefixManager: Sendable {
     }
 
     /// `pfx` → the first free `pfx.rosetta`, `pfx.rosetta-2`, … (the saves inside stay where the player can find them);
-    /// returns the new name.
+    /// returns the new name, recorded as pending first.
     private func renameRosettaPrefix() throws -> String {
         var name = "pfx.rosetta"
         var number = 1
@@ -122,23 +126,10 @@ public struct PrefixManager: Sendable {
             number += 1
             name = "pfx.rosetta-\(number)"
         }
+        try name.write(to: context.dataPath.appending(path: Self.pendingRecord), atomically: true, encoding: .utf8)
         try FileManager.default.moveItem(at: context.prefix, to: context.dataPath.appending(path: name))
-        // Each rename carries once: an earlier rename's marker mustn't stop this one's retry.
-        try? FileManager.default.removeItem(at: context.dataPath.appending(path: Self.carriedMarker))
         log.append("note: renamed a Rosetta-era prefix to \(name)")
         return name
-    }
-
-    /// The last name `renameRosettaPrefix` took: the highest-numbered `pfx.rosetta…`.
-    /// ponytail: the rename takes the first free number, so after the player deletes a lower one the highest isn't the
-    /// newest; record the name at the rename if that ever matters.
-    private func newestRosettaPrefix() -> String? {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: context.dataPath.path(percentEncoded: false))) ?? []
-        return names.compactMap { name -> (Int, String)? in
-            if name == "pfx.rosetta" { return (1, name) }
-            guard name.hasPrefix("pfx.rosetta-"), let number = Int(name.dropFirst("pfx.rosetta-".count)) else { return nil }
-            return (number, name)
-        }.max { $0.0 < $1.0 }?.1
     }
 
     /// The fresh prefix gets the renamed one's settings and local saves (spec §14, amending §3.4 step 1). What isn't
@@ -148,9 +139,9 @@ public struct PrefixManager: Sendable {
                                        to: context.prefix)
         log.append("note: carried the player's data from \(name): \(carried.files) files, \(carried.keys) registry keys"
                    + (carried.failed > 0 ? ", \(carried.failed) not carried" : ""))
-        // ponytail: if the marker can't be written, a later retry carries again, which never overwrites.
-        _ = FileManager.default.createFile(atPath: context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false),
-                                           contents: nil)
+        // ponytail: if the rename fails, a later retry carries again, which never overwrites.
+        _ = rename(context.dataPath.appending(path: Self.pendingRecord).path(percentEncoded: false),
+                   context.dataPath.appending(path: Self.carriedMarker).path(percentEncoded: false))
     }
 
     /// Every launch: prefixes made before the bridge existed get it too, and a runtime update replaces it.

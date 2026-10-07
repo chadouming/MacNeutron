@@ -24,8 +24,9 @@ enum PlayerData {
         let (oldUsers, skippedUsers) = users(in: old), newUsers = users(in: new).names
         result.failed += skippedUsers
         for user in oldUsers {
-            // wineboot names the user after $USER: one old user goes to the one new user, whatever the names.
-            let target = oldUsers.count == 1 && newUsers.count == 1 ? newUsers[0] : user
+            // wineboot names the one user after $USER, and Wine reads only that one: every old user goes there, whatever
+            // the names (the first, by name, wins a file two have).
+            let target = newUsers.count == 1 ? newUsers[0] : user
             for folder in folders {
                 switch kind(old, "drive_c/users/\(user)/\(folder)") {
                 case .missing: continue
@@ -98,6 +99,10 @@ enum PlayerData {
         return true
     }
 
+    /// The name each file is copied under, in its folder, before it is renamed into place: a carry killed mid-copy (a
+    /// byte copy, off APFS) leaves its part there, never under the real name, and the retry's copy replaces it.
+    static let tempName = ".macneutron-carry"
+
     /// Clones every regular file under `source` that `destination` lacks (both real directories) and counts.
     private static func copyTree(_ source: URL, to destination: URL, relative: String, _ result: inout Carried) {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: source.path(percentEncoded: false)) else {
@@ -116,10 +121,15 @@ enum PlayerData {
             case S_IFREG:
                 var existing = stat()
                 guard lstat(to.path(percentEncoded: false), &existing) != 0 else { continue }  // never overwritten
-                // COPYFILE_CLONE: an APFS clone, else a copy; it includes COPYFILE_EXCL.
-                guard copyfile(from.path(percentEncoded: false), to.path(percentEncoded: false), nil,
-                               copyfile_flags_t(COPYFILE_CLONE)) == 0 else {
-                    unlink(to.path(percentEncoded: false))  // nothing was there (lstat above): a part-copy is ours
+                let temp = destination.appending(path: tempName).path(percentEncoded: false)
+                unlink(temp)  // a killed carry's part-copy
+                // COPYFILE_CLONE: an APFS clone, else a copy; it includes COPYFILE_EXCL. RENAME_EXCL never replaces a
+                // file; a volume without it (ENOTSUP) gets a plain rename: under the prefix lock with no wineserver,
+                // nothing else writes there since the lstat above.
+                guard copyfile(from.path(percentEncoded: false), temp, nil, copyfile_flags_t(COPYFILE_CLONE)) == 0,
+                      renamex_np(temp, to.path(percentEncoded: false), UInt32(RENAME_EXCL)) == 0
+                        || (errno == ENOTSUP && rename(temp, to.path(percentEncoded: false)) == 0) else {
+                    unlink(temp)
                     result.failed += 1
                     continue
                 }

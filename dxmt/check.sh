@@ -22,9 +22,11 @@ fail=0
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 die() { echo "dxmt-check: $*" >&2; exit 1; }
 hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
-# lone <run>: DXMT_STATS's count of timestamps given an encoder of their own, and why (Task F4).
+# lone <run>: DXMT_STATS's count of timestamps given an encoder of their own, and why (Task F4); "no stats" when the run
+# wrote none (killed before its exit), which no row wants.
 lone() {
-  grep -oE '(timestamps given their own encoder|lone timestamps \([a-z ]+\)) [0-9]+' "$WORK/$1/stats.txt" 2> /dev/null | tr '\n' ';'
+  [ -f "$WORK/$1/stats.txt" ] || { echo "no stats"; return; }
+  grep -oE '(timestamps given their own encoder|lone timestamps \([a-z ]+\)) [0-9]+' "$WORK/$1/stats.txt" | tr '\n' ';'
 }
 
 echo "info arm64 mode: $WINEAPP"  # the line wine-arm64/check.sh's dxmt steps look for
@@ -272,7 +274,7 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
   "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
-  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257" "ts-many 1" "sampled 1" "ts-queues 1")
+  "merge-indirect 10" "placed-uav 1048576" "heap-released 257" "ts-many 1" "sampled 1" "ts-queues 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -306,7 +308,7 @@ run ours heap-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" heap-released
 unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a heap released while a texture placed in it lives stays, and goes with the texture" \
   "$(grep -oE 'heaps destroyed [0-9]+' "$WORK/heap-stats/stats.txt" 2> /dev/null):$(hazards heap-stats)" \
-  "heaps destroyed 1:hazard heap-released 0 257"
+  "heaps destroyed 1:hazard heap-released 257"
 # Overlap happens when asked for (GPU overlap spec §3.8): with DXMT_D3D12_OVERLAP=1, passes into different targets
 # with no barrier between them leave their boundaries free to overlap; by default (strict order) none is, and every
 # encoder joins.
@@ -800,12 +802,18 @@ expect "the frozen D3DMetal reference still runs" "$(grep -c 'avg frame' "$WORK/
 # 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
 "$TOOLS/dxil-translate" "$ROOT/dxmt/tests/dxil" --flags > "$WORK/translate.txt" 2>&1 || true
 expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "13/14"
-# Task F2: a DXIL barrier that doesn't sync the group (modes 8, 2, 10 in dxil/barriers.hlsl) still fences memory, as
-# Metal Shader Converter does: air.atomic.fence flags:scope 2:1, 5:3, 7:3; the synced modes after them stay 3
-# air.wg.barrier calls (Metal 3.1). The runtime group can't tell (each fence is followed by a synced barrier).
-expect "DXIL barriers that don't sync the group fence memory" \
+# Task F2, Task FR: DXIL barriers fence memory as Metal Shader Converter does at Metal 3.1 (an air.atomic.fence, then
+# for a synced one an air.wg.barrier), the device and texture ones at device scope whether or not they sync the group
+# (a barrier's memory flags only order within the group). dxil/barriers.hlsl's modes 8, 9, 2, 3, 10, 11:
+# air.atomic.fence flags:scope 2:1 (8), 5:3 (2 and 3), 7:3 (10 and 11), and 3 air.wg.barrier calls (9, 3, 11). The
+# runtime group can't tell (each fence is followed by a synced barrier). DXBC's (D3D11) the same, from dxbc/sync.hlsl.
+expect "DXIL barriers fence memory, at device scope for device memory" \
   "$(grep '^ok barriers\.dxil ' "$WORK/translate.txt" | grep -oE 'fence=[^ ]+ barrier=[0-9]+' || echo none)" \
-  "fence=2:1,5:3,7:3 barrier=3"
+  "fence=2:1,5:3,5:3,7:3,7:3 barrier=3"
+"$TOOLS/dxil-translate" "$ROOT/dxmt/tests/dxbc" --flags > "$WORK/translate-dxbc.txt" 2>&1 || true
+expect "and DXBC's, GroupMemoryBarrier's threadgroup fence included" \
+  "$(grep '^ok sync\.dxbc ' "$WORK/translate-dxbc.txt" | grep -oE 'fence=[^ ]+ barrier=[0-9]+' || echo none)" \
+  "fence=2:1,5:3,5:3,7:3,7:3 barrier=3"
 "$TOOLS/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
 expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "32/32"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
@@ -914,25 +922,34 @@ expect "nor at an output offset, nor with timestamps around it" \
 # beside a live context (DXMT keeps 4 released); dynamic resolution keeping the upscaler and a new motion vector
 # format replacing it; Init's flags, with real frames for the ones that change what the inputs mean and for Unreal's
 # call (no depth texture), and the version calls; Unreal's call on a COMPUTE list and with inverted depth, the bridge's
-# own depth read back at the far plane (1.0, inverted 0.0); "unsupported" under wined3d. A failing mode's FAIL line
-# shows.
+# own depth read back at the far plane (1.0; not inverted's 0.0: fresh memory reads 0.0 uncleared too); "unsupported"
+# for an object without DXMT's interface (under wined3d, Wine makes no D3D12 device here). Task FR: native AA at
+# 1728x1117 (the built-in display's odd height) keeps input = output; an allocator released without a Reset still
+# returns its upscaler to DXMT's pool; XeSS's API contract (build status, textures Init's flags ask for, the logging
+# callback's level, the exports the bridge doesn't implement). A failing mode's FAIL line shows.
 mkdir -p "$WORK/xess" && cp "$TESTS/d3d12_xess.exe" "$WORK/xess/libxess.dll"
 xessed() {
   grep -q "^xess $2 ok" "$WORK/$1.txt" && echo yes ||
     { grep -m1 -E "^xess( $2)? FAIL|failed" "$WORK/$1.txt" || grep -m1 '^xess' "$WORK/$1.txt" || echo none; }
 }
-for m in aa:2560x1440 quality:1504x846 balanced:1280x720 performance:1112x626 ultraperf:854x480; do
+for m in aa:2560x1440 quality:1504x846 balanced:1280x720 performance:1112x626 ultraperf:854x480 aaodd:1728x1117; do
   run ours "xess-${m%:*}" dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" "${m%:*}"
   expect "XeSS ${m%:*} asks for ${m#*:}" "$(grep -m1 "^xess ${m%:*} input" "$WORK/xess-${m%:*}.txt" || echo none)" \
     "xess ${m%:*} input ${m#*:}"
   expect "XeSS ${m%:*} upscales on MetalFX" "$(xessed "xess-${m%:*}" "${m%:*}")" yes
 done
-for m in cycles reuse flags nodepth; do
+for m in cycles reuse flags nodepth allocator; do
   run ours "xess-$m" dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" "$m"
   expect "XeSS $m" "$(xessed "xess-$m" "$m")" yes
 done
+# Build status only between BuildPipelines and Init (-12 WRONG_CALL_ORDER outside); a texture Init's flags ask for
+# missing at Execute: -4; an Init refusal reaches a callback registered at ERROR at ERROR (3); the exports the bridge
+# doesn't implement answer a live context -7 (NOT_IMPLEMENTED), a destroyed one -8.
+run ours xess-api dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" api
+expect "XeSS's API contract" "$(grep -m1 '^xess api' "$WORK/xess-api.txt" || echo none)" \
+  "xess api status -12/0/-12/0 exposure -4 mask -4 log 1:3 unimplemented -7,-7,-7,-7,-7,-7,-7,-7,-7,-7 stale -8"
 run ours xess-wd wined3d "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" unsupported
-expect "XeSS reports no device on wined3d" "$(xessed xess-wd unsupported)" yes
+expect "XeSS reports no device for an object without DXMT's interface" "$(xessed xess-wd unsupported)" yes
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
 run ours xess-val dxmt "$TESTS/d3d12_xess.exe" "Z:$WORK/xess/libxess.dll" performance cycles
 # flags apart (the watchdog): its nodepth case is Unreal's call, the bridge's own depth (MetalFX wants it colour-sized)

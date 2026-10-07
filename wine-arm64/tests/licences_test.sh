@@ -35,7 +35,7 @@ check() {  # check <wine.app> <build dir>
   # 2. Notices that live only in source headers: the committed NOTICES.md names each holder.
   for h in "Regents of the University of California" "VIXL authors" "Rich Felker" "Arm Limited" "Will Faust" \
            "Microsoft Corporation" "Alexander Bessonov" "Unicode, Inc." "Henry Spencer" "Zebediah Figura" \
-           "Marc-Aurel Zent"
+           "Marc-Aurel Zent" "Intel Corporation"
   do g -qF "$h" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for $h"; done
   g -qF 'macneutron/LICENSE' "$L/README" 2> /dev/null || miss "MacNeutron entry (macneutron/LICENSE) in README"
 

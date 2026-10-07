@@ -4,7 +4,8 @@
 // whose outputs cover its inputs (geometry shaders are translated last). The root signature comes from the shaders'
 // own resources. With --flags, each result line also counts the fast-math flags left in the translated AIR
 // (nnan, ninf, fast compares; reassoc, contract, arcp), for checking what the translator keeps, after its memory
-// fences (each air.atomic.fence's flags:scope, in order) and its air.wg.barrier count.
+// fences (each air.atomic.fence's flags:scope, in order) and its air.wg.barrier count. A .dxbc file in the folder is a
+// DXBC (Shader Model 5) compute shader, translated as D3D11 does (Task FR: its sync lowering, offline).
 #import <Metal/Metal.h>
 #define BOOL WIN_BOOL // airconv's Windows headers define BOOL as int; Objective-C's is signed char
 #include "airconv_public.h"
@@ -230,6 +231,24 @@ Result Translate(id<MTLDevice> device, const std::vector<char> &bytes, std::vect
     return result;
   }
   auto internal = (dxmt::dxbc::SM50ShaderInternal *)shader;
+  if (!internal->dxil && internal->shader_type == microsoft::D3D11_SB_COMPUTE_SHADER) {
+    // A DXBC compute shader (Task FR): D3D11's call (d3d11_shader.cpp), no root signature, at Metal 3.1 as the rest.
+    result.stage = "cs";
+    SM50_SHADER_COMMON_DATA common{nullptr, SM50_SHADER_COMMON, SM50_SHADER_METAL_310, {}};
+    sm50_bitcode_t bitcode = nullptr;
+    if (SM50Compile(shader, (SM50_SHADER_COMPILATION_ARGUMENT_DATA *)&common, "main", &bitcode, &error)) {
+      result.reason = FirstLine(ErrorText(error));
+    } else if (id<MTLFunction> function = [Library(device, bitcode, result) newFunctionWithName:@"main"]) {
+      NSError *err = nil;
+      result.ok = [device newComputePipelineStateWithFunction:function error:&err] != nil;
+      if (!result.ok)
+        result.reason = FirstLine(err ? err.localizedDescription.UTF8String : "no pipeline");
+    } else if (result.reason.empty()) {
+      result.reason = "no function \"main\" in the library";
+    }
+    SM50Destroy(shader);
+    return result;
+  }
   if (!internal->dxil) {
     SM50Destroy(shader);
     result.reason = "not a DXIL shader";
@@ -342,7 +361,7 @@ int main(int argc, char **argv) {
   std::vector<std::filesystem::path> files;
   std::error_code ec;
   for (auto &f : std::filesystem::directory_iterator(argv[1], ec))
-    if (f.path().extension() == ".dxil")
+    if (f.path().extension() == ".dxil" || f.path().extension() == ".dxbc")
       files.push_back(f.path());
   if (ec) {
     fprintf(stderr, "dxil-translate: can't read %s: %s\n", argv[1], ec.message().c_str());
