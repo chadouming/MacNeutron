@@ -1121,6 +1121,43 @@ static void TwoHeaps() {
     printf("hazard two-heaps %d %d\n", first[0] && second[0] > first[0], first[1] && second[1] > first[1]);
 }
 
+// Task F2 item 0: timestamps sampled on one queue, resolved on another behind a fence (queue B samples nothing, so our
+// DXMT gives it no counter ring): B's resolve reads the values A's queue wrote. Prints 1 when both are nonzero and in
+// order (D3DMetal: 0, its timestamps are zero).
+static void TimestampQueues() {
+    static ID3D12QueryHeap *heap;
+    if (!heap) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 2};
+        CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&heap));
+    }
+    Queue2 b = MakeQueue();
+    ID3D12Fence *f = MakeFence();
+    uint8_t *p;
+    D3D12_RANGE whole = {0, 64 * 512}, none = {0, 0};
+    CHECK(readback->Map(0, &whole, (void **)&p));
+    memset(p + 60 * 512, 0, 16);
+    readback->Unmap(0, &whole);
+    Clear(T[0]);
+    g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    Pass(T[0], add, 1, 16);
+    g->list->EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, 1);
+    Run(g->queue, g->list);
+    CHECK(g->queue->Signal(f, 1));
+    CHECK(b.q->Wait(f, 1));
+    b.l->ResolveQueryData(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, readback, 60 * 512);
+    Run(b.q, b.l);
+    CHECK(b.q->Signal(f, 2));
+    if (!CpuWait(f, 2)) { printf("hazard ts-queues timeout\n"); exit(1); }
+    CHECK(g->allocator->Reset());
+    CHECK(g->list->Reset(g->allocator, nullptr));
+    UINT64 t[2];
+    CHECK(readback->Map(0, &whole, (void **)&p));
+    memcpy(t, p + 60 * 512, 16);
+    readback->Unmap(0, &none);
+    printf("hazard ts-queues %d\n", t[0] && t[1] >= t[0]);
+    b.l->Release(); b.a->Release(); b.q->Release(); f->Release();
+}
+
 // GPU efficiency spec E4: a lone timestamp (a list's first; a list of timestamps alone) is taken at the start of the
 // next encoder the queue encodes, not by a blit of its own (DXMT_STATS: 2 here). One call, three lists:
 // [t0, pass on T0, t1], [t2, t3], [t4, pass on T1, t5]. Prints 1 when all six resolve nonzero and in order.
@@ -1510,7 +1547,7 @@ int main(int argc, char **argv) {
         {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
         {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
         {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}, {"placed-uav", PlacedUav},
-        {"heap-released", HeapReleased}, {"ts-many", TimestampMany}, {"sampled", Sampled}};
+        {"heap-released", HeapReleased}, {"ts-many", TimestampMany}, {"sampled", Sampled}, {"ts-queues", TimestampQueues}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

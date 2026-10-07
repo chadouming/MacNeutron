@@ -491,3 +491,37 @@ IMTLD3D12CommandListExt's 4 methods; the `d3d12_api library` row compares D3DMet
 
 Both lanes of `make dxmt-check` on the applied build: `dxmt-check: all passed` twice, 246 ok per lane, no FAIL. The
 translator key is unchanged (no airconv change).
+
+## Shader translator fixes, one translator-key change (XeSS plan, Task F2)
+
+2026-10-07 (Rulings 21-22; F4's leftovers). DXMT patches 0020-0026, each with a row in `dxmt/check.sh`. 0022-0025
+change airconv, so the translator key changes once, on purpose (Ruling 22): `e66d8fd3…` → `b3eea49c…`; every user's
+shader cache rebuilds once.
+- 0020: a queue that never sampled timestamps (no counter ring) resolving timestamps another queue sampled read the
+  heap's unused counter buffer: `hazard ts-queues` (queue A samples, queue B resolves behind a fence) read `0` before,
+  `1` now. Only a queue whose ring couldn't be created falls back to the heap's buffer.
+- 0021 and 0023: vertex buffer slots a pipeline reads but nobody bound point at a zeroed buffer with stride 0 (D3D12: a
+  4 KB one, also for null VERTEX_BUFFER_VIEW arguments of ExecuteIndirect; D3D11: the zeroed dummy constant buffer),
+  and pulled vertex attributes no longer check for a null buffer (the branch cost 3-5 % of vertex fetch in the
+  vertex-fetch study). Unbound slots now read zeros widened by the format, as on D3DMetal: `vsread ia` and
+  `d3d11 ia` (R32G32B32A32 bound, R32G32 and R32G32B32A32 never bound, R32_UINT a null view) read
+  `1,2,3,4 0,0,0,1 0,0,0,0 0,0,0,1` (before: `0,0,0,0` for every unbound attribute; D3DMetal: as now).
+  `indirect vbv-null` (a null view argument after a bound one): `3,0:300`, the stale tags not read. 0026 looks the
+  zeroed buffer up once per vertex buffer table, not once per unbound slot and command (each lookup takes a lock).
+- 0022: a non-precise `mad` (DXIL FMad without `!dx.precise`) becomes one `air.fma`, as Metal Shader Converter does;
+  precise ones stay a multiply and an add. `dxil/mad.hlsl` (a = 1 + n 2^-13, b = 1 - n 2^-13, c = -1): against a CPU
+  reference, `mad fused 64 precise 64 of 64` (before: 32, the odd threads rounding the product first); the group
+  matches D3DMetal (it differed at word 0 before). Offline, four SMITE 2 shaders: a vertex shader 12 fma, a pixel
+  shader 38, a compute shader 82, each replacing a multiply and an add.
+- 0024: DXIL barriers without the sync bit (GroupMemoryBarrier 8, AllMemoryBarrier 10, DeviceMemoryBarrier 2)
+  emit `air.atomic.fence` (they emitted nothing below Metal 3.2; mode 8 nothing at all). Offline: `dxil/barriers.hlsl`
+  0 → 3 fences, SMITE 2's compute shader with 12 mode-8 barriers 0 → 12. The group matches D3DMetal (a guard: the
+  results can't depend on a fence alone).
+- 0025: `DXMT_DXIL_BOUNDS=off` (measurement only) drops the typed `Buffer<>` read checks and the raw and structured
+  ones; the shader cache keys it apart. `bounds` with it reads past views (`5 6 7 8 19 20 21 22 21 22 23 24 20 21 0 0
+  13 14 15 16 17 18 19 20 20 19 20 0 1 2 3 4`, every read inside the test's buffer) and inside them as without it;
+  `vsread` reads as without it. Offline, selects in SMITE 2's vertex shader 82 → 13, compute 79 → 24.
+
+Both lanes of `make dxmt-check` on the applied build (0026): `dxmt-check: all passed` twice, 257 ok per lane (225
+rows, 32 dxil-probe lines), no FAIL. `vbv-null` is one more ExecuteIndirect with a resolver pass, so the stats rows now
+want 16390 calls, 3 resolve passes and 14 with `DXMT_D3D12_INDIRECT=icb`.

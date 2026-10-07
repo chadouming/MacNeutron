@@ -3,6 +3,9 @@
 // The vertex shader reads a half-float typed buffer (R16_FLOAT, FirstElement 3), a structured buffer (FirstElement
 // 1), a 3D texture and a cube map (SampleLevel) and passes each to a render target (RGBA32F). Prints
 // "vsread ok <typed> <structured> <volume> <cube>", four floats each. check.sh compares with D3DMetal.
+//   d3d12_vsread.exe <vsia.dxil> <ps.dxil> ia   (Task F2) the vertex shader reads the input assembler instead: slot 0
+// bound to (1, 2, 3, 4), slot 1 never bound (R32G32_FLOAT and R32G32B32A32_FLOAT), slot 3 a null view (R32_UINT).
+// Prints "vsread ia <a> <b> <c> <d>"; D3D: unbound slots read zeros, widened by the format: (0,0,0,1) and (0,0,0,0).
 #include "d3d12_common.hpp"
 
 static uint16_t Half(float f) {  // exact for the small multiples of 1/4 used here
@@ -14,7 +17,8 @@ static uint16_t Half(float f) {  // exact for the small multiples of 1/4 used he
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3) { printf("usage: d3d12_vsread.exe <vs.dxil> <ps.dxil>\n"); return 2; }
+    bool ia = argc == 4 && !strcmp(argv[3], "ia");
+    if (argc != 3 && !ia) { printf("usage: d3d12_vsread.exe <vs.dxil> <ps.dxil> [ia]\n"); return 2; }
     std::vector<char> vs = Load(argv[1]), ps = Load(argv[2]);
     if (vs.empty() || ps.empty()) { printf("can't read the shaders\n"); return 1; }
     Gpu gpu;
@@ -25,12 +29,20 @@ int main(int argc, char **argv) {
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
-    D3D12_ROOT_SIGNATURE_DESC rd = {1, &param, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    D3D12_ROOT_SIGNATURE_DESC rd = {1, &param, 1, &sampler,
+                                    ia ? D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT : D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ID3D12RootSignature *root = gpu.RootSignature(rd);
     D3D12_GRAPHICS_PIPELINE_STATE_DESC gd = {};
     gd.pRootSignature = root;
     gd.VS = {vs.data(), vs.size()};
     gd.PS = {ps.data(), ps.size()};
+    D3D12_INPUT_ELEMENT_DESC layout[] = {
+        {"A", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"B", 0, DXGI_FORMAT_R32G32_FLOAT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"C", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"D", 0, DXGI_FORMAT_R32_UINT, 3, 4, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+    if (ia)
+        gd.InputLayout = {layout, 4};
     for (int i = 0; i < 4; i++) {
         gd.BlendState.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
         gd.RTVFormats[i] = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -128,6 +140,13 @@ int main(int argc, char **argv) {
     list->SetGraphicsRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart());
     list->SetPipelineState(pso);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    if (ia) {  // slot 0: (1, 2, 3, 4) for every vertex (stride 0); slot 3: a null view; slot 1 never set
+        float a[4] = {1, 2, 3, 4};
+        CHECK(structs->Map(0, &none, (void **)&p)); memcpy(p, a, 16); structs->Unmap(0, nullptr);
+        D3D12_VERTEX_BUFFER_VIEW views[4] = {{structs->GetGPUVirtualAddress(), 16, 0}, {}, {}, {0, 0, 64}};
+        list->IASetVertexBuffers(0, 1, &views[0]);
+        list->IASetVertexBuffers(3, 1, &views[3]);
+    }
     list->DrawInstanced(3, 1, 0, 0);
     for (int i = 0; i < 4; i++) {
         gpu.Barrier(targets[i], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -139,7 +158,7 @@ int main(int argc, char **argv) {
     gpu.Submit();
     float *r; D3D12_RANGE whole = {0, 4 * 1024};
     CHECK(readback->Map(0, &whole, (void **)&r));
-    printf("vsread ok");
+    printf(ia ? "vsread ia" : "vsread ok");
     for (int i = 0; i < 4; i++) {
         const float *t = r + (i * 1024 + 2 * 256 + 2 * 16) / 4;  // texel (2,2)
         printf(" %g,%g,%g,%g", t[0], t[1], t[2], t[3]);

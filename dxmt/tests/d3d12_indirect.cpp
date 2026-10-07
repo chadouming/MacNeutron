@@ -6,7 +6,7 @@
 // "indirect dispatch <threads counted> <threads dispatched>".
 // With vsid and psid, also the cells (x,y:tag) that ExecuteIndirect calls paint on a 32x8 target (Draws below):
 // "indirect native-draw", "indirect counted", "indirect native-indexed", "indirect aliased-indexed" and
-// "indirect vbv-gap".
+// "indirect vbv-gap" and "indirect vbv-null".
 #include "d3d12_common.hpp"
 #include <string>
 
@@ -181,6 +181,15 @@ static void Draws(Gpu &gpu, ID3D12RootSignature *root, const std::vector<char> &
         l->SetPipelineState(gap);
         l->IASetVertexBuffers(2, 1, &stale_vbv);
         l->ExecuteIndirect(vb_signature, 2, vb_args, 0, nullptr, 0);
+    });
+    // The same with a null view in the first record (Task F2): its draw reads tag 0, not the stale tags (cell 2 stays
+    // clear), and the second record still draws (cell 3, tag 300).
+    vb_records[0].view = {};
+    ID3D12Resource *null_args = upload(vb_records, sizeof(vb_records));
+    run("vbv-null", [&](ID3D12GraphicsCommandList *l) {
+        l->SetPipelineState(gap);
+        l->IASetVertexBuffers(2, 1, &stale_vbv);
+        l->ExecuteIndirect(vb_signature, 2, null_args, 0, nullptr, 0);
     });
 }
 

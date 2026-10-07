@@ -43,24 +43,24 @@ presenter:
 presenter-check: build wine-arm64 presenter
 	sh presenter/check.sh
 
-# D3D12 test programs for our DXMT, built in parallel (one compiler per core).
-DXMT_TESTS = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests/%.exe,$(wildcard dxmt/tests/d3d12_*.cpp))
+# D3D12 (and D3D11) test programs for our DXMT, built in parallel (one compiler per core).
+DXMT_TESTS = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests/%.exe,$(wildcard dxmt/tests/d3d1[12]_*.cpp))
 dxmt-tests:
 	mkdir -p build/dxmt-tests
 	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(DXMT_TESTS)
 build/dxmt-tests/%.exe: dxmt/tests/%.cpp dxmt/tests/d3d12_common.hpp
-	$(MINGWXX) -std=c++17 -o $@ $< -ld3d12 -ldxgi -luser32 -lpsapi
+	$(MINGWXX) -std=c++17 -o $@ $< -ld3d12 -ld3d11 -ld3dcompiler -ldxgi -luser32 -lpsapi
 
 # The same programs and present_loop for ARM64EC, for the arm64 runtime (arm64 DXMT spec §7), built in parallel.
 MINGW_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang -O2 -static -s
 MINGWXX_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang++ -O2 -static -s
-DXMT_TESTS_EC = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests-arm64ec/%.exe,$(wildcard dxmt/tests/d3d12_*.cpp)) \
+DXMT_TESTS_EC = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests-arm64ec/%.exe,$(wildcard dxmt/tests/d3d1[12]_*.cpp)) \
 	build/dxmt-tests-arm64ec/present_loop.exe
 dxmt-tests-arm64ec:
 	mkdir -p build/dxmt-tests-arm64ec
 	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(DXMT_TESTS_EC)
 build/dxmt-tests-arm64ec/%.exe: dxmt/tests/%.cpp dxmt/tests/d3d12_common.hpp
-	$(MINGWXX_EC) -std=c++17 -o $@ $< -ld3d12 -ldxgi -luser32 -lpsapi
+	$(MINGWXX_EC) -std=c++17 -o $@ $< -ld3d12 -ld3d11 -ld3dcompiler -ldxgi -luser32 -lpsapi
 build/dxmt-tests-arm64ec/present_loop.exe: presenter/tests/present_loop.c
 	$(MINGW_EC) -o $@ $< -ld3d11 -ldxgi -luser32 -lgdi32 -ldxguid -luuid
 

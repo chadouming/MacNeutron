@@ -21,6 +21,11 @@ WORK="${DXMT_CHECK_WORK:-${TMPDIR:-/tmp}/macneutron dxmt}"
 fail=0
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 die() { echo "dxmt-check: $*" >&2; exit 1; }
+hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
+# lone <run>: DXMT_STATS's count of timestamps given an encoder of their own, and why (Task F4).
+lone() {
+  grep -oE '(timestamps given their own encoder|lone timestamps \([a-z ]+\)) [0-9]+' "$WORK/$1/stats.txt" 2> /dev/null | tr '\n' ';'
+}
 
 echo "info arm64 mode: $WINEAPP"  # the line wine-arm64/check.sh's dxmt steps look for
 [ -f "$REF/../FROZEN" ] || die "no frozen Rosetta reference at $REF (tools/freeze-rosetta-reference.sh makes it)"
@@ -260,15 +265,14 @@ LANE=B
 # 8. Encoder ordering (GPU overlap spec §5): each mode's first pass is heavy, so work after it that doesn't wait for it
 #    reads or overwrites its results early. Our DXMT in strict order (the default), with overlap (DXMT_D3D12_OVERLAP=1),
 #    and in strict order while dumping passes and pixel history (the queue's own encoders), and D3DMetal print the
-#    same lines.
-hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
+#    same lines. (ts-queues: timestamps sampled on one queue and resolved on another, which has no counter ring.)
 want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-read 6" "indirect 9" "aliasing 2" \
   "occlusion 268435456" "independent 256 256" "precise 257" "mid-pass 77" "twice 514" "many 1200 1200" "clear-rects 3 256" \
   "signal 0" "wrap 4194304" "onewait 256 5 6" "newest 3 2" "nodraw 257" "queues 257 257" "unsplit 257" "unsplit-barrier 257" \
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
   "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
-  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257" "ts-many 1" "sampled 1")
+  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257" "ts-many 1" "sampled 1" "ts-queues 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -278,11 +282,11 @@ expect "work after a heavy pass waits for it (strict order, the default)" "$(haz
 expect "and with overlap (DXMT_D3D12_OVERLAP=1)" "$(hazards hazards-overlap)" "$want"
 # D3DMetal counts the second list's draw before its own query into the first list's ended query 0 (269484032);
 # D3D12 ends query 0 at its EndQuery, as our DXMT does (268435456).
-# D3DMetal resolves timestamps as zero, so two-heaps reads 0 0 there, and ts-start and ts-many 0.
+# D3DMetal resolves timestamps as zero, so two-heaps reads 0 0 there, and ts-start, ts-many and ts-queues 0.
 expect "and on D3DMetal (but for its occlusion count after a merged pass, and its zero timestamps)" "$(hazards hazards-ref)" \
   "$(echo "$want" | sed -e 's/^hazard unsplit-query 258 268435456 1048576$/hazard unsplit-query 258 269484032 1048576/' \
     -e 's/^hazard two-heaps 1 1$/hazard two-heaps 0 0/' -e 's/^hazard ts-start 1$/hazard ts-start 0/' \
-    -e 's/^hazard ts-many 1$/hazard ts-many 0/')"
+    -e 's/^hazard ts-many 1$/hazard ts-many 0/' -e 's/^hazard ts-queues 1$/hazard ts-queues 0/')"
 rm -rf "$WORK/hz-dump"; export DXMT_DXIL_DUMP="$WORK/hz-dump" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=512,512,0,40
 run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect precise
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
@@ -396,12 +400,8 @@ for m in shared blits; do
   run ours "f4-$m" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" ts-many
   unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_TIMESTAMP_BLITS
 done
-f4() {
-  echo "$(grep -oE '(timestamps given their own encoder|lone timestamps \([a-z ]+\)) [0-9]+' "$WORK/f4-$1/stats.txt" \
-    2> /dev/null | tr '\n' ';'):$(grep '^hazard ' "$WORK/f4-$1.txt")"
-}
-expect "timestamps from any query heap ride the call's encoders" "$(f4 shared)" ":hazard ts-many 1"
-expect "and with DXMT_D3D12_TIMESTAMP_BLITS=1, 53 get blits of their own" "$(f4 blits)" \
+expect "timestamps from any query heap ride the call's encoders" "$(lone f4-shared):$(hazards f4-shared)" ":hazard ts-many 1"
+expect "and with DXMT_D3D12_TIMESTAMP_BLITS=1, 53 get blits of their own" "$(lone f4-blits):$(hazards f4-blits)" \
   "lone timestamps (another counter buffer) 49;lone timestamps (end of call) 3;lone timestamps (several waiting) 1;timestamps given their own encoder 53;:hazard ts-many 1"
 for m in fold-lists fold-lists-barrier fold-copy; do
   rm -rf "$WORK/e7-$m"; export DXMT_DXIL_DUMP="$WORK/e7-$m" DXMT_STATS=1
@@ -502,9 +502,22 @@ expect "the unsupported op is named in the log" "$(tail -n +$((before + 1)) "$LO
 X="$ROOT/dxmt/tests/dxil"
 run ours exec-ours dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
 run ref exec-ref d3dmetal "$TESTS/d3d12_dxil_exec.exe" "Z:$X"
-for g in buffers math transcendental textures groupshared wave half packed atomics quad specials; do
+for g in buffers math transcendental textures groupshared wave half packed atomics quad specials mad barriers; do
   expect "DXIL $g matches D3DMetal" "$(python3 "$ROOT/dxmt/tests/compare.py" "$WORK/exec-ours.txt" "$WORK/exec-ref.txt" $g)" match
 done
+# Task F2: mad() fuses (one rounding) unless precise, against a CPU reference (dxil/mad.hlsl: the 32 odd threads tell
+# the two apart).
+expect "DXIL mad fuses, and precise mad doesn't" "$(python3 - "$WORK/exec-ours.txt" <<'PY'
+import struct, sys
+f32 = lambda x: struct.unpack('<f', struct.pack('<f', x))[0]  # exact inputs: one rounding
+hexf = lambda x: '%08x' % struct.unpack('<I', struct.pack('<f', x))[0]
+w = next((l.split()[3:] for l in open(sys.argv[1]) if l.split()[:3] == ['group', 'mad', 'ok']), [])
+fused = [hexf(-n * n * 2.0**-26) for n in range(1, 65)]
+split = [hexf(f32(f32(1 - n * n * 2.0**-26) - 1)) for n in range(1, 65)]
+print('mad fused %d precise %d of 64 (%d differ)' % (sum(w[16 * i:16 * i + 1] == [fused[i]] for i in range(64)),
+      sum(w[16 * i + 1:16 * i + 2] == [split[i]] for i in range(64)), sum(f != s for f, s in zip(fused, split))))
+PY
+)" "mad fused 64 precise 64 of 64 (32 differ)"
 run ours exec-threads dxmt "$TESTS/d3d12_dxil_exec.exe" "Z:$X" threads
 expect "DXIL pipelines compile on 8 threads at once" "$(grep -o 'threads ok 8/8' "$WORK/exec-threads.txt" || true)" "threads ok 8/8"
 run ours tri-ours dxmt "$TESTS/d3d12_triangle.exe" "Z:$S/triangle2.vs.dxil" "Z:$S/triangle2.ps.dxil"
@@ -672,6 +685,18 @@ run ours vsread-ours dxmt "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vs.dxil" "Z:$S/
 run ref vsread-ref d3dmetal "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vs.dxil" "Z:$S/vsread.ps.dxil"
 expect "a vertex shader reads typed, structured, 3D and cube resources as on D3DMetal" \
   "$(grep '^vsread ' "$WORK/vsread-ours.txt" || echo none)" "$(grep '^vsread ' "$WORK/vsread-ref.txt" || echo 'D3DMetal printed nothing')"
+# Task F2: vertex buffer slots a pipeline reads but nobody bound (never set, or a null view) read zeros, which the
+# format widens as D3D says ((0,0,0,1) for fewer than four components), in D3D12 and D3D11 (shaders pull vertices
+# without a null check: the runtime binds a zeroed buffer). Slot 0 bound to (1, 2, 3, 4).
+run ours vsia-ours dxmt "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vsia.dxil" "Z:$S/vsread.ps.dxil" ia
+run ref vsia-ref d3dmetal "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vsia.dxil" "Z:$S/vsread.ps.dxil" ia
+run ours vsia11-ours dxmt "$TESTS/d3d11_vsia.exe"
+run ref vsia11-ref d3dmetal "$TESTS/d3d11_vsia.exe"
+ia="1,2,3,4 0,0,0,1 0,0,0,0 0,0,0,1"
+expect "unbound vertex buffer slots read zeros, widened by their format" "$(grep '^vsread ia' "$WORK/vsia-ours.txt" || echo none)" "vsread ia $ia"
+expect "and on D3DMetal" "$(grep '^vsread ia' "$WORK/vsia-ref.txt" || echo 'D3DMetal printed nothing')" "vsread ia $ia"
+expect "and in D3D11" "$(grep '^d3d11 ia' "$WORK/vsia11-ours.txt" || echo none)" "d3d11 ia $ia"
+expect "and in D3D11 on D3DMetal" "$(grep '^d3d11 ia' "$WORK/vsia11-ref.txt" || echo 'D3DMetal printed nothing')" "d3d11 ia $ia"
 # Unreal draws grass and GPU particles with ExecuteIndirect: 1024 of them in one render pass, 8 frames, none lost.
 indirect() { run ours "$1" "$2" "$TESTS/d3d12_indirect.exe" "Z:$S/indirect.vs.dxil" "Z:$S/indirect.ps.dxil" \
   "Z:$S/indirect.cs.dxil" "Z:$S/indirect.vsid.dxil" "Z:$S/indirect.psid.dxil"; }
@@ -684,10 +709,11 @@ expect "and on D3DMetal" "$(grep '^indirect dispatch' "$WORK/indirect-ref.txt" |
 # E10: draw signatures that set nothing but the draw: vertices fetched from StartVertexLocation (or index plus
 # BaseVertexLocation), instances from StartInstanceLocation, ByteStride and the argument and index buffer offsets kept,
 # an instance count of 0 drawing nothing, a count buffer capping the call, and an index buffer placed where a released
-# buffer was. Then vertex buffer views as arguments, for slot 2 of a pipeline using slots 0 and 2 (DXMT 0010).
+# buffer was. Then vertex buffer views as arguments, for slot 2 of a pipeline using slots 0 and 2 (DXMT 0010), and a
+# null one, which reads zeros, not the slot's earlier view (Task F2).
 native=$(printf 'indirect %s\n' "native-draw 2,0:107 3,0:100 4,0:100 2,1:108" "counted 2,0:107 2,1:108" \
   "native-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108" \
-  "aliased-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108" "vbv-gap 2,0:107 3,0:300 2,1:108")
+  "aliased-indexed 0,0:100 4,0:107 5,0:107 7,0:102 4,1:108 5,1:108" "vbv-gap 2,0:107 3,0:300 2,1:108" "vbv-null 3,0:300")
 expect "indirect draws read from the argument buffer draw what D3D12 says" \
   "$(grep -E '^indirect (native|counted|aliased|vbv)' "$WORK/indirect-ours.txt" || echo none)" "$native"
 expect "and on D3DMetal" "$(grep -E '^indirect (native|counted|aliased|vbv)' "$WORK/indirect-ref.txt" || echo 'D3DMetal printed nothing')" "$native"
@@ -701,22 +727,22 @@ expect "and with DXMT_D3D12_INDIRECT=icb" "$(grep -E '^indirect (ok|native|count
 rm -rf "$WORK/stats"; export DXMT_DXIL_DUMP="$WORK/stats" DXMT_STATS=1
 indirect indirect-stats dxmt
 unset DXMT_DXIL_DUMP DXMT_STATS
-expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16389 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
+expect "DXMT_STATS counts every ExecuteIndirect" "$(grep -c '^  list.ExecuteIndirect calls 16390 ' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 expect "and every encoder boundary, barrier or not" \
   "$(grep -cE '^  encoder boundaries [1-9][0-9]*, [0-9]+ with no barrier$' "$WORK/stats/stats.txt" 2> /dev/null || true)" 1
 # E10: the 8192 single draws and the three uncounted calls draw from the argument buffer, with no indirect command buffer
-# nor resolver pass; the dispatches' (1024 a frame), the counted call's and the vertex buffer views' (a resolver pass
-# each) are reused once their allocator is reset.
+# nor resolver pass; the dispatches' (1024 a frame), the counted call's and the two with vertex buffer views (a
+# resolver pass each; Task F2 added vbv-null's) are reused once their allocator is reset.
 # With DXMT_D3D12_INDIRECT=icb, every draw call's render pass resolves its commands in one compute pass before it.
 expect "uncounted indirect draws read the argument buffer, with no indirect command buffer" \
   "$(grep -oE '(ExecuteIndirect native|indirect command buffers created|indirect resolve passes) [0-9]+' "$WORK/stats/stats.txt" 2> /dev/null | sort | tr '\n' ';')" \
-  "ExecuteIndirect native 8195;indirect command buffers created 1026;indirect resolve passes 2;"
+  "ExecuteIndirect native 8195;indirect command buffers created 1026;indirect resolve passes 3;"
 rm -rf "$WORK/stats-icb"; export DXMT_DXIL_DUMP="$WORK/stats-icb" DXMT_STATS=1 DXMT_D3D12_INDIRECT=icb
 indirect indirect-stats-icb dxmt
 unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_INDIRECT
 expect "and with DXMT_D3D12_INDIRECT=icb, one resolver pass per render pass" \
   "$(grep -oE '(ExecuteIndirect native|indirect resolve passes) [0-9]+' "$WORK/stats-icb/stats.txt" 2> /dev/null | tr '\n' ';')" \
-  "indirect resolve passes 13;"
+  "indirect resolve passes 14;"
 # GPU timestamps by D3D12's rules (D3DMetal has none), and a timestamp between draws never splits their pass.
 rm -rf "$WORK/ts"; export DXMT_DXIL_DUMP="$WORK/ts" DXMT_DUMP_FRAME=0
 run ours ts-ours dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
@@ -769,17 +795,18 @@ run ref d3dmetal d3dmetal "$LOOP" 1280 720 0 0 200 0
 expect "the frozen D3DMetal reference still runs" "$(grep -c 'avg frame' "$WORK/d3dmetal.txt" || true)" 1
 # 6. dxil-translate: every test shader reaches a Metal pipeline offline (heap.dxil is out of scope on purpose).
 "$TOOLS/dxil-translate" "$ROOT/dxmt/tests/dxil" > "$WORK/translate.txt" 2>&1 || true
-expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "11/12"
+expect "dxil-translate accepts every behaviour shader but heap" "$(tail -1 "$WORK/translate.txt" | cut -d ' ' -f 2)" "13/14"
 "$TOOLS/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "31/31"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "32/32"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also stay unfused and unreassociated, as airconv's DXBC path: a depth prepass and a base pass then compute
-# the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it).
+# the same positions, and their depth EQUAL test holds (grass flickered in SMITE 2 without it). (A non-precise mad
+# becomes an explicit fma since Task F2, a call with no flags: the same in every shader lowered from the same DXIL.)
 "$TOOLS/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
-  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "31:31"
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "32:32"
 expect "vertex and geometry shaders keep their math unfused" \
-  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 10
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 11
 # E5: a raw or structured buffer load is bounds-checked once for all its components, those the shader reads
 # (shaders/bounds.hlsl: a 16-dword view from dword 4 and a 4-element view, over buffers holding 1..32). In bounds (the
 # view's last dwords too), out of bounds and at an offset whose end wraps 32 bits read as on D3DMetal; a load
@@ -790,6 +817,17 @@ expect "buffer loads read zeros outside their views, in one check per load" \
   "$(grep '^bounds ' "$WORK/bounds.txt")" "bounds 5 6 7 8 0 0 0 0 0 0 0 0 0 0 0 0 13 14 15 16 0 0 0 0 20 19 20 0 0 0 0 0"
 expect "and as on D3DMetal but where a load straddles the view's end" \
   "$(grep '^bounds ' "$WORK/bounds-ref.txt")" "bounds 5 6 7 8 19 20 21 22 0 0 0 0 20 21 0 0 13 14 15 16 0 0 0 0 20 19 20 0 0 0 0 0"
+# Task F2: DXMT_DXIL_BOUNDS=off (for measuring their cost) drops the checks, typed Buffer<> reads' too: loads inside
+# their views read as before, loads past them read the buffer beyond (all inside its 32 dwords here; the offset that
+# wraps 32 bits reads the 4 dwords before the view), and a vertex shader's typed reads at a FirstElement read right.
+export DXMT_DXIL_BOUNDS=off
+run ours bounds-off dxmt "$TESTS/d3d12_bounds.exe" "Z:$S/bounds.cs.dxil"
+run ours vsread-off dxmt "$TESTS/d3d12_vsread.exe" "Z:$S/vsread.vs.dxil" "Z:$S/vsread.ps.dxil"
+unset DXMT_DXIL_BOUNDS
+expect "DXMT_DXIL_BOUNDS=off reads past views, and inside them as before" \
+  "$(grep '^bounds ' "$WORK/bounds-off.txt")" "bounds 5 6 7 8 19 20 21 22 21 22 23 24 20 21 0 0 13 14 15 16 17 18 19 20 20 19 20 0 1 2 3 4"
+expect "and a vertex shader's typed and structured reads as without it" \
+  "$(grep '^vsread ' "$WORK/vsread-off.txt" || echo none)" "$(grep '^vsread ' "$WORK/vsread-ours.txt" || echo none)"
 # XeSS answered by MetalFX (spec §4.1): DXMT's private D3D12 interface runs MetalFX's temporal upscaler in the command
 # list's order. 64 jittered frames of the spike's scene upscaled to 2560x1440 beat a bilinear upscale of the last input
 # against the unjittered scene (d3d12_upscale prints both PSNRs), at three ratios and with the inputs MetalFX can't
@@ -841,14 +879,12 @@ for m in shared blits; do
   run ours "upscale-ts-$m" dxmt "$TESTS/d3d12_upscale.exe" timestamps
   unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_TIMESTAMP_BLITS
 done
-uts() {
-  echo "$(grep -oE 'timestamps given their own encoder [0-9]+' "$WORK/upscale-ts-$1/stats.txt" 2> /dev/null):$(upscaled \
-    "upscale-ts-$1" timestamps):$(grep -oE '^upscale timestamps order [01]' "$WORK/upscale-ts-$1.txt")"
-}
+uts() { echo "$(lone "upscale-ts-$1"):$(upscaled "upscale-ts-$1" timestamps):$(grep -oE '^upscale timestamps order [01]' \
+  "$WORK/upscale-ts-$1.txt")"; }
 expect "timestamps around the upscale ride the blits beside MetalFX's passes" "$(uts shared)" \
   ":yes:upscale timestamps order 1"
 expect "and with DXMT_D3D12_TIMESTAMP_BLITS=1, get blits of their own" "$(uts blits)" \
-  "timestamps given their own encoder 128:yes:upscale timestamps order 1"
+  "lone timestamps (end of call) 64;lone timestamps (next encoder takes none) 64;timestamps given their own encoder 128;:yes:upscale timestamps order 1"
 run ours upscale-range dxmt "$TESTS/d3d12_upscale.exe" range
 expect "the device reports MetalFX's scale range" "$(grep '^range ' "$WORK/upscale-range.txt" || echo none)" "range 1.000 3.000"
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
@@ -930,7 +966,7 @@ rm -rf "$WORK/sampled-stats"; export DXMT_DXIL_DUMP="$WORK/sampled-stats" DXMT_S
 run ours sampled-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" sampled
 unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a signal after timestamps sampled without a resolve waits for their values" \
-  "$(grep -oE 'fence signals deferred to the CPU [0-9]+' "$WORK/sampled-stats/stats.txt" 2> /dev/null):$(grep '^hazard ' "$WORK/sampled-stats.txt")" \
+  "$(grep -oE 'fence signals deferred to the CPU [0-9]+' "$WORK/sampled-stats/stats.txt" 2> /dev/null):$(hazards sampled-stats)" \
   "fence signals deferred to the CPU 1:hazard sampled 1"
 # 10. The launcher (spec §3.7; gate L1): recordings land in the compat folder and the first session stamps the builds;
 #     with another build in the stamp, the next launch replays every recording before the game, which then only hits.

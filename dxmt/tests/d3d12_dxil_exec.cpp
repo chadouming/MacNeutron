@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
     device->CreateUnorderedAccessView(atomics, nullptr, &u, slot(9));
     device->CreateUnorderedAccessView(atomictex, nullptr, nullptr, slot(10));
 
-    const char *all[] = {"buffers", "math", "transcendental", "textures", "groupshared", "wave", "half", "packed", "atomics", "quad", "specials"};
+    const char *all[] = {"buffers", "math", "transcendental", "textures", "groupshared", "wave", "half", "packed", "atomics", "quad", "specials", "mad", "barriers"};
     std::vector<std::string> groups;
     for (int i = 2; i < argc; i++) groups.push_back(argv[i]);
     if (groups.empty()) groups.assign(std::begin(all), std::end(all));

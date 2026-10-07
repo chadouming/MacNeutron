@@ -18,3 +18,13 @@ VSOut vsmain(uint id : SV_VertexID) {
 }
 struct PSOut { float4 a : SV_Target0; float4 b : SV_Target1; float4 c : SV_Target2; float4 d : SV_Target3; };
 PSOut psmain(VSOut i) { PSOut o; o.a = i.a; o.b = i.b; o.c = i.c; o.d = i.d; return o; }
+// Task F2: input-assembler inputs (d3d12_vsread ia): a from slot 0 (bound), b and c from slot 1 (never bound), d from
+// slot 3 (a null view). Unbound slots read zeros, which a format with fewer than four components widens to (0,0,0,1).
+struct IAIn { float4 a : A; float4 b : B; float4 c : C; uint4 d : D; };
+VSOut vsia(IAIn i, uint id : SV_VertexID) {
+    VSOut o;
+    float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    o.a = i.a; o.b = i.b; o.c = i.c; o.d = float4(i.d);
+    return o;
+}
