@@ -638,7 +638,9 @@ static HRESULT STDMETHODCALLTYPE KeepDepth(IUnknown *self, IUnknown *scaler, con
     return dxmt_upscale(self, scaler, desc);
 }
 static void HookDepth(ID3D12GraphicsCommandList *list) {
-    static void *table[4]; // IUnknown's 3, TemporalUpscale
+    // IMTLD3D12CommandListExt's whole table: IUnknown's 3 methods and TemporalUpscale (DXMT's d3d12_interfaces.hpp,
+    // libxess's dxmt_d3d12_ext.h). A method added to the interface must grow this copy, or the list loses it.
+    static void *table[4];
     IUnknown *ext;
     CHECK(list->QueryInterface(kListExt, (void **)&ext));
     void **dxmt = *(void ***)ext;

@@ -444,3 +444,46 @@ Bridge rows: `upscale direct` and `placed` match the copy path (`DXMT_D3D12_PRIV
 
 Both lanes of `make dxmt-check`: `dxmt-check: all passed` twice, 244 ok per lane (Task 3b: 238), no FAIL; every
 other upscale and XeSS PSNR as in Task 3b. The translator key is unchanged (no airconv change).
+
+## Timestamps ride the next encoder (XeSS plan, Task F4)
+
+2026-10-06 (Ruling 23; F1's leftovers, Rulings 24-25). DXMT patches 0016-0018, each with a row in `dxmt/check.sh`:
+- 0016: ResizeBuffers keeps the FRAME_LATENCY_WAITABLE_OBJECT flag a swapchain was created with (DXGI can't add or
+  remove it later): `resize waitable 0x42 1` (`0x2 0` before: the flag and the waitable object were lost).
+- 0017: `DXMT_STATS` says why each lone timestamp blit was needed (`lone timestamps (another counter buffer)`,
+  `(several waiting)`, `(next encoder takes none)`, `(end of call)`) and, for the base-pass merge (B6), why a render
+  pass that could have joined the previous one's Metal pass didn't (`render pass merges refused (timestamps)`,
+  `(resolver)`, `(barrier)`, `(attachments)`, `(other)`).
+- 0018: each queue samples every timestamp, whatever its query heap, into one counter buffer (a 4096-slot ring: Metal
+  allows 32 counter buffers per process, measured), so an encoder takes the timestamps waiting before it at its start
+  and its own at its end in one attachment; those before a clear or resolve pass, or at the end of the call, ride the
+  previous encoder's end. The queue writes each slot's value to its queries once the command buffer completes, and
+  CPU resolves copy them. `DXMT_D3D12_TIMESTAMP_BLITS=1` restores the heaps' own counter buffers.
+
+Counts before (the same build with only 0017; `DXMT_STATS`, each run alone):
+
+| Run | Lone timestamp blits | Why |
+|---|---|---|
+| `d3d12_hazards ts-many` (201 timestamps, two heaps, render/compute/copy, list start and end; the row's final form, 203 with a second heavy dispatch, counts 53 with the switch: + 1 several waiting) | 52 | 49 another counter buffer, 3 end of call |
+| `d3d12_timestamp` | 3 | end of call (a list of timestamps alone) |
+| `d3d12_hazards ts-start` | 2 | several waiting |
+| `d3d12_hazards two-heaps` | 2 | another counter buffer |
+| `d3d12_hazards after-own-blit` | 1 | another counter buffer |
+| `d3d12_hazards deferred` | 1 | end of call (a list of a timestamp alone) |
+
+After 0018: ts-many, ts-start, two-heaps and after-own-blit 0; d3d12_timestamp 1 and deferred 1 (calls with no other
+encoder: one blit for all their timestamps). With `DXMT_D3D12_TIMESTAMP_BLITS=1`, the counts before. ts-many's 203
+values are nonzero and in submission order, and the gap around its heavy dispatch is at least half the same dispatch's
+time measured right after it in the list (about 134 000 ticks each; the GPU's clock moves the dispatch between 62 000
+and 1 400 000 over runs, so a reference from another submission failed 1 run in 4 with DXMT_D3D12_OVERLAP=1).
+`upscale timestamps` (two timestamps before each of 64 MetalFX upscales, one after) takes none of its own (128 with
+the switch), in order, the upscale (about 7 ms) between the last two, and no validation message.
+
+F1's leftovers: `hazard heap-released` releases the placed texture after the readback (`heaps destroyed 1`: held
+while it lives, freed after); `indirect vbv-gap` adds a VERTEX_BUFFER_VIEW for slot 5, above the pipeline's highest
+used slot, and the next record still draws its own tags; `d3d12_xess`'s HookDepth table is pinned by a comment to
+IMTLD3D12CommandListExt's 4 methods; the `d3d12_api library` row compares D3DMetal's lines but for its
+`serialize-race` line, and pins ours to `overflow 0` (Ruling 25).
+
+Both lanes of `make dxmt-check` on the applied build: `dxmt-check: all passed` twice, 246 ok per lane, no FAIL. The
+translator key is unchanged (no airconv change).

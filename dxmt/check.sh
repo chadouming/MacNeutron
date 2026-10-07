@@ -268,7 +268,7 @@ want=$(printf 'hazard %s\n' "rt-read 257" "same-target 7 5" "uav 1048576" "copy-
   "unsplit-samebuffer 257" "unsplit-midbarrier 258" "unsplit-query 258 268435456 1048576" "unsplit-twice 2" "deferred 1" "zeroed 0 0" "fold 6 2 9 5" "fold-order 6 7" \
   "fence-reset 1" "fence-cpu-late 1" "fence-transitive 0 0" "fence-custom 1" "fence-lower 0 1" "fence-wait-first 257" "fence-order 1 1" "two-heaps 1 1" "ts-start 1" "after-own-blit 7" \
   "fold-lists 6 2" "fold-lists-barrier 6 2" "fold-m4 11 7" "fold-twice 10 14" "fold-copy 2 6 2" "indirect-war 265" \
-  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257")
+  "merge-indirect 10" "placed-uav 1048576" "heap-released 0 257" "ts-many 1")
 run ours hazards dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
 export DXMT_D3D12_OVERLAP=1
 run ours hazards-overlap dxmt "$TESTS/d3d12_hazards.exe" "Z:$S"
@@ -278,10 +278,11 @@ expect "work after a heavy pass waits for it (strict order, the default)" "$(haz
 expect "and with overlap (DXMT_D3D12_OVERLAP=1)" "$(hazards hazards-overlap)" "$want"
 # D3DMetal counts the second list's draw before its own query into the first list's ended query 0 (269484032);
 # D3D12 ends query 0 at its EndQuery, as our DXMT does (268435456).
-# D3DMetal resolves timestamps as zero, so two-heaps reads 0 0 there.
+# D3DMetal resolves timestamps as zero, so two-heaps reads 0 0 there, and ts-start and ts-many 0.
 expect "and on D3DMetal (but for its occlusion count after a merged pass, and its zero timestamps)" "$(hazards hazards-ref)" \
   "$(echo "$want" | sed -e 's/^hazard unsplit-query 258 268435456 1048576$/hazard unsplit-query 258 269484032 1048576/' \
-    -e 's/^hazard two-heaps 1 1$/hazard two-heaps 0 0/' -e 's/^hazard ts-start 1$/hazard ts-start 0/')"
+    -e 's/^hazard two-heaps 1 1$/hazard two-heaps 0 0/' -e 's/^hazard ts-start 1$/hazard ts-start 0/' \
+    -e 's/^hazard ts-many 1$/hazard ts-many 0/')"
 rm -rf "$WORK/hz-dump"; export DXMT_DXIL_DUMP="$WORK/hz-dump" DXMT_DUMP_FRAME=0 DXMT_DUMP_PIXEL=512,512,0,40
 run ours hazards-dump dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" rt-read indirect precise
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_PIXEL
@@ -293,13 +294,14 @@ unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "and under Metal validation" "$(hazards hazards-validation)" "$want"
 expect "which rejects nothing (nodraw's only draw has no instances)" "$(invalid hazards-validation)" 0
 # A texture placed in a heap holds it (DXMT 0011): the app's release of the heap (Release still answers 0, as on
-# D3DMetal) destroys nothing while the texture lives, so the heap stays resident.
+# D3DMetal) destroys nothing while the texture lives, so the heap stays resident; the texture's release, after the
+# readback, destroys it (no leak).
 rm -rf "$WORK/heap-stats"; export DXMT_DXIL_DUMP="$WORK/heap-stats" DXMT_STATS=1
 run ours heap-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" heap-released
 unset DXMT_DXIL_DUMP DXMT_STATS
-expect "a heap released while a texture placed in it lives stays" \
-  "$(grep -c '^  heaps destroyed ' "$WORK/heap-stats/stats.txt" 2> /dev/null || true):$(hazards heap-stats)" \
-  "0:hazard heap-released 0 257"
+expect "a heap released while a texture placed in it lives stays, and goes with the texture" \
+  "$(grep -oE 'heaps destroyed [0-9]+' "$WORK/heap-stats/stats.txt" 2> /dev/null):$(hazards heap-stats)" \
+  "heaps destroyed 1:hazard heap-released 0 257"
 # Overlap happens when asked for (GPU overlap spec §3.8): with DXMT_D3D12_OVERLAP=1, passes into different targets
 # with no barrier between them leave their boundaries free to overlap; by default (strict order) none is, and every
 # encoder joins.
@@ -346,6 +348,11 @@ unset DXMT_DXIL_DUMP DXMT_STATS
 expect "render passes into one target across lists are one Metal render pass" \
   "$(grep -oE '(render passes merged|timestamp blits folded) [0-9]+' "$WORK/m3-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
   "render passes merged 1;timestamp blits folded 1;"
+# For the base-pass merge (B6, Task F4), DXMT_STATS says why the others didn't join: unsplit-barrier's and
+# unsplit-midbarrier's barriers, unsplit-samebuffer's counter buffer sampled twice, unsplit-twice's list run twice.
+expect "and why the others didn't" \
+  "$(grep -oE 'render pass merges refused \([a-z]+\) [0-9]+' "$WORK/m3-stats/stats.txt" 2> /dev/null | tr '\n' ';')" \
+  "render pass merges refused (barrier) 2;render pass merges refused (other) 1;render pass merges refused (timestamps) 1;"
 rm -rf "$WORK/m3-off-stats"; export DXMT_DXIL_DUMP="$WORK/m3-off-stats" DXMT_STATS=1 DXMT_D3D12_MERGE=0
 run ours m3-off-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" unsplit
 unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_MERGE
@@ -367,8 +374,8 @@ expect "and none with DXMT_D3D12_MERGE=0" \
   "$(grep -oE '(clears folded|clear passes) [0-9]+' "$WORK/m4-off-stats/stats.txt" 2> /dev/null | sort | tr '\n' ';'):$(grep '^hazard ' "$WORK/m4-off-stats.txt")" \
   "clear passes 2;:hazard fold 6 2 9 5"
 # E4: a lone timestamp (a list's first, or a list of timestamps alone) is taken at the start of the next encoder the
-# queue encodes, not by a blit of its own. d3d12_hazards ts-start alone: t0 and t4 ride on the passes after them;
-# t2 and t3, which come before t4, keep blits of their own ahead of it.
+# queue encodes, not by a blit of its own. d3d12_hazards ts-start alone: t0 rides on the pass after it, and t2, t3
+# and t4 together on the next one (Task F4: one sample for timestamps at one point, so none keeps a blit).
 rm -rf "$WORK/e4-stats"; export DXMT_DXIL_DUMP="$WORK/e4-stats" DXMT_STATS=1
 run ours e4-stats dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" ts-start
 unset DXMT_DXIL_DUMP DXMT_STATS
@@ -378,6 +385,23 @@ expect "a lone timestamp is taken at the next encoder's start" \
 # E7: a clear-only pass folds into the first pass binding its view later in the same call, across lists, timestamps
 # and barriers on other textures (fold-lists); not across a barrier naming its texture (fold-lists-barrier) or a copy
 # of it (fold-copy). d3d12_hazards, each mode alone.
+# Task F4 (Ruling 23): every timestamp rides an encoder of its call, whatever its query heap. d3d12_hazards ts-many
+# alone (203 timestamps from two heaps between render passes, dispatches and copies, in order and bracketing a heavy
+# dispatch) takes no blit of its own; with DXMT_D3D12_TIMESTAMP_BLITS=1 (the heaps' own counter buffers, one an
+# encoder) 53 do: 49 for a second counter buffer, 3 at the call's end, 1 of two waiting for one encoder's start.
+for m in shared blits; do
+  rm -rf "$WORK/f4-$m"; export DXMT_DXIL_DUMP="$WORK/f4-$m" DXMT_STATS=1
+  [ $m = blits ] && export DXMT_D3D12_TIMESTAMP_BLITS=1
+  run ours "f4-$m" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" ts-many
+  unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_TIMESTAMP_BLITS
+done
+f4() {
+  echo "$(grep -oE '(timestamps given their own encoder|lone timestamps \([a-z ]+\)) [0-9]+' "$WORK/f4-$1/stats.txt" \
+    2> /dev/null | tr '\n' ';'):$(grep '^hazard ' "$WORK/f4-$1.txt")"
+}
+expect "timestamps from any query heap ride the call's encoders" "$(f4 shared)" ":hazard ts-many 1"
+expect "and with DXMT_D3D12_TIMESTAMP_BLITS=1, 53 get blits of their own" "$(f4 blits)" \
+  "lone timestamps (another counter buffer) 49;lone timestamps (end of call) 3;lone timestamps (several waiting) 1;timestamps given their own encoder 53;:hazard ts-many 1"
 for m in fold-lists fold-lists-barrier fold-copy; do
   rm -rf "$WORK/e7-$m"; export DXMT_DXIL_DUMP="$WORK/e7-$m" DXMT_STATS=1
   run ours "e7-$m" dxmt "$TESTS/d3d12_hazards.exe" "Z:$S" $m
@@ -408,6 +432,8 @@ run ours clear dxmt "$TESTS/d3d12_clear.exe" 300
 expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' "$WORK/clear.txt" || true)" 1
 expect "ResizeBuffers keeps the swapchain flags it's given (0: those it had)" \
   "$(grep '^resize flags' "$WORK/clear.txt" || echo none)" "resize flags 0x2 0x2"
+expect "and the waitable object it was created with" "$(grep '^resize waitable' "$WORK/clear.txt" || echo none)" \
+  "resize waitable 0x42 1"
 # DXMT_DUMP_FRAMES=<n>: a pass dump takes n consecutive frames (a one-frame glitch is hard to catch with one F9).
 rm -rf "$WORK/clear-dump"; export DXMT_DXIL_DUMP="$WORK/clear-dump" DXMT_DUMP_FRAME=5 DXMT_DUMP_FRAMES=3
 run ours clear-dump dxmt "$TESTS/d3d12_clear.exe" 20
@@ -571,7 +597,15 @@ same_lines() {  # same_lines <prefix>: d3d12_api's lines starting with <prefix> 
   a=$(grep "^$1 " "$WORK/api-ours.txt" || true); b=$(grep "^$1 " "$WORK/api-ref.txt" || true)
   [ -n "$a" ] && [ "$a" = "$b" ] && echo yes || echo "no: ours [$a] D3DMetal [$b]"
 }
-for s in markers cachedblob nulldsv list1 heap1 residency multifence feature library; do expect "d3d12_api $s answers as D3DMetal" "$(same_lines $s)" yes; done
+for s in markers cachedblob nulldsv list1 heap1 residency multifence feature; do expect "d3d12_api $s answers as D3DMetal" "$(same_lines $s)" yes; done
+# Ruling 25: D3DMetal's Serialize races a concurrent Store (it writes past the size it was given, or not, by what ran
+# earlier in the process), so its serialize-race line isn't compared; ours is pinned.
+a=$(grep '^library ' "$WORK/api-ours.txt" | grep -v '^library serialize-race ' || true)
+b=$(grep '^library ' "$WORK/api-ref.txt" | grep -v '^library serialize-race ' || true)
+expect "d3d12_api library answers as D3DMetal (but for D3DMetal's serialize race)" \
+  "$([ -n "$a" ] && [ "$a" = "$b" ] && echo yes || echo "no: ours [$a] D3DMetal [$b]")" yes
+expect "and ours serializes beside a store without overflow" \
+  "$(grep '^library serialize-race ' "$WORK/api-ours.txt" || echo none)" "library serialize-race overflow 0"
 # D3D12 refuses Map where the CPU can't see the heap (D3DMetal maps a CUSTOM heap with no CPU pages anyway).
 expect "Map refuses a buffer in a heap the CPU can't see" "$(grep '^map ' "$WORK/api-ours.txt" || echo none)" \
   "map custom-na 80070057 0 default 80070057 0 upload 00000000 1"
@@ -692,8 +726,8 @@ expect "a timestamp between draws keeps them one render pass" "$(grep -c ' rende
 expect "a timestamp resolve into a default heap never shows a previous submission's value" \
   "$(grep '^timestamp default-heap' "$WORK/ts-ours.txt" || true)" "timestamp default-heap 1"
 # A timestamp resolved on the CPU (into a readback heap) needs no blit encoder: the test's 5 resolves made 10 before.
-# Since GPU efficiency E4, 3 lone timestamps also ride on the next encoder (and 3 get blits of their own, counted
-# apart), so 2 blit passes are left of 8.
+# Since GPU efficiency E4, 3 lone timestamps also ride on the next encoder (and since Task F4 the 3 of the list of
+# timestamps alone share one blit of their own, counted apart), so 2 blit passes are left of 8.
 rm -rf "$WORK/ts-stats"; export DXMT_DXIL_DUMP="$WORK/ts-stats" DXMT_STATS=1
 run ours ts-stats dxmt "$TESTS/d3d12_timestamp.exe" "Z:$S/depth.vs.dxil" "Z:$S/depth.ps.dxil"
 unset DXMT_DXIL_DUMP DXMT_STATS
@@ -797,15 +831,33 @@ expect "and writes at an offset in a larger output, directly or through the copy
 expect "a depth/stencil depth is copied for MetalFX, readable inputs aren't" \
   "$(upscaled upscale-ds depthstencil):$(copied upscale-ds-stats input | sed 's/^[1-9][0-9]*$/some/'):$(copied upscale-direct-stats input)" \
   yes:some:0
+# Task F4: timestamps around the upscale ride the blits before and after MetalFX's own passes (which take none): two
+# before each of the 64 upscales and one after, in order with the upscale between, none with a blit of its own (128
+# with DXMT_D3D12_TIMESTAMP_BLITS=1: the end of the call, and the upscale taking no start sample).
+for m in shared blits; do
+  rm -rf "$WORK/upscale-ts-$m"; export DXMT_DXIL_DUMP="$WORK/upscale-ts-$m" DXMT_STATS=1
+  [ $m = blits ] && export DXMT_D3D12_TIMESTAMP_BLITS=1
+  run ours "upscale-ts-$m" dxmt "$TESTS/d3d12_upscale.exe" timestamps
+  unset DXMT_DXIL_DUMP DXMT_STATS DXMT_D3D12_TIMESTAMP_BLITS
+done
+uts() {
+  echo "$(grep -oE 'timestamps given their own encoder [0-9]+' "$WORK/upscale-ts-$1/stats.txt" 2> /dev/null):$(upscaled \
+    "upscale-ts-$1" timestamps):$(grep -oE '^upscale timestamps order [01]' "$WORK/upscale-ts-$1.txt")"
+}
+expect "timestamps around the upscale ride the blits beside MetalFX's passes" "$(uts shared)" \
+  ":yes:upscale timestamps order 1"
+expect "and with DXMT_D3D12_TIMESTAMP_BLITS=1, get blits of their own" "$(uts blits)" \
+  "timestamps given their own encoder 128:yes:upscale timestamps order 1"
 run ours upscale-range dxmt "$TESTS/d3d12_upscale.exe" range
 expect "the device reports MetalFX's scale range" "$(grep '^range ' "$WORK/upscale-range.txt" || echo none)" "range 1.000 3.000"
 export MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog
 run ours upscale-val dxmt "$TESTS/d3d12_upscale.exe" depthstencil rtoutput compute typeless32 typeless10 bad direct placed
-run ours upscale-valo dxmt "$TESTS/d3d12_upscale.exe" direct-offset # apart: 9 modes take ~60 s alone (the watchdog)
+run ours upscale-valo dxmt "$TESTS/d3d12_upscale.exe" direct-offset timestamps # apart: 10 modes take ~70 s (watchdog)
 unset MTL_DEBUG_LAYER MTL_DEBUG_LAYER_ERROR_MODE
 expect "Metal's validation rejects nothing in the upscale" \
   "$(invalid upscale-val):$(grep -c '^upscale [a-z0-9]* ok' "$WORK/upscale-val.txt" || true)" "0:8"
-expect "nor at an output offset" "$(invalid upscale-valo):$(grep -c '^upscale direct-offset ok' "$WORK/upscale-valo.txt" || true)" "0:1"
+expect "nor at an output offset, nor with timestamps around it" \
+  "$(invalid upscale-valo):$(grep -cE '^upscale (direct-offset|timestamps) ok' "$WORK/upscale-valo.txt" || true)" "0:2"
 # XeSS answered by MetalFX (spec §4.2, §7): Wine's builtin libxess.dll driven through XeSS's API. d3d12_xess loads it
 # by full path, the game's way, from a copy of itself named libxess.dll: only the launcher's libxess=b makes that the
 # builtin. Every quality mode at its input size beats bilinear; a re-initialised context, one destroyed before its list

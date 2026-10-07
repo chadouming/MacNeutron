@@ -2,7 +2,9 @@
 //   d3d12_clear.exe [frames]
 // Prints the adapter, what Unreal Engine's SM6 check reads (shader model, binding tier, feature level, wave ops,
 // 64-bit atomics) and the average frame time. Then "resize flags <flags> <flags>": the swapchain's flags after a
-// ResizeBuffers given ALLOW_MODE_SWITCH, then after one given 0.
+// ResizeBuffers given ALLOW_MODE_SWITCH, then after one given 0; and "resize waitable <flags> <object>": a second
+// swapchain created FRAME_LATENCY_WAITABLE_OBJECT keeps that flag (and its waitable object) through a ResizeBuffers
+// given ALLOW_MODE_SWITCH alone, as DXGI can't add or remove it after creation.
 #define WIDL_EXPLICIT_AGGREGATE_RETURNS  // D3D12 methods that return structs: the MSVC ABI under mingw
 #include <windows.h>
 #include <d3d12.h>
@@ -120,5 +122,17 @@ int main(int argc, char **argv) {
     CHECK(swap->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0));
     CHECK(swap->GetDesc1(&kept));
     printf("resize flags 0x%x 0x%x\n", given.Flags, kept.Flags);
+    HWND hwnd2 = CreateWindowA("d3d12_clear", "d3d12_clear 2", WS_OVERLAPPEDWINDOW, 80, 80, 320, 180, nullptr, nullptr,
+                               wc.hInstance, nullptr);
+    sd.Width = 320; sd.Height = 180; sd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    IDXGISwapChain1 *waitable1; IDXGISwapChain3 *waitable;
+    CHECK(factory->CreateSwapChainForHwnd(queue, hwnd2, &sd, nullptr, nullptr, &waitable1));
+    CHECK(waitable1->QueryInterface(__uuidof(IDXGISwapChain3), (void **)&waitable));
+    CHECK(waitable->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+    DXGI_SWAP_CHAIN_DESC1 resized = {};
+    CHECK(waitable->GetDesc1(&resized));
+    HANDLE object = waitable->GetFrameLatencyWaitableObject();
+    printf("resize waitable 0x%x %d\n", resized.Flags, object != nullptr);
+    if (object) CloseHandle(object);
     return 0;
 }

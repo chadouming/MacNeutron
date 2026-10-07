@@ -156,23 +156,26 @@ static void Draws(Gpu &gpu, ID3D12RootSignature *root, const std::vector<char> &
     });
 
     // A vertex buffer argument for slot 2 of a layout using slots 0 and 2 (DXMT's shaders read a table of the used
-    // slots only), slot 2 bound to other tags (200 + index) beforehand: two records, each a view of slot 2 then a draw.
-    // 3 vertices from 6, 2 instances from 7 on the tags (cell 2, tags 107 108); 3 from 9, 1 instance from 0 on 300 +
-    // index (cell 3, tag 300).
+    // slots only), slot 2 bound to other tags (200 + index) beforehand: two records, each a view of slot 2, a view of
+    // slot 5 (above the highest slot the layout uses: it binds nothing the draw reads, and must not reach the next
+    // record's table) on the stale tags, then a draw. 3 vertices from 6, 2 instances from 7 on the tags (cell 2, tags
+    // 107 108); 3 from 9, 1 instance from 0 on 300 + index (cell 3, tag 300).
     ID3D12PipelineState *gap = pipeline(2);
     UINT stale[16], later[16];
     for (UINT i = 0; i < 16; i++) { stale[i] = 200 + i; later[i] = 300 + i; }
     ID3D12Resource *stale_buffer = upload(stale, sizeof(stale)), *later_buffer = upload(later, sizeof(later));
     D3D12_VERTEX_BUFFER_VIEW stale_vbv = {stale_buffer->GetGPUVirtualAddress(), sizeof(stale), 4};
-    D3D12_INDIRECT_ARGUMENT_DESC vb_draw[2] = {{D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW},
+    D3D12_INDIRECT_ARGUMENT_DESC vb_draw[3] = {{D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW},
+                                               {D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW},
                                                {D3D12_INDIRECT_ARGUMENT_TYPE_DRAW}};
     vb_draw[0].VertexBuffer.Slot = 2;
-    D3D12_COMMAND_SIGNATURE_DESC vsd = {sizeof(D3D12_VERTEX_BUFFER_VIEW) + sizeof(D3D12_DRAW_ARGUMENTS), 2, vb_draw, 0};
+    vb_draw[1].VertexBuffer.Slot = 5;
+    D3D12_COMMAND_SIGNATURE_DESC vsd = {2 * sizeof(D3D12_VERTEX_BUFFER_VIEW) + sizeof(D3D12_DRAW_ARGUMENTS), 3, vb_draw, 0};
     ID3D12CommandSignature *vb_signature;
     CHECK(gpu.device->CreateCommandSignature(&vsd, nullptr, __uuidof(ID3D12CommandSignature), (void **)&vb_signature));
-    struct { D3D12_VERTEX_BUFFER_VIEW view; D3D12_DRAW_ARGUMENTS draw; } vb_records[2] = {
-        {{tag_buffer->GetGPUVirtualAddress(), sizeof(tags), 4}, {3, 2, 6, 7}},
-        {{later_buffer->GetGPUVirtualAddress(), sizeof(later), 4}, {3, 1, 9, 0}}};
+    struct { D3D12_VERTEX_BUFFER_VIEW view, above; D3D12_DRAW_ARGUMENTS draw; } vb_records[2] = {
+        {{tag_buffer->GetGPUVirtualAddress(), sizeof(tags), 4}, stale_vbv, {3, 2, 6, 7}},
+        {{later_buffer->GetGPUVirtualAddress(), sizeof(later), 4}, stale_vbv, {3, 1, 9, 0}}};
     ID3D12Resource *vb_args = upload(vb_records, sizeof(vb_records));
     run("vbv-gap", [&](ID3D12GraphicsCommandList *l) {
         l->SetPipelineState(gap);

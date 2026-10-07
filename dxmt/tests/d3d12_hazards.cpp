@@ -235,7 +235,8 @@ static void PlacedUav() {
 
 // A texture placed in a DEFAULT heap the app releases at once: as in D3D12, the texture keeps its heap (and DXMT the
 // heap's memory resident). Rendered (heavy), then sampled through a descriptor into T1 + 1, as rt-read. Prints whether
-// the heap was still referenced after the app's release, and T1's texel.
+// the heap was still referenced after the app's release, and T1's texel. The texture is released after the readback,
+// and the heap with it (DXMT_STATS: "heaps destroyed 1", this mode alone).
 static void HeapReleased() {
     D3D12_HEAP_DESC hd = {32 << 20, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
                           D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES};
@@ -253,6 +254,7 @@ static void HeapReleased() {
     g->Barrier(p, PSR, RT);
     Read(T[1], RT, 512, 512, 0);
     g->Submit();
+    p->Release();
     printf("hazard heap-released %d %g\n", kept, Texel(0));
 }
 
@@ -1168,6 +1170,94 @@ static void AfterOwnBlit() {
     printf("hazard after-own-blit %g\n", Texel(0));
 }
 
+// Task F4 (Ruling 23): 203 timestamps from two query heaps in one list, as Unreal's GPU profiler takes them: one at the
+// list's start, then 33 times a render pass, a dispatch and a copy, each followed by one timestamp per heap (and a
+// UAV barrier, so the order holds with DXMT_D3D12_OVERLAP=1 too), and two at the list's end. The 17th dispatch is heavy
+// (csfill, 65535 groups), and the same dispatch again right after its iteration, between two timestamps of its own,
+// gives its time (the GPU's clock changes over a run, so it is measured next to it). Every value must be nonzero and
+// in submission order, and the gap around the heavy dispatch at least half that time. Prints "hazard ts-many 1", then
+// "ts-many values <count> heavy <gap> alone <time>" (ticks).
+static void TimestampMany() {
+    static ID3D12QueryHeap *heaps[2];
+    static ID3D12Resource *b, *src, *dst, *values;
+    if (!heaps[0]) {
+        for (auto &h : heaps) {
+            D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 128};
+            CHECK(g->device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&h));
+        }
+        b = Zeroed(256, UA);
+        src = Zeroed(256, COPY_SOURCE);
+        dst = Zeroed(256, COPY_DEST);
+        values = g->Buffer(D3D12_HEAP_TYPE_READBACK, 2 * 128 * 8, COPY_DEST);
+    }
+    std::vector<std::pair<int, UINT>> order; // (heap, query) in submission order
+    UINT next[2] = {};
+    auto ts = [&](int h) {
+        g->list->EndQuery(heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, next[h]);
+        order.push_back({h, next[h]++});
+    };
+    auto barrier = [] {
+        D3D12_RESOURCE_BARRIER all = {D3D12_RESOURCE_BARRIER_TYPE_UAV};
+        g->list->ResourceBarrier(1, &all);
+    };
+    auto resolve = [&] {
+        for (int h = 0; h < 2; h++)
+            if (next[h])
+                g->list->ResolveQueryData(heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, 0, next[h], values, h * 128 * 8);
+        g->Submit();
+    };
+    auto value = [&](std::pair<int, UINT> q) {
+        uint8_t *p;
+        D3D12_RANGE whole = {0, 2 * 128 * 8}, none = {0, 0};
+        CHECK(values->Map(0, &whole, (void **)&p));
+        UINT64 v;
+        memcpy(&v, p + (q.first * 128 + q.second) * 8, 8);
+        values->Unmap(0, &none);
+        return v;
+    };
+    size_t heavy_before = 0, alone_before = 0;
+    ts(0);
+    for (int i = 0; i < 33; i++) {
+        Pass(T[0], add, 1, 1);
+        ts(i % 2);
+        ts(1 - i % 2);
+        barrier();
+        if (i == 16)
+            heavy_before = order.size() - 1;
+        Dispatch(i == 16 ? fill : count, b, i == 16 ? 65535 : 1);
+        ts(0);
+        ts(1);
+        barrier();
+        g->list->CopyBufferRegion(dst, 0, src, 0, 256);
+        ts(1);
+        ts(0);
+        barrier();
+        if (i == 16) {
+            alone_before = order.size();
+            ts(0);
+            Dispatch(fill, b, 65535);
+            ts(1);
+            barrier();
+        }
+    }
+    ts(0);
+    ts(1);
+    resolve();
+    bool ok = true;
+    UINT64 last = 0;
+    for (auto q : order) {
+        UINT64 v = value(q);
+        ok = ok && v && v >= last;
+        last = v;
+    }
+    UINT64 heavy = value(order[heavy_before + 1]) - value(order[heavy_before]);
+    UINT64 alone = value(order[alone_before + 1]) - value(order[alone_before]);
+    ok = ok && alone && heavy * 2 >= alone;
+    printf("hazard ts-many %d\n", ok ? 1 : 0);
+    printf("ts-many values %zu heavy %llu alone %llu\n", order.size(), (unsigned long long)heavy,
+           (unsigned long long)alone);
+}
+
 // GPU efficiency spec E7: a clear-only pass folds into the first pass that binds its view later in the same
 // ExecuteCommandLists call, across lists, timestamps and barriers that don't name its texture. Lists on the main queue.
 struct List {
@@ -1400,7 +1490,7 @@ int main(int argc, char **argv) {
         {"fence-wait-first", FenceWaitFirst}, {"fence-order", FenceOrder}, {"two-heaps", TwoHeaps}, {"ts-start", TimestampStart}, {"after-own-blit", AfterOwnBlit}, {"fold-lists", FoldListsMode},
         {"fold-lists-barrier", FoldListsBarrier}, {"fold-m4", FoldM4}, {"fold-twice", FoldTwice}, {"fold-copy", FoldCopy},
         {"indirect-war", IndirectWar}, {"merge-indirect", MergeIndirect}, {"placed-uav", PlacedUav},
-        {"heap-released", HeapReleased}};
+        {"heap-released", HeapReleased}, {"ts-many", TimestampMany}};
     std::vector<std::string> modes(argv + 2, argv + argc);
     if (modes.empty())
         for (auto &m : kModes)

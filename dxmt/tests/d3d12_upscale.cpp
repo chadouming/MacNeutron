@@ -11,6 +11,9 @@
 //   direct         2.0x, an output with ALLOW_UNORDERED_ACCESS only (XeSS's norm)                "upscale direct ok ..."
 //   placed         as direct, the output placed in a DEFAULT heap                                "upscale placed ok ..."
 //   direct-offset  as direct, at (64, 32) of a 2624x1472 output (outputColorBase)        "upscale direct-offset ok ..."
+//   timestamps     as direct, with two timestamps before each upscale and one after (Task F4: MetalFX's own passes
+//                  take none; the blits around them do), then "upscale timestamps order <1: the last frame's three
+//                  nonzero, in order, the upscale between the last two> gap <ticks>"
 //   compute        2.0x, recorded on a COMPUTE command list and queue, with a reactive mask      "upscale compute ok ..."
 //   typeless       2.0x, colour and output R16G16B16A16_TYPELESS (read as FLOAT)                "upscale typeless ok ..."
 //   typeless32     2.0x, colour and output R32G32B32A32_TYPELESS (DXMT keeps them as RGBA32Uint: read through
@@ -121,7 +124,7 @@ struct Upscale {
     DXGI_FORMAT depth = DXGI_FORMAT_D32_FLOAT, motion = DXGI_FORMAT_R16G16_FLOAT, mask = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT color = DXGI_FORMAT_R16G16B16A16_FLOAT, out = DXGI_FORMAT_R16G16B16A16_FLOAT; // 8 or 16 bytes a texel
     D3D12_RESOURCE_FLAGS output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-    bool jittered = false, exposure = false, compute = false, bad = false, placed = false;
+    bool jittered = false, exposure = false, compute = false, bad = false, placed = false, timestamps = false;
     UINT ox = 0, oy = 0; // where in the output (that much larger) the upscale goes
 };
 
@@ -221,6 +224,13 @@ static void Run(const Upscale &u) {
         g.Barrier(exposure, COPY_DEST, READ);
         g.Submit();
     }
+    ID3D12QueryHeap *ts_heap = nullptr;
+    ID3D12Resource *ts_values = nullptr;
+    if (u.timestamps) {
+        D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 3};
+        CHECK(g.device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void **)&ts_heap));
+        ts_values = g.Buffer(D3D12_HEAP_TYPE_READBACK, 3 * 8, COPY_DEST);
+    }
     Staging sc = MakeStaging(g, iw * (c32 ? 16 : c10 ? 4 : 8), ih), sdp = MakeStaging(g, iw * 4, ih), sm = MakeStaging(g, iw * 4, ih),
             sk = MakeStaging(g, iw, ih);
     std::vector<float> last(iw * ih * 4); // the last frame's colour as uploaded
@@ -288,7 +298,15 @@ static void Run(const Upscale &u) {
                 exit(1);
             }
         } else {
+            if (ts_heap) {
+                g.list->EndQuery(ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+                g.list->EndQuery(ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, 1);
+            }
             CHECK(list->TemporalUpscale(scaler, &ud));
+            if (ts_heap) {
+                g.list->EndQuery(ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, 2);
+                g.list->ResolveQueryData(ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 3, ts_values, 0);
+            }
         }
         g.Submit();
         if (u.bad)
@@ -347,6 +365,13 @@ static void Run(const Upscale &u) {
         if (bad_pixels) printf(" non-finite %zu", bad_pixels);
         printf("\n");
     }
+    if (ts_heap) {
+        UINT64 *t;
+        CHECK(ts_values->Map(0, nullptr, (void **)&t));
+        bool order = t[0] && t[0] <= t[1] && t[1] < t[2];
+        printf("upscale timestamps order %d gap %llu\n", order ? 1 : 0, (unsigned long long)(t[2] - t[1]));
+        ts_values->Unmap(0, nullptr);
+    }
     scaler->Release();
     list->Release();
     ext->Release();
@@ -380,9 +405,10 @@ int main(int argc, char **argv) {
         } else if (mode == "rtoutput") {
             u.output = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
             u.motion = DXGI_FORMAT_R16G16_TYPELESS;
-        } else if (mode == "direct" || mode == "placed" || mode == "direct-offset") {
+        } else if (mode == "direct" || mode == "placed" || mode == "direct-offset" || mode == "timestamps") {
             u.output = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             u.placed = mode == "placed";
+            u.timestamps = mode == "timestamps";
             if (mode == "direct-offset") { u.ox = 64; u.oy = 32; }
         } else if (mode == "compute") {
             u.compute = true;
