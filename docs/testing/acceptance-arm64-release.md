@@ -700,11 +700,12 @@ window, `presenter/tests/cmaa2_check.m`; the Wine part runs `present_loop.exe` t
 
 **Cost.** The check prints the GPU time of the present's command buffer, which holds only CMAA2: at 1728x1117 0.155 /
 0.223 / 0.712 ms (flat / sparse / dense median), at 2560x1440 0.283 / 0.388 / 1.258 ms. That is 2.5-4x the study's
-probe (0.059 / 0.090 / 0.330 at 2560x1440), and the excess isn't CMAA2's: the same encoder run from a scratch bench on a
-drawable's texture that is not re-acquired each frame costs 0.066 / 0.084 / 0.281 ms at 2560x1440, and a plain 9-tap
-kernel costs 0.13 ms on that texture against 0.67 ms on a freshly acquired, presented drawable of these offscreen layers.
-In a game DXMT's render pass touches the drawable first in the same command buffer; the in-game cost is Phase 2's to
-measure (synthesis §6).
+probe (0.059 / 0.090 / 0.330 at 2560x1440). The shader's own cost matches the probe: the same encoder, run from a
+scratch bench on a drawable's texture that is not re-acquired each frame, costs 0.066 / 0.084 / 0.281 ms at 2560x1440.
+Anything run on a freshly acquired, presented drawable of these offscreen layers is 3-5x slower (a plain 9-tap kernel:
+0.13 ms, against 0.67 ms), and a blit into the drawable first in the same command buffer did not remove that. The
+mechanism isn't pinned down, and a game acquires a fresh drawable every frame too, so the in-game cost is open: Phase
+2's to measure (synthesis §6).
 
 Also: `make test` (246), `make smoke` 15/15, `make bridge-check` (all ok), `licences_test` and its self-test PASS. The
 build is a development one (the DXMT and Wine trees carry another task's diagnostic commits), so `make wine-arm64`
