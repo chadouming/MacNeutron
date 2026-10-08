@@ -32,13 +32,16 @@ private let registerFEX = ["reg", "add", #"HKLM\Software\Microsoft\Wow64\amd64"#
 /// A crashing game must exit, not wait forever behind Wine's crash window (Steam would show it running).
 private let disableCrashDialog = ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog",
                                   "/t", "REG_DWORD", "/d", "0", "/f"]
+/// A game's exclusive fullscreen changes Wine's virtual mode, never the Mac's display (XeSS plan, Task FS).
+private let emulateModeset = ["reg", "add", #"HKCU\Software\Wine\X11 Driver"#, "/v", "EmulateModeset", "/d", "Y", "/f"]
 
 @Test func freshPrefixRunsWinebootAndRecordsVersion() throws {
     let runner = winebootCreatingPrefix()
     let (manager, env) = try makeManager(runner)
     try manager.prepare(environment: env)
     #expect(runner.calls.map { [$0.tool] + $0.arguments } == [
-        ["wine", "wineboot", "-u"], ["wine"] + registerFEX, ["wine"] + disableCrashDialog, ["wineserver", "-w"],
+        ["wine", "wineboot", "-u"], ["wine"] + registerFEX, ["wine"] + disableCrashDialog, ["wine"] + emulateModeset,
+        ["wineserver", "-w"],
     ])
     #expect(runner.calls.allSatisfy { $0.environment["WINEPREFIX"] == manager.context.prefix.path(percentEncoded: false) })
     #expect(runner.calls[0].environment["WINEDLLOVERRIDES"]?.contains("mscoree=;mshtml=") == true)
@@ -61,7 +64,7 @@ private let disableCrashDialog = ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, 
     try manager.prepare(environment: env)
     try manager.prepare(environment: env)
     #expect(winebootCount(runner) == 1)
-    #expect(runner.calls.count == 4)
+    #expect(runner.calls.count == 5)
 }
 
 @Test func identityChangePreparesInPlace() throws {
@@ -72,6 +75,8 @@ private let disableCrashDialog = ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, 
     try write("wine.app id0 msync=1", to: manager.context.versionFile)
     try manager.prepare(environment: env)
     #expect(winebootCount(runner) == 1)
+    // Prefixes made before EmulateModeset was a default get it with the runtime that brings it.
+    #expect(runner.calls.contains { $0.arguments == emulateModeset })
     #expect(try String(contentsOf: save, encoding: .utf8) == "progress")
     #expect(!FileManager.default.fileExists(atPath: manager.context.dataPath.appending(path: "pfx.rosetta").path(percentEncoded: false)))
     #expect(stamp(manager) == "wine.app id1 msync=1")

@@ -999,6 +999,24 @@ unset DXMT_DXIL_DUMP DXMT_STATS
 expect "a signal after timestamps sampled without a resolve waits for their values" \
   "$(grep -oE 'fence signals deferred to the CPU [0-9]+' "$WORK/sampled-stats/stats.txt" 2> /dev/null):$(hazards sampled-stats)" \
   "fence signals deferred to the CPU 1:hazard sampled 1"
+# Task FS (Rulings 36-37): exclusive fullscreen on Wine's emulated modes, which the launcher's prefixes have
+# (EmulateModeset; the program refuses to run without it, so the Mac's display never changes). Alone: it needs its
+# windows in front and behind, which another lane's windows would change.
+for api in d3d12 d3d11; do
+  rm -rf "$WORK/fs-$api"; export DXMT_DXIL_DUMP="$WORK/fs-$api" DXMT_STATS=1
+  run ours "fs-$api" dxmt "$TESTS/d3d12_fullscreen.exe" $api
+  unset DXMT_DXIL_DUMP DXMT_STATS
+  expect "$api: leaving fullscreen in front restores the window as it was before the mode change" \
+    "$(grep -E '^(fg-leave|not emulated)' "$WORK/fs-$api.txt" || echo none)" "fg-leave 1 0 same"
+  expect "$api: leaving it in the background minimises the window, once" \
+    "$(grep '^bg-leave' "$WORK/fs-$api.txt" || echo none):$(grep -c 'Leaving fullscreen in the background: minimising' "$WORK/fs-$api.txt" || true)" \
+    "bg-leave 1 1:1"
+done
+expect "presents to a minimised window return at once, as presents, and free the frame latency slot, with no drawable" \
+  "$(grep '^minimised presents' "$WORK/fs-d3d12.txt" || echo none):$(grep -oE 'presents skipped \(window minimised\) [0-9]+' "$WORK/fs-d3d12/stats.txt" 2> /dev/null)" \
+  "minimised presents 0x0 0 31 fast:presents skipped (window minimised) 31"
+expect "and the restored window presents again" "$(grep '^restored present' "$WORK/fs-d3d12.txt" || echo none)" \
+  "restored present 0x0"
 # 10. The launcher (spec §3.7; gate L1): recordings land in the compat folder and the first session stamps the builds;
 #     with another build in the stamp, the next launch replays every recording before the game, which then only hits.
 #     (d3d12_cache's recording there holds every mode section 7 ran: a, rt, layout and root.)

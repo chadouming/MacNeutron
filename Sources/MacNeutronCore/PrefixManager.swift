@@ -104,6 +104,11 @@ public struct PrefixManager: Sendable {
         // ponytail: best effort; if reg fails, crashes still work, they just show the dialog.
         _ = try runner.run(layout.wine, ["reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog",
                                          "/t", "REG_DWORD", "/d", "0", "/f"], environment: environment, output: nil)
+        // A game's exclusive fullscreen changes Wine's virtual mode, scaled to the screen, never the Mac's display
+        // (win32u reads it for winemac too, despite the key's name). Existing prefixes get it with the runtime that
+        // brings it: a new wine.app changes the stamp, which prepares them again. Best effort, as above.
+        _ = try runner.run(layout.wine, ["reg", "add", #"HKCU\Software\Wine\X11 Driver"#, "/v", "EmulateModeset",
+                                         "/d", "Y", "/f"], environment: environment, output: nil)
         // Whatever the game's graphics setting: wined3d's overrides ignore them, and switching back to DXMT
         // doesn't change the stamp. The identity covers DXMT, so they're refreshed whenever wine.app changes.
         for name in ToolLayout.dxmtDLLs {

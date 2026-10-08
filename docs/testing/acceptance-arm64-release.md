@@ -710,3 +710,39 @@ mechanism isn't pinned down, and a game acquires a fresh drawable every frame to
 Also: `make test` (246), `make smoke` 15/15, `make bridge-check` (all ok), `licences_test` and its self-test PASS. The
 build is a development one (the DXMT and Wine trees carry another task's diagnostic commits), so `make wine-arm64`
 rebuilds incrementally each time rather than saying up to date. Not yet seen in a game.
+
+## Emulated fullscreen: background behaviour and per-size MetalFX fallback (XeSS plan, Task FS; Rulings 36-37)
+
+- **EmulateModeset on by default.** Every prefix the launcher prepares gets `HKCU\Software\Wine\X11 Driver`
+  `EmulateModeset=Y` beside `ShowCrashDialog` (`PrefixManager.prepareNew`): a game's exclusive Fullscreen changes
+  Wine's virtual mode, scaled to the screen, never the Mac's display. Existing prefixes get it with the runtime that
+  brings it (a new wine.app changes the prefix stamp, which prepares them again in place). RetinaMode stays off.
+- **Black letterbox bars** (Wine 0030, `winemac: Fill fullscreen windows' letterbox area with black.`): exported as
+  committed; seen only in the maintainer's game check.
+- **Leaving fullscreen in the background minimises** (DXMT 0032, D3D11 and D3D12): when the game leaves fullscreen
+  while its window isn't in front, the window goes to the Dock (`info:  Leaving fullscreen in the background:
+  minimising`, once per leave) instead of sitting fullscreen-sized in a corner of the screen.
+- **The windowed rect is saved before the mode change** (DXMT 0031): leaving fullscreen restores the window as it was,
+  even when the game resized it on WM_DISPLAYCHANGE.
+- **D3D12 presents to a minimised window are skipped** (DXMT 0033): S_OK (flip model), the back buffers rotate, the
+  frame latency object is released, no drawable is asked for; a 60 Hz sleep stands in for the drawable's pacing.
+- **Presenter:** a MetalFX refusal falls back to the linear filter for that drawable and target size only; the next
+  size upscales again (was: the rest of the session).
+- DXMT 0030 (`DXMT_MAX_ANISOTROPY`, a diagnostic switch, nothing changes when unset) is exported with them.
+
+Checks (`dxmt/tests/d3d12_fullscreen.cpp`, run alone after the lanes; it refuses to run without EmulateModeset, so the
+Mac's display never changes):
+
+| Check | Before (red) | After |
+| --- | --- | --- |
+| Leave fullscreen in front (D3D12, D3D11; the window fits itself to each mode on WM_DISPLAYCHANGE) | `fg-leave 1 0 0,35,640,486` | `fg-leave 1 0 same` |
+| Leave it with another window in front | `bg-leave 1 0`, no log line | `bg-leave 1 1`, one `Leaving fullscreen in the background` |
+| 31 D3D12 frames to the minimised window, each waited on the latency object and fenced | presented through Metal (no skip counter) | `minimised presents 0x0 0 31 fast`, `presents skipped (window minimised) 31`, slowest ~20-26 ms |
+| The restored window presents | `0x0` | `0x0` |
+| Presenter: MetalFX made to refuse 1280x720 (`MACNEUTRON_PRESENT_REFUSE`, test-only), window resized to 960x540 | `linear filter` 1, `MetalFX 640x360 -> 960x540` 0 | 1, 1 |
+
+`make dxmt-check` all passed in both lanes (x64 and ARM64EC programs), `make presenter-check` all ok (31), `make test`
+(246), `make smoke` 15 PASS, `make bridge-check` all ok; translator key unchanged (`735ba5c4…`); Wine 30 of 30 and
+DXMT 33 of 33 apply from the pins to the trees' exact trees. Not yet seen in a game: the maintainer's check is
+bg-synthesis.md §3 (Cmd-Tab away and back twice, 30 s in the background, Dock and Mission Control, quit from the Dock),
+plus the bar colour.

@@ -16,13 +16,14 @@ fail=0
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 
 # run_loop <name> <inject 0|1> <scale> <present_loop args...>  →  output in $WORK/<name>.txt; $aa, when set, is
-# MACNEUTRON_POST_AA
-aa=
+# MACNEUTRON_POST_AA, $refuse MACNEUTRON_PRESENT_REFUSE (an output size MetalFX is made to refuse)
+aa= refuse=
 run_loop() {
   name=$1 inject=$2 scale=$3; shift 3
   off=; [ "$inject" = 1 ] || off=1
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/0" SteamAppId=0 MACNEUTRON_GRAPHICS=dxmt MACNEUTRON_NO_STEAM_BRIDGE=1 \
-      ${off:+MACNEUTRON_NO_METALFX=1} ${aa:+MACNEUTRON_POST_AA=$aa} MACNEUTRON_PRESENT_SCALE="$scale" \
+      ${off:+MACNEUTRON_NO_METALFX=1} ${aa:+MACNEUTRON_POST_AA=$aa} ${refuse:+MACNEUTRON_PRESENT_REFUSE=$refuse} \
+      MACNEUTRON_PRESENT_SCALE="$scale" \
       MACNEUTRON_PRESENT_DUMP="$WORK/frame.ppm" \
       "$TOOL/bin/macneutron" launch waitforexitandrun "$B/present_loop.exe" "$@" > "$WORK/$name.out" 2>&1 &
   pid=$!
@@ -96,6 +97,13 @@ expect "Retina density is upscaled" "$(count 'macneutron-present: MetalFX 1280x7
 
 run_loop resize 1 1 1280 720 640 360 300 0 resize=150:960x540
 expect "overlay follows a window resize" "$(count 'macneutron-present: MetalFX 640x360 -> 960x540' resize)" 1
+
+# A size MetalFX refuses falls back to Core Animation's linear filter for that size only: the next size upscales again.
+refuse=1280x720
+run_loop refuse 1 1 1280 720 640 360 300 0 resize=150:960x540
+refuse=
+expect "a MetalFX refusal falls back for that size only" \
+  "$(count 'macneutron-present: linear filter (refused for the test)' refuse):$(count 'macneutron-present: MetalFX 640x360 -> 960x540' refuse)" "1:1"
 
 run_loop grow 1 1 1280 720 640 360 300 0 grow=150
 expect "overlay goes away at full size" "$(count 'macneutron-present: pass-through (full size)' grow)" 1

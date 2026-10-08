@@ -48,6 +48,7 @@ private func makeFixture(runner: FakeRunner = winebootCreatingPrefix(), identity
         ["wine", "wineboot", "-u"],
         ["wine", "reg", "add", #"HKLM\Software\Microsoft\Wow64\amd64"#, "/ve", "/d", "libarm64ecfex.dll", "/f"],
         ["wine", "reg", "add", #"HKCU\Software\Wine\WineDbg"#, "/v", "ShowCrashDialog", "/t", "REG_DWORD", "/d", "0", "/f"],
+        ["wine", "reg", "add", #"HKCU\Software\Wine\X11 Driver"#, "/v", "EmulateModeset", "/d", "Y", "/f"],
         ["wineserver", "-w"],
         ["wineserver", "-w"],
         ["wine", "/g/Game.exe", "-windowed"],

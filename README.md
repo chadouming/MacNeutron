@@ -134,7 +134,10 @@ publicly.
 
 When a game renders below the size of its window, or below your display's pixel density (Retina screens),
 MacNeutron upscales each frame with Apple's MetalFX instead of the blocky stretch macOS would apply. To trade
-sharpness for frame rate, pick a lower resolution in the game's windowed or borderless mode. It costs about 1 ms of
+sharpness for frame rate, pick a lower resolution in the game's windowed or Fullscreen mode (borderless games, Unreal's
+among them, keep rendering at the screen's size). Fullscreen never changes your Mac's display mode: the game renders at
+the size you picked, scaled to the screen with black bars where the shapes differ, and a game that leaves fullscreen
+when you switch to another app goes to the Dock until you come back. It costs about 1 ms of
 GPU time per frame while active and nothing when the game renders at full size; switch "MetalFX upscaling" off for a
 game in the Games window if it misbehaves.
 
