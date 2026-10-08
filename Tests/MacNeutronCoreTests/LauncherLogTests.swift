@@ -27,6 +27,25 @@ import Testing
     #expect(FileManager.default.fileExists(atPath: log.directory.path(percentEncoded: false)))
 }
 
+@Test func gameLogRotatesPastFiftyMegabytesKeepingOne() throws {
+    let log = LauncherLog(directory: try makeTempDir())
+    let game = log.gameLog(appID: "42"), old = log.directory.appending(path: "steam-42.log.1")
+    func size(_ url: URL) -> Int? {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)))?[.size] as? NSNumber)?.intValue
+    }
+    try write("older", to: old)
+    try write("", to: game)
+    let handle = try FileHandle(forWritingTo: game)
+    try handle.truncate(atOffset: UInt64(LauncherLog.gameLogRotateBytes))  // at the limit (sparse): kept
+    #expect(log.gameLog(appID: "42") == game)
+    #expect(size(game) == LauncherLog.gameLogRotateBytes && size(old) == 5)
+    try handle.truncate(atOffset: UInt64(LauncherLog.gameLogRotateBytes + 1))  // past it: rotated, the older one gone
+    try handle.close()
+    _ = log.gameLog(appID: "42")
+    #expect(size(game) == nil)
+    #expect(size(old) == LauncherLog.gameLogRotateBytes + 1)
+}
+
 @Test func concurrentAppendsKeepEveryLine() throws {
     // Launches overlap (Steam's setup run and the game, check.sh's lanes): no append may overwrite another.
     let log = LauncherLog(directory: try makeTempDir())

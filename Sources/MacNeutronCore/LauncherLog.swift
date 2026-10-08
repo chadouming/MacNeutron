@@ -3,6 +3,7 @@ import Foundation
 /// `~/Library/Logs/MacNeutron`: one line per launch in `launcher.log`, plus opt-in per-game Wine logs.
 public struct LauncherLog: Sendable {
     public static let rotateBytes = 1_048_576
+    public static let gameLogRotateBytes = 50 * 1_048_576
     public let directory: URL
 
     public init(directory: URL) { self.directory = directory }
@@ -14,10 +15,22 @@ public struct LauncherLog: Sendable {
 
     public var launcherLog: URL { directory.appending(path: "launcher.log") }
 
-    /// Creates the log folder and returns `steam-<appid>.log`.
+    /// Creates the log folder and returns `steam-<appid>.log`, first rotating it to `steam-<appid>.log.1` past
+    /// `gameLogRotateBytes`. Wine writes the log itself, so it rotates only here, at launch: one long session can
+    /// still pass the limit.
     public func gameLog(appID: String) -> URL {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appending(path: "steam-\(appID).log")
+        let fm = FileManager.default
+        try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let log = directory.appending(path: "steam-\(appID).log")
+        _ = try? withFileLock(at: directory.appending(path: "launcher.log.lock")) {  // launches overlap
+            if let size = (try? fm.attributesOfItem(atPath: log.path(percentEncoded: false)))?[.size] as? NSNumber,
+               size.intValue > Self.gameLogRotateBytes {
+                let rotated = directory.appending(path: "steam-\(appID).log.1")
+                try? fm.removeItem(at: rotated)
+                try? fm.moveItem(at: log, to: rotated)
+            }
+        }
+        return log
     }
 
     /// Appends a timestamped line, rotating to `launcher.log.1` past `rotateBytes`.

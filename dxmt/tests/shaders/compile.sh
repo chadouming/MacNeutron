@@ -60,6 +60,8 @@ dxc -T cs_6_6 -E csfill -Fo hazards.csfill.dxil hazards.hlsl
 dxc -T cs_6_6 -E cscount -Fo hazards.cscount.dxil hazards.hlsl
 dxc -T cs_6_6 -E csargs -Fo hazards.csargs.dxil hazards.hlsl
 dxc -T cs_6_0 -E csmain -Fo bounds.cs.dxil bounds.hlsl
+dxc -T vs_6_6 -E vsmain -Fo lod.vs.dxil lod.hlsl
+dxc -T ps_6_6 -E psmain -Fo lod.ps.dxil lod.hlsl
 finish
 ls -l ./*.dxil
 # DXIL translator behaviour groups (dxmt/tests/dxil; see common.hlsli). 16-bit types where the group needs them.

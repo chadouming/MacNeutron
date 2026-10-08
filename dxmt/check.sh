@@ -47,7 +47,8 @@ cp -cR "$(cd "$REF" && pwd -P)" "$WORK/ref"
 
 # run <ours|ref> <name> <backend> <exe> [args...]  →  output in $WORK/<name>.txt. The backend picks the tool folder:
 # d3dmetal the reference, with the x64 programs (Rosetta runs no ARM64EC code); dxmt ours, with the programs from
-# MACNEUTRON_ARM64_TESTS and MACNEUTRON_ARM64_LOOP.
+# MACNEUTRON_ARM64_TESTS and MACNEUTRON_ARM64_LOOP. DXMT_MAX_ANISOTROPY=0 (a launch option, so it wins): the samplers the
+# programs ask for, not the launcher's 16x default; ANISO= leaves the default.
 run() {
   name=$2 backend=$3; shift 3
   if [ "$backend" = d3dmetal ]; then
@@ -59,8 +60,10 @@ run() {
   fi
   # A fresh translation cache folder per run unless CACHE names a shared one: a dirty build shares its
   # `git describe`, so no run may read entries an earlier build left.
+  aniso=${ANISO-0}
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/$tool${LANE:+-$LANE}" SteamAppId=0 MACNEUTRON_GRAPHICS="$backend" \
       MACNEUTRON_NO_STEAM_BRIDGE=1 MACNEUTRON_NO_METALFX=1 DXMT_SHADER_CACHE_PATH="${CACHE:-$WORK/cache/$name}" \
+      ${aniso:+DXMT_MAX_ANISOTROPY=$aniso} \
       "$WORK/$tool/bin/macneutron" launch waitforexitandrun "$@" > "$WORK/$name.out" 2>&1 &
   pid=$!
   # The watchdog's sleep outlives the kill below: kept off stdout, it can't hold a $(...) open for 120 s.
@@ -663,6 +666,26 @@ run ref volume-ref d3dmetal "$TESTS/d3d12_volume.exe" "Z:$S/volume.fill.dxil" "Z
 expect "a 3D texture written by compute, then sampled and loaded, matches D3DMetal" \
   "$( (grep '^volume ' "$WORK/volume-ours.txt" || echo none) | tr '\n' ' ')" \
   "$( (grep '^volume ' "$WORK/volume-ref.txt" || echo 'D3DMetal printed nothing') | tr '\n' ' ')"
+# Task FU: which mip a sample uses (the blur study's sweep, d3d12_lod.cpp). A gradient sample keeps the sampler's
+# MipLODBias, as D3D says: s1, s2 (bias -1, +1) and s6 (aniso 4, bias -1) at 1:1 and 8:1, and s6 with its gradients
+# halved at 16:1 (bias -2 in all, past Metal's anisotropy cap). D3DMetal adds the bias under that cap (8:1 s6: 2, not
+# D3D's 1), so these aren't its values; every other case is.
+run ours lod-ours dxmt "$TESTS/d3d12_lod.exe" "Z:$S/lod.vs.dxil" "Z:$S/lod.ps.dxil"
+run ref lod-ref d3dmetal "$TESTS/d3d12_lod.exe" "Z:$S/lod.vs.dxil" "Z:$S/lod.ps.dxil"
+expect "SampleGrad keeps the sampler's LOD bias, as D3D does (not D3DMetal)" \
+  "$(grep -E '^lod k=(1|8) s[126] SampleGrad |^lod k=16 s6 SampleGrad/2 ' "$WORK/lod-ours.txt" | cut -d ' ' -f 2- | tr '\n' ';')" \
+  "k=1 s1 SampleGrad 0.00;k=1 s2 SampleGrad 2.00;k=1 s6 SampleGrad 0.00;k=8 s1 SampleGrad 3.00;k=8 s2 SampleGrad 5.00;k=8 s6 SampleGrad 1.00;k=16 s6 SampleGrad/2 1.00;"
+expect "and every sample without a sampler bias, or not by gradients, picks D3DMetal's mip" \
+  "$(grep -c '^lod k=' "$WORK/lod-ours.txt"):$(grep '^lod k=' "$WORK/lod-ours.txt" | grep -vE ' s[126] SampleGrad' | tr '\n' ';')" \
+  "84:$(grep '^lod k=' "$WORK/lod-ref.txt" | grep -vE ' s[126] SampleGrad' | tr '\n' ';')"
+# The launcher's default anisotropic filtering (16x, GameSettings) reaches DXMT: s0 (trilinear) at 8:1 takes the short
+# axis's mip, 1, where its own sampler takes the long one's (4, as D3DMetal).
+ANISO=
+run ours lod-16x dxmt "$TESTS/d3d12_lod.exe" "Z:$S/lod.vs.dxil" "Z:$S/lod.ps.dxil"
+unset ANISO
+expect "the launcher's 16x anisotropic filtering reaches the game's trilinear samplers" \
+  "$(grep '^lod k=8 s0 Sample ' "$WORK/lod-16x.txt"):$(grep '^lod k=8 s0 Sample ' "$WORK/lod-ref.txt")" \
+  "lod k=8 s0 Sample 1.00:lod k=8 s0 Sample 4.00"
 exit $fail
 ) > "$WORK/lane-D.log" 2>&1 & pD=$!
 
@@ -817,7 +840,7 @@ expect "and DXBC's, GroupMemoryBarrier's threadgroup fence included" \
   "$(grep '^ok sync\.dxbc ' "$WORK/translate-dxbc.txt" | grep -oE 'fence=[^ ]+ barrier=[0-9]+' || echo none)" \
   "fence=2:1,5:3,5:3,7:3,7:3 barrier=3"
 "$TOOLS/dxil-translate" "$S" > "$WORK/translate-shaders.txt" 2>&1 || true
-expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "32/32"
+expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-shaders.txt" | cut -d ' ' -f 2)" "34/34"
 # DXIL keeps NaN and infinity: no translated shader assumes them away or keeps a fast compare. Vertex and geometry
 # shaders also carry no reassoc, contract or arcp flags, as airconv's DXBC path, so LLVM fuses or reorders nothing on
 # its own: a depth prepass and a base pass then compute the same positions, and their depth EQUAL test holds (grass
@@ -826,9 +849,14 @@ expect "dxil-translate accepts the test shaders" "$(tail -1 "$WORK/translate-sha
 # precise, so no fma there).
 "$TOOLS/dxil-translate" "$S" --flags > "$WORK/translate-flags.txt" 2>&1 || true
 expect "no translated shader assumes NaN or infinity away" \
-  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "32:32"
+  "$(grep -c '^ok ' "$WORK/translate-flags.txt" || true):$(grep '^ok ' "$WORK/translate-flags.txt" | grep -c ' nnan=0 ninf=0 cmp=0 ' || true)" "34:34"
 expect "vertex and geometry shaders carry no reassoc, contract or arcp flags" \
-  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 11
+  "$(grep -E '^ok [^ ]+ (vs|gs) ' "$WORK/translate-flags.txt" | grep -c ' reassoc=0 contract=0 arcp=0$' || true)" 12
+# Task FU: Metal's gradient sample takes no LOD bias, so the sampler's MipLODBias scales the derivatives (2^bias): every
+# gradient sample of shaders/lod.hlsl (DXIL SampleGrad) and dxbc/grad.hlsl (DXBC sample_d) has an fmul operand.
+expect "gradient samples carry the sampler's LOD bias, DXIL and DXBC" \
+  "$(grep -hE '^ok (lod\.ps\.dxil|grad\.dxbc) ' "$WORK/translate-flags.txt" "$WORK/translate-dxbc.txt" | grep -oE 'grad=[0-9/]+' | tr '\n' ' ')" \
+  "grad=7/7 grad=1/1 "
 # E5: a raw or structured buffer load is bounds-checked once for all its components, those the shader reads
 # (shaders/bounds.hlsl: a 16-dword view from dword 4 and a 4-element view, over buffers holding 1..32). In bounds (the
 # view's last dwords too), out of bounds and at an offset whose end wraps 32 bits read as on D3DMetal; a load
@@ -1002,19 +1030,28 @@ expect "a signal after timestamps sampled without a resolve waits for their valu
 # Task FS (Rulings 36-37): exclusive fullscreen on Wine's emulated modes, which the launcher's prefixes have
 # (EmulateModeset; the program refuses to run without it, so the Mac's display never changes). Alone: it needs its
 # windows in front and behind, which another lane's windows would change.
+# The program's guard reads EmulateModeset as Wine does: off for it in AppDefaults is off, whatever X11 Driver says.
+run ours fs-guard dxmt "$TESTS/d3d12_fullscreen.exe" guard
+expect "the fullscreen test refuses to run where its own AppDefaults turn emulation off" \
+  "$(grep '^guard' "$WORK/fs-guard.txt" || echo none)" "guard not emulated"
 for api in d3d12 d3d11; do
   rm -rf "$WORK/fs-$api"; export DXMT_DXIL_DUMP="$WORK/fs-$api" DXMT_STATS=1
   run ours "fs-$api" dxmt "$TESTS/d3d12_fullscreen.exe" $api
   unset DXMT_DXIL_DUMP DXMT_STATS
   expect "$api: leaving fullscreen in front restores the window as it was before the mode change" \
     "$(grep -E '^(fg-leave|not emulated)' "$WORK/fs-$api.txt" || echo none)" "fg-leave 1 0 same"
-  expect "$api: leaving it in the background minimises the window, once" \
+  expect "$api: leaving it with the game's own popup in front keeps the window up" \
+    "$(grep '^popup-leave' "$WORK/fs-$api.txt" || echo none)" "popup-leave 1 0"
+  expect "$api: leaving it with another process's window in front minimises the window, once" \
     "$(grep '^bg-leave' "$WORK/fs-$api.txt" || echo none):$(grep -c 'Leaving fullscreen in the background: minimising' "$WORK/fs-$api.txt" || true)" \
     "bg-leave 1 1:1"
 done
 expect "presents to a minimised window return at once, as presents, and free the frame latency slot, with no drawable" \
-  "$(grep '^minimised presents' "$WORK/fs-d3d12.txt" || echo none):$(grep -oE 'presents skipped \(window minimised\) [0-9]+' "$WORK/fs-d3d12/stats.txt" 2> /dev/null)" \
-  "minimised presents 0x0 0 31 fast:presents skipped (window minimised) 31"
+  "$(grep '^minimised presents' "$WORK/fs-d3d12.txt" || echo none):$(grep -oE 'presents skipped \(window minimised\) [0-9]+' "$WORK/fs-d3d12/stats.txt" 2> /dev/null | awk '{ n += $NF } END { print n + 0 }')" \
+  "minimised presents 0x0 0 31 fast:31"
+# Each report (every 5 s of frames, and at exit) counts since the last one: the sums.
+expect "and count as frames in DXMT_STATS (31 and the restored one)" \
+  "$(grep -oE '^# .* [0-9]+ frames' "$WORK/fs-d3d12/stats.txt" 2> /dev/null | awk '{ n += $(NF - 1) } END { print n + 0 }')" 32
 expect "and the restored window presents again" "$(grep '^restored present' "$WORK/fs-d3d12.txt" || echo none)" \
   "restored present 0x0"
 # 10. The launcher (spec §3.7; gate L1): recordings land in the compat folder and the first session stamps the builds;

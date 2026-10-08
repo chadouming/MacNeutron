@@ -20,8 +20,11 @@ private let context = try! CompatContext(environment: ["STEAM_COMPAT_DATA_PATH":
 }
 
 @Test func loggingTurnsOnWineDebugChannels() {
-    let env = LaunchEnvironment.build(base: [:], context: context, backend: .dxmt, logging: true)
-    #expect(env["WINEDEBUG"] == "warn+all,+loaddll,+steamclient")
+    // MACNEUTRON_LOG=1: no seh warnings (Unreal logs through OutputDebugString) and no per-frame steamclient trace.
+    let env = LaunchEnvironment.build(base: ["MACNEUTRON_LOG": "1"], context: context, backend: .dxmt, logging: true)
+    #expect(env["WINEDEBUG"] == "warn+all,warn-seh,+loaddll,warn+steamclient")
+    let full = LaunchEnvironment.build(base: ["MACNEUTRON_LOG": "2"], context: context, backend: .dxmt, logging: true)
+    #expect(full["WINEDEBUG"] == "warn+all,+loaddll,+steamclient")
 }
 
 @Test func userSettingsWin() {
@@ -74,4 +77,15 @@ private let context = try! CompatContext(environment: ["STEAM_COMPAT_DATA_PATH":
     let env = LaunchEnvironment.build(base: GameSettings(postAA: "cmaa2").environment, context: context, backend: .dxmt,
                                       logging: false)
     #expect(env["MACNEUTRON_POST_AA"] == "cmaa2")
+}
+
+@Test func anisotropicFilteringReachesWine() {
+    func forced(_ settings: GameSettings, _ options: [String: String] = [:]) -> String? {
+        LaunchEnvironment.build(base: settings.environment.merging(options) { _, option in option }, context: context,
+                                backend: .dxmt, logging: false)["DXMT_MAX_ANISOTROPY"]
+    }
+    #expect(forced(GameSettings()) == "16")
+    #expect(forced(GameSettings(anisotropy: "8")) == "8")
+    #expect(forced(GameSettings(anisotropy: "game")) == nil)
+    #expect(forced(GameSettings(), ["DXMT_MAX_ANISOTROPY": "0"]) == "0")  // a launch option wins
 }

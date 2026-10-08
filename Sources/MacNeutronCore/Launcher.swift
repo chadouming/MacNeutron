@@ -48,7 +48,7 @@ public struct Launcher: Sendable {
         } catch {
             log.append("note: ignoring unreadable game settings for \(context.appID): \(error)")
         }
-        let logging = environment["MACNEUTRON_LOG"] == "1"
+        let logging = environment["MACNEUTRON_LOG"] == "1" || environment["MACNEUTRON_LOG"] == "2"
         let gameLog = logging ? log.gameLog(appID: context.appID) : nil
         let identity: String
         do {

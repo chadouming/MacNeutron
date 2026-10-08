@@ -161,7 +161,26 @@ private func i386Exe(named name: String) throws -> String {
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
     let gameLog = f.launcher.log.gameLog(appID: "42")
     #expect(f.runner.calls.last?.output == gameLog)
-    #expect(try String(contentsOf: gameLog, encoding: .utf8).contains("WINEDEBUG=warn+all,+loaddll,+steamclient"))
+    #expect(try String(contentsOf: gameLog, encoding: .utf8).contains("WINEDEBUG=warn+all,warn-seh,+loaddll,warn+steamclient\n"))
+}
+
+@Test func macneutronLog2KeepsEveryWarningAndTheSteamTrace() throws {
+    let f = try makeFixture()
+    var env = f.env
+    env["MACNEUTRON_LOG"] = "2"
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
+    let gameLog = f.launcher.log.gameLog(appID: "42")
+    #expect(f.runner.calls.last?.output == gameLog)
+    #expect(f.runner.calls.last?.environment["WINEDEBUG"] == "warn+all,+loaddll,+steamclient")
+}
+
+@Test func anisotropicFilteringReachesTheGame() throws {
+    let f = try makeFixture()
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.environment["DXMT_MAX_ANISOTROPY"] == "16")  // no settings file: the default
+    try f.launcher.settings.save(GameSettings(anisotropy: "game"), for: "42")
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    #expect(f.runner.calls.last?.environment["DXMT_MAX_ANISOTROPY"] == nil)
 }
 
 @Test func everyLaunchIsLoggedWithVersions() throws {
@@ -192,7 +211,7 @@ private func i386Exe(named name: String) throws -> String {
     _ = f.launcher.launch(["run", "/g/Game.exe"], environment: env)
     let wine = try #require(f.runner.calls.last?.environment)
     #expect(wine["WINEDLLOVERRIDES"]?.hasPrefix("dxgi=n,b;d3d10core=n,b;d3d11=n,b") == true)  // dxmt
-    #expect(wine["WINEDEBUG"] == "warn+all,+loaddll,+steamclient")
+    #expect(wine["WINEDEBUG"] == "warn+all,warn-seh,+loaddll,warn+steamclient")
     #expect(wine["WINEMSYNC"] == nil)
 }
 

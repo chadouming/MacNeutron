@@ -4,8 +4,10 @@
 // whose outputs cover its inputs (geometry shaders are translated last). The root signature comes from the shaders'
 // own resources. With --flags, each result line also counts the fast-math flags left in the translated AIR
 // (nnan, ninf, fast compares; reassoc, contract, arcp), for checking what the translator keeps, after its memory
-// fences (each air.atomic.fence's flags:scope, in order) and its air.wg.barrier count. A .dxbc file in the folder is a
-// DXBC (Shader Model 5) compute shader, translated as D3D11 does (Task FR: its sync lowering, offline).
+// fences (each air.atomic.fence's flags:scope, in order), its air.wg.barrier count and its gradient samples (grad=
+// <scaled>/<all>; scaled: an operand is an fmul, as the sampler's LOD bias scaling makes the derivatives). A .dxbc
+// file in the folder is a DXBC (Shader Model 5) compute shader, translated as D3D11 does (Task FR: its sync lowering,
+// offline).
 #import <Metal/Metal.h>
 #define BOOL WIN_BOOL // airconv's Windows headers define BOOL as int; Objective-C's is signed char
 #include "airconv_public.h"
@@ -66,7 +68,7 @@ std::vector<uint32_t> RootSignature(const std::vector<Resource> &resources) {
 }
 
 struct Flags {
-  unsigned nnan = 0, ninf = 0, cmp = 0, reassoc = 0, contract = 0, arcp = 0, barriers = 0;
+  unsigned nnan = 0, ninf = 0, cmp = 0, reassoc = 0, contract = 0, arcp = 0, barriers = 0, grads = 0, scaled_grads = 0;
   std::string fences; // "flags:scope" of each air.atomic.fence, comma-separated
 };
 
@@ -105,6 +107,13 @@ void CountFlags(const void *data, size_t size, Flags &flags) {
           if (name == "air.atomic.fence")
             flags.fences += (flags.fences.empty() ? "" : ",") + arg(0) + ":" + arg(2);
           flags.barriers += name == "air.wg.barrier";
+          if (name.startswith("air.sample_texture") && name.contains("_grad")) {
+            flags.grads++;
+            flags.scaled_grads += std::any_of(call->arg_begin(), call->arg_end(), [](auto &a) {
+              auto op = llvm::dyn_cast<llvm::BinaryOperator>(a.get());
+              return op && op->getOpcode() == llvm::Instruction::FMul;
+            });
+          }
         }
         if (llvm::isa<llvm::FPMathOperator>(&inst)) {
           auto f = inst.getFastMathFlags();
@@ -394,9 +403,9 @@ int main(int argc, char **argv) {
       if (ms > slowest_ms)
         slowest_ms = ms, slowest = name;
       if (count_flags)
-        printf("ok %s %s %.1f fence=%s barrier=%u nnan=%u ninf=%u cmp=%u reassoc=%u contract=%u arcp=%u\n",
+        printf("ok %s %s %.1f fence=%s barrier=%u grad=%u/%u nnan=%u ninf=%u cmp=%u reassoc=%u contract=%u arcp=%u\n",
                name.c_str(), r.stage, ms, r.flags.fences.empty() ? "-" : r.flags.fences.c_str(), r.flags.barriers,
-               r.flags.nnan, r.flags.ninf, r.flags.cmp, r.flags.reassoc, r.flags.contract, r.flags.arcp);
+               r.flags.scaled_grads, r.flags.grads, r.flags.nnan, r.flags.ninf, r.flags.cmp, r.flags.reassoc, r.flags.contract, r.flags.arcp);
       else
         printf("ok %s %s %.1f\n", name.c_str(), r.stage, ms);
     } else {

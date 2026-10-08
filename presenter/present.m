@@ -25,6 +25,7 @@
 @property NSUInteger frames;
 @property BOOL hdr, dumped;            // hdr: permanent for this layer
 @property CGSize refusedIn, refusedOut; // the sizes MetalFX last refused: the linear filter while they last
+@property BOOL refusedAll;             // MetalFX refused whatever the size (GPU, pixel format): for the session
 @property NSString *lastNote;
 // CMAA2's working set, for one frame size; aaFailed: off for this layer
 @property id<MTLTexture> aaEdges;
@@ -43,7 +44,7 @@ static void (*origPresentAfter)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>, CFTi
 static void (*origPresentAt)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>, CFTimeInterval);
 static const char *dumpPath;      // test-only: write the 120th upscaled frame as a PPM
 static double scaleOverride;      // test-only: pretend the window has this backing scale
-static const char *refuseOutput;  // test-only: "<w>x<h>", an output size MetalFX is made to refuse
+static const char *refuseOutput;  // test-only: "<w>x<h>", an output size MetalFX is made to refuse; "all", every size
 static BOOL postAA, noMetalFX;    // MACNEUTRON_POST_AA=cmaa2, MACNEUTRON_NO_METALFX=1
 
 static void note(MNLayerState *st, NSString *message)
@@ -109,7 +110,7 @@ static CGSize targetSize(CAMetalLayer *layer, MNLayerState *st)
 
 static BOOL refused(MNLayerState *st, CGSize drawable, CGSize target)
 {
-    return CGSizeEqualToSize(drawable, st.refusedIn) && CGSizeEqualToSize(target, st.refusedOut);
+    return st.refusedAll || (CGSizeEqualToSize(drawable, st.refusedIn) && CGSizeEqualToSize(target, st.refusedOut));
 }
 
 static BOOL wantsUpscale(CAMetalLayer *layer, MNLayerState *st, CGSize drawable)
@@ -160,27 +161,33 @@ static void placeOverlay(CAMetalLayer *layer, MNLayerState *st, CGSize target)
 }
 
 /* MetalFX refused this drawable size for this target: Core Animation's linear filter until either changes, then MetalFX
- * again. The filter stays: an upscaled frame shows only the overlay, and a full-size one isn't magnified. */
-static void useLinear(CAMetalLayer *layer, MNLayerState *st, NSString *reason, CGSize drawable, CGSize target)
+ * again; or for the session when the refusal doesn't depend on the size (`all`). The filter stays: an upscaled frame
+ * shows only the overlay, and a full-size one isn't magnified. */
+static void useLinear(CAMetalLayer *layer, MNLayerState *st, NSString *reason, BOOL all, CGSize drawable, CGSize target)
 {
-    st.refusedIn = drawable; st.refusedOut = target;
+    st.refusedIn = drawable; st.refusedOut = target; st.refusedAll = all;
     removeOverlay(st);
     __weak CAMetalLayer *weak = layer;
     dispatch_async(dispatch_get_main_queue(), ^{ weak.magnificationFilter = kCAFilterLinear; });
     note(st, [NSString stringWithFormat:@"linear filter (%@)", reason]);
 }
 
-/* A MetalFX spatial scaler and output texture for this input and output, cached per layer. */
-static NSString *prepareScaler(id<MTLDevice> device, MNLayerState *st, id<MTLTexture> src, CGSize target)
+/* A MetalFX spatial scaler and output texture for this input and output, cached per layer. A refusal sets *all when it
+ * holds whatever the size. */
+static NSString *prepareScaler(id<MTLDevice> device, MNLayerState *st, id<MTLTexture> src, CGSize target, BOOL *all)
 {
     NSUInteger ow = (NSUInteger)target.width, oh = (NSUInteger)target.height;
     if (st.scaler && st.inWidth == src.width && st.inHeight == src.height && st.outWidth == ow && st.outHeight == oh
         && st.format == src.pixelFormat)
         return nil;
+    *all = YES;
     if (![MTLFXSpatialScalerDescriptor supportsDevice:device]) return @"MetalFX isn't available on this GPU";
-    if (refuseOutput && [@(refuseOutput) isEqualToString:[NSString stringWithFormat:@"%lux%lu", (unsigned long)ow,
-                                                                                        (unsigned long)oh]])
+    NSString *size = [NSString stringWithFormat:@"%lux%lu", (unsigned long)ow, (unsigned long)oh];
+    if (refuseOutput && (!strcmp(refuseOutput, "all") || [@(refuseOutput) isEqualToString:size])) {
+        *all = !strcmp(refuseOutput, "all");
+        fprintf(stderr, "macneutron-present: test refusal at %s\n", size.UTF8String);  // every one: the check counts them
         return @"refused for the test";
+    }
     MTLFXSpatialScalerDescriptor *desc = [MTLFXSpatialScalerDescriptor new];
     desc.inputWidth = src.width; desc.inputHeight = src.height; desc.outputWidth = ow; desc.outputHeight = oh;
     desc.colorTextureFormat = src.pixelFormat; desc.outputTextureFormat = src.pixelFormat;
@@ -188,6 +195,7 @@ static NSString *prepareScaler(id<MTLDevice> device, MNLayerState *st, id<MTLTex
     id<MTLFXSpatialScaler> scaler = [desc newSpatialScalerWithDevice:device];
     if (!scaler)
         return [NSString stringWithFormat:@"MetalFX can't scale pixel format %lu", (unsigned long)src.pixelFormat];
+    *all = NO;  // ponytail: a texture allocation failure is taken as size-dependent
     MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat
                                                                                     width:ow height:oh mipmapped:NO];
     td.usage = scaler.outputTextureUsage; td.storageMode = MTLStorageModePrivate;
@@ -258,6 +266,19 @@ static NSString *prepareCMAA2(id<MTLDevice> device, MNLayerState *st, id<MTLText
     return nil;
 }
 
+/* The view CMAA2 works through for a pixel format: its sRGB twin (8-bit), the format itself (10-bit SDR, *tenBit), or
+ * MTLPixelFormatInvalid for a format it doesn't handle. */
+static MTLPixelFormat aaView(MTLPixelFormat format, BOOL *tenBit)
+{
+    *tenBit = NO;
+    switch (format) {
+    case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB: return MTLPixelFormatBGRA8Unorm_sRGB;
+    case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: return MTLPixelFormatRGBA8Unorm_sRGB;
+    case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatBGR10A2Unorm: *tenBit = YES; return format;
+    default: return MTLPixelFormatInvalid;
+    }
+}
+
 /* CMAA2 in place on the game's frame. Upstream works on linear colour: an 8-bit frame is read and written through an
  * sRGB view (DXMT's layer is non-sRGB, and framebufferOnly off); a 10-bit SDR frame has no sRGB view, so the shader
  * decodes and encodes it by hand and keeps its blends at 10 bits. Five dispatches in one serial encoder, two of them
@@ -265,13 +286,9 @@ static NSString *prepareCMAA2(id<MTLDevice> device, MNLayerState *st, id<MTLText
 static void antialias(id<MTLCommandBuffer> cb, id<MTLTexture> src, MNLayerState *st)
 {
     if (!postAA || st.hdr || st.aaFailed || src.framebufferOnly) return;
-    MTLPixelFormat view = src.pixelFormat;
-    BOOL tenBit = NO;
-    switch (src.pixelFormat) {
-    case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB: view = MTLPixelFormatBGRA8Unorm_sRGB; break;
-    case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: view = MTLPixelFormatRGBA8Unorm_sRGB; break;
-    case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatBGR10A2Unorm: tenBit = YES; break;
-    default:
+    BOOL tenBit;
+    MTLPixelFormat view = aaView(src.pixelFormat, &tenBit);
+    if (view == MTLPixelFormatInvalid) {
         aaNote(st, [NSString stringWithFormat:@"CMAA2 skipped (pixel format %lu)", (unsigned long)src.pixelFormat]);
         return;
     }
@@ -352,8 +369,9 @@ static BOOL upscaleInto(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable, v
         placeOverlay(layer, st, target);
         if (!st.overlay) return NO;
     }
-    NSString *failure = prepareScaler(cb.device, st, src, st.overlaySize);
-    if (failure) { useLinear(layer, st, failure, CGSizeMake(src.width, src.height), st.overlaySize); return NO; }
+    BOOL all = NO;
+    NSString *failure = prepareScaler(cb.device, st, src, st.overlaySize, &all);
+    if (failure) { useLinear(layer, st, failure, all, CGSizeMake(src.width, src.height), st.overlaySize); return NO; }
     // The overlay paces like the game's own layer: a game presenting without vsync turns display sync off there.
     if (st.overlay.displaySyncEnabled != layer.displaySyncEnabled) st.overlay.displaySyncEnabled = layer.displaySyncEnabled;
     id<CAMetalDrawable> out = [st.overlay nextDrawable];
@@ -418,7 +436,9 @@ static id<CAMetalDrawable> mnNextDrawable(CAMetalLayer *self, SEL _cmd)
     if (objc_getAssociatedObject(self, kIsOverlay)) return origNextDrawable(self, _cmd);
     MNLayerState *st = stateFor(self);
     if (!st.hdr && isHDR(self)) { st.hdr = YES; note(st, @"left alone (HDR/extended-range layer)"); }
-    if ((wantsUpscale(self, st, self.drawableSize) || (postAA && !st.hdr)) && self.framebufferOnly) self.framebufferOnly = NO;
+    BOOL tenBit;
+    BOOL aa = postAA && !st.hdr && aaView(self.pixelFormat, &tenBit) != MTLPixelFormatInvalid;  // a frame CMAA2 handles
+    if ((wantsUpscale(self, st, self.drawableSize) || aa) && self.framebufferOnly) self.framebufferOnly = NO;
     id<CAMetalDrawable> drawable = origNextDrawable(self, _cmd);
     if (self.device) hookPresent(self.device);
     return drawable;

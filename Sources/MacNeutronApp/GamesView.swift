@@ -56,13 +56,24 @@ struct GamesView: View {
                     Toggle("MetalFX upscaling", isOn: binding(row, \.metalFX, default: true))
                         .help("Upscales with Apple's MetalFX when the game renders below its window or the display's pixel density.")
                     Picker("Anti-aliasing (post)", selection: Binding(
-                        get: { row.settings.postAA ?? "off" },
+                        get: { row.settings.postAA == "cmaa2" ? "cmaa2" : "off" },  // any other value is off
                         set: { value in Task { await model.update(row.id) { $0.postAA = value == "off" ? nil : value } } })) {
                         Text("Off").tag("off")
                         Text("CMAA2").tag("cmaa2")
                     }
                     .fixedSize()
                     .help("for games without their own anti-aliasing")
+                    Picker("Anisotropic filtering", selection: Binding(
+                        // Unknown values run at the default, so they show as it.
+                        get: { row.settings.anisotropy.flatMap { ["game", "4", "8"].contains($0) ? $0 : nil } ?? "16" },
+                        set: { value in Task { await model.update(row.id) { $0.anisotropy = value == "16" ? nil : value } } })) {
+                        Text("Game's choice").tag("game")
+                        Text("4x").tag("4")
+                        Text("8x").tag("8")
+                        Text("16x (default)").tag("16")
+                    }
+                    .fixedSize()
+                    .help("Sharper textures on surfaces seen at an angle")
                     Spacer()
                 }
                 .padding(10)

@@ -7,17 +7,20 @@ public struct GameSettings: Codable, Equatable, Sendable {
     public var msync: Bool?
     public var runAs: RunAs?
     public var metalFX: Bool?
-    /// Post-process anti-aliasing in the presenter: "off" or "cmaa2".
+    /// Post-process anti-aliasing in the presenter: "off" or "cmaa2" (any other value is off).
     public var postAA: String?
+    /// Anisotropic filtering: nil (16x), "game" (the game's own samplers), "4", "8" or "16".
+    public var anisotropy: String?
 
     public init(graphics: String? = nil, log: Bool? = nil, msync: Bool? = nil, runAs: RunAs? = nil, metalFX: Bool? = nil,
-                postAA: String? = nil) {
+                postAA: String? = nil, anisotropy: String? = nil) {
         self.graphics = graphics
         self.log = log
         self.msync = msync
         self.runAs = runAs
         self.metalFX = metalFX
         self.postAA = postAA
+        self.anisotropy = anisotropy
     }
 
     /// The launch-option variables these settings stand for (`runAs` is for the mapping planner only).
@@ -27,7 +30,14 @@ public struct GameSettings: Codable, Equatable, Sendable {
         if log == true { env["MACNEUTRON_LOG"] = "1" }
         if msync == false { env["MACNEUTRON_NO_MSYNC"] = "1" }
         if metalFX == false { env["MACNEUTRON_NO_METALFX"] = "1" }
-        if let postAA, postAA != "off" { env["MACNEUTRON_POST_AA"] = postAA }
+        if postAA == "cmaa2" { env["MACNEUTRON_POST_AA"] = "cmaa2" }  // any other value: off
+        // DXMT's floor on trilinear samplers' anisotropy (DXMT 0030): Metal's anisotropic filter cancels a negative
+        // LOD bias (an upscaler's) past the anisotropy ratio, so 16x by default; unknown values get it too.
+        switch anisotropy {
+        case "game": break
+        case "4", "8": env["DXMT_MAX_ANISOTROPY"] = anisotropy
+        default: env["DXMT_MAX_ANISOTROPY"] = "16"
+        }
         return env
     }
 }

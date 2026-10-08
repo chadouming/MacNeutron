@@ -1,7 +1,7 @@
 /* Test program for presenter/check.sh: presents test frames through the presenter's own present hook, natively, on
  * CAMetalLayers outside any window, the way DXMT does (framebufferOnly off), and reports what came out.
  *   cmaa2_check <libmacneutron-present.dylib> frames <w> <h> [fp16|rgb10a2|bgr10a2]   one frame of each test image,
- *                                                                     compared with its input (default BGRA8)
+ *                                                                     compared with its input (default BGRA8), alpha too
  *   cmaa2_check <libmacneutron-present.dylib> upscale                 130 frames of 640x360 on a 640x360-point layer
  *   cmaa2_check <libmacneutron-present.dylib> cost <w> <h> [rgb10a2]  GPU time of the presenter's work per frame
  * The presenter reads MACNEUTRON_POST_AA, MACNEUTRON_PRESENT_SCALE and MACNEUTRON_PRESENT_DUMP when it loads: the caller
@@ -165,11 +165,16 @@ int main(int argc, char **argv)
         id<MTLBuffer> in = [D newBufferWithLength:w * h * bpp options:MTLResourceStorageModeShared];
         id<MTLBuffer> out = [D newBufferWithLength:w * h * bpp options:MTLResourceStorageModeShared];
         const char *names[3] = {"dense", "flat", "sparse"};
+        NSUInteger alpha = 0;  // pixels whose alpha changed, over the three images (upstream CMAA2 writes alpha 0)
         for (uint32_t kind = 0; kind < 3; kind++) {
             present(layer, image(format, w, h, kind), in, out);
             printf("%s changed: %lu\n", names[kind], (unsigned long)changed(in, out, bpp));
             if (fp16) continue;
             const uint8_t *a = in.contents, *b = out.contents;
+            for (NSUInteger i = 0; i < w * h * 4; i += 4) {
+                uint32_t x, y; memcpy(&x, a + i, 4); memcpy(&y, b + i, 4);
+                alpha += ten ? (x >> 30) != (y >> 30) : a[i + 3] != b[i + 3];
+            }
             if (kind == SPARSE) {  // changed pixels more than 1 px from an edge (a 4-neighbour step of luma > 0.05)
                 NSUInteger far = 0;
                 for (NSUInteger y = 0; y < h; y++) for (NSUInteger x = 0; x < w; x++) {
@@ -215,6 +220,7 @@ int main(int argc, char **argv)
                 printf("glyph contrast kept percent: %.1f\n", cin > 0 ? 100.0 * cout / cin : 0);
             }
         }
+        if (!fp16) printf("alpha changed: %lu\n", (unsigned long)alpha);
         return 0;
     }
 

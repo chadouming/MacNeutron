@@ -12,8 +12,12 @@ public enum LaunchEnvironment {
         // MACNEUTRON_XESS=1 loads the game's own Intel XeSS.
         let xess = base["MACNEUTRON_XESS"] == "1" ? "" : ";libxess,libxess_dx11=b"
         env["WINEDLLOVERRIDES"] = mergeOverrides(backend.dllOverrides + xess, user: base["WINEDLLOVERRIDES"])
+        // MACNEUTRON_LOG=1 leaves out seh warnings (Unreal logs through OutputDebugString, an exception each line)
+        // and steamclient's per-frame trace, which filled game logs by the gigabyte; MACNEUTRON_LOG=2 keeps them.
         if base["WINEDEBUG"] == nil {
-            env["WINEDEBUG"] = logging ? "warn+all,+loaddll,+steamclient" : "-all"
+            env["WINEDEBUG"] = !logging ? "-all"
+                : base["MACNEUTRON_LOG"] == "2" ? "warn+all,+loaddll,+steamclient"
+                : "warn+all,warn-seh,+loaddll,warn+steamclient"
         }
         // msync off means unset, whoever set it: Wine's client and server must agree on it.
         if base["MACNEUTRON_NO_MSYNC"] == "1" {

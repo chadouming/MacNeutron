@@ -359,7 +359,8 @@ smaller drawable).
 
 **Logging run.** `MACNEUTRON_LOG=1` doesn't show the bridge's parameter dumps: its `WINEDEBUG=+err,+warn` turns on
 channels named `err` and `warn`, not the warn class (`warn+xess` does; since Task 3b the launcher's logging mode sets
-`warn+all,+loaddll,+steamclient`, Ruling 18). Hemingway.log still has the bridge's one-time messages, through the
+`warn+all,+loaddll,+steamclient`, Ruling 18; since Task FU that is `MACNEUTRON_LOG=2`, and `MACNEUTRON_LOG=1` sets
+`warn+all,warn-seh,+loaddll,warn+steamclient`). Hemingway.log still has the bridge's one-time messages, through the
 game's logging callback. The first run found the bridge refusing every frame:
 `LogXeSSSDK: Warning: xessD3D12Execute: … depth 0000000000000000, … input 864x559`, then `Failed to execute XeSS,
 result: -4` about 50 times a second. Unreal's XeSS plugin initialises with flags 0x101 (high-res motion vectors, auto
@@ -752,3 +753,49 @@ Mac's display never changes):
 DXMT 33 of 33 apply from the pins to the trees' exact trees. Not yet seen in a game: the maintainer's check is
 bg-synthesis.md §3 (Cmd-Tab away and back twice, 30 s in the background, Dock and Mission Control, quit from the Dock),
 plus the bar colour.
+
+## Follow-ups before the push: anisotropic filtering, fullscreen, presenter, logging, gradient bias (XeSS plan, Task FU)
+
+2026-10-08. DXMT patches 0034-0037; Wine unchanged (0030). Each item has a row that failed first.
+- **Anisotropic filtering 16x by default** (maintainer's decision). `GameSettings.anisotropy`: none (16x), `game` (no
+  override), `4`, `8`, `16`; anything else runs at 16x. It becomes `DXMT_MAX_ANISOTROPY` (DXMT 0030's floor on
+  trilinear, non-comparison samplers; unset for `game`), under the launch options as every setting. Games window:
+  "Anisotropic filtering: Game's choice / 4x / 8x / 16x (default)". Settings files from before load as 16x. dxmt-check:
+  `lod k=8 s0 Sample` (a trilinear sampler, 8:1 footprint) is `1.00` through the launcher's default and `4.00` with
+  `DXMT_MAX_ANISOTROPY=0` and on D3DMetal; every other `dxmt/check.sh` run passes `DXMT_MAX_ANISOTROPY=0`, so its
+  comparisons with D3DMetal stay on the programs' own samplers.
+- **Leaving fullscreen in the background is decided by process** (DXMT 0034): the game's own popup in front (a dialog,
+  an overlay owned by its window) no longer minimises it; another process's window, or none, does. `popup-leave 1 1`
+  before, `1 0` after (D3D12 and D3D11); `bg-leave 1 1` and the one log line unchanged. `dxgi.handleAltTab` keeps its
+  exact-window check.
+- **No minimise when fullscreen moves to another output** (DXMT 0035): `SetFullscreenState(TRUE, <other output>)`'s
+  leave half. No row: this Mac has one display.
+- **A skipped present to a minimised window counts as a frame** (DXMT 0036): DXMT_STATS's frame counts sum to 32 (the 31
+  skipped and the restored one; 1 before), so its 5 s reports go on while the game is in the Dock.
+- **Gradient samples keep the sampler's MipLODBias** (DXMT 0037, airconv): DXIL SampleGrad and DXBC sample_d scale both
+  derivatives by 2^bias, as D3D adds the bias to their LOD and Metal's gradient sample takes none. `d3d12_lod` (the blur
+  study's sweep): `k=8 s6 SampleGrad` (anisotropy 4, bias -1, 8:1) `2.00` → `1.00`, D3D's value (D3DMetal: 2);
+  `k=1 s1` `1.00` → `0.00`, `k=1 s2` `1.00` → `2.00`; 84 cases, every one without a sampler bias or not by gradients
+  as D3DMetal. Offline (`dxil-translate --flags`): `grad=7/7` for `lod.ps.dxil`, `grad=1/1` for `dxbc/grad.dxbc`
+  (`0/1` before). This changes the translator key, `735ba5c4…` → `d6863ecc…` (unreleased: the last release's users
+  rebuild their shader caches once with this one anyway).
+- **The fullscreen test's guard** reads EmulateModeset as Wine does, the program's `AppDefaults` key first (`guard
+  emulated` before, `guard not emulated` after).
+- **Presenter**: a refused size asks MetalFX once (`test refusal at 1280x720` 1, before 0: no count); a refusal that
+  doesn't depend on the size (no MetalFX on the GPU, a pixel format it can't scale; `MACNEUTRON_PRESENT_REFUSE=all`)
+  lasts for the session (`linear filter` 1, `MetalFX` 0; before: 0, 2). CMAA2: framebufferOnly is turned off only for
+  the 8- and 10-bit layers CMAA2 handles; every frames run counts pixels whose alpha changed (0; a mutant writing
+  alpha 0 counts 290673); BGR10A2 has its rows now. `postAA` values other than `cmaa2` are off in the launch variables
+  and the Games window.
+- **Logging**: `MACNEUTRON_LOG=1` sets `WINEDEBUG=warn+all,warn-seh,+loaddll,warn+steamclient` (no seh warnings,
+  Unreal's OutputDebugString flood, and no per-frame steamclient trace: SMITE 2's log had reached 917 MB);
+  `MACNEUTRON_LOG=2` keeps `warn+all,+loaddll,+steamclient`. `steam-<appid>.log` past 50 MB moves to
+  `steam-<appid>.log.1` at the next launch (one old file kept).
+
+`make dxmt-check` (dev build of 0034-0037): `dxmt-check: all passed` in both lanes (x64 and ARM64EC programs), 290
+and 280 ok, the new rows in both. A first run failed one timing row in the x64 lane, `and with
+DXMT_D3D12_TIMESTAMP_BLITS=1, 53 get blits of their own` (`hazard ts-many 0`: `heavy 133750 alone 1329583`, the
+dispatch measured alone ten times its usual ~134000 ticks while other lanes ran); alone it passed 5 of 5 (`alone`
+133833-220208) and the whole check passed on the rerun. `make presenter-check` 62 ok, `make test` 251 tests,
+`make smoke` 15 PASS, `make bridge-check` 15 ok and `PASS probe redaction`, `licences_test` PASS. DXMT 37 of 37 and
+Wine 30 of 30 apply from the pins to the trees' exact trees.

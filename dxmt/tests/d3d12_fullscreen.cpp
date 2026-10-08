@@ -1,11 +1,16 @@
 // Exclusive fullscreen and leaving it (Task FS, Rulings 36-37), on Wine's emulated modes only:
-//   d3d12_fullscreen.exe [d3d11]
-// Refuses to run ("not emulated") unless HKCU\Software\Wine\X11 Driver\EmulateModeset is on, so a fullscreen mode
-// change is Wine's virtual one and never the Mac's display. The game window fits itself to each new mode on
+//   d3d12_fullscreen.exe [d3d11|guard]
+// Refuses to run ("not emulated") unless EmulateModeset is on for it, as Wine reads it: HKCU\Software\Wine\AppDefaults\
+// d3d12_fullscreen.exe\X11 Driver first, then HKCU\Software\Wine\X11 Driver; so a fullscreen mode change is Wine's
+// virtual one and never the Mac's display. "guard" turns it off for this program in AppDefaults, prints "guard
+// emulated" or "guard not emulated", and takes the value out again. The game window fits itself to each new mode on
 // WM_DISPLAYCHANGE, as games may. Prints:
 //   "fg-leave <foreground> <iconic> <rect>": leaving fullscreen while in front keeps the window up, at the rect it had
 //   before the mode change ("same"), not the one it took after it;
-//   "bg-leave <foreground> <iconic>": leaving while another window is in front minimises it;
+//   "popup-leave <foreground> <iconic>": leaving while the game's own popup (owned by its window) is in front keeps the
+//   window up: the game is still in front;
+//   "bg-leave <foreground> <iconic>": leaving while another process's window is in front (this program, run as
+//   "d3d12_fullscreen.exe front <event>") minimises it;
 //   D3D12 only, on the window minimised (by then, or by the test), "minimised presents <worst hr> <latency
 //   timeouts> <present count advance> <fast|slow>": 31 frames, each waited for on the frame latency object, presented
 //   and fenced, return S_OK, count as presents and take under 100 ms each; then "restored present <hr>" once the
@@ -17,6 +22,7 @@
 #include <dxgi1_4.h>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 #define CHECK(expr) do { HRESULT hr_ = (expr); if (FAILED(hr_)) { \
     printf("%s failed 0x%08lx\n", #expr, (unsigned long)hr_); return 1; } } while (0)
@@ -35,15 +41,34 @@ static void pump(DWORD ms) {
     }
 }
 
-static bool emulated() {
-    char v[8] = {}; DWORD size = sizeof v;
-    if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Wine\\X11 Driver", "EmulateModeset", RRF_RT_REG_SZ, nullptr, v,
-                     &size))
-        return false;
-    return strchr("yYtT1", v[0]) && v[0];
+static const char *app_key = "Software\\Wine\\AppDefaults\\d3d12_fullscreen.exe\\X11 Driver";
+static bool emulated() {  // the app's own value wins, as in win32u's get_config_key
+    for (const char *key : {app_key, "Software\\Wine\\X11 Driver"}) {
+        char v[8] = {}; DWORD size = sizeof v;
+        if (!RegGetValueA(HKEY_CURRENT_USER, key, "EmulateModeset", RRF_RT_REG_SZ, nullptr, v, &size))
+            return strchr("yYtT1", v[0]) && v[0];
+    }
+    return false;
 }
 
 int main(int argc, char **argv) {
+    if (argc > 2 && !strcmp(argv[1], "front")) {  // another process's window, in front until the event is set
+        HWND w = CreateWindowA("STATIC", "front", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 200, 200, 320, 180, nullptr,
+                               nullptr, nullptr, nullptr);
+        SetForegroundWindow(w);
+        HANDLE done = OpenEventA(SYNCHRONIZE, FALSE, argv[2]);
+        while (done && MsgWaitForMultipleObjects(1, &done, FALSE, 20000, QS_ALLINPUT) == WAIT_OBJECT_0 + 1) {
+            MSG msg;
+            while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
+        }
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "guard")) {
+        RegSetKeyValueA(HKEY_CURRENT_USER, app_key, "EmulateModeset", REG_SZ, "N", 2);
+        printf("guard %s\n", emulated() ? "emulated" : "not emulated");
+        RegDeleteKeyValueA(HKEY_CURRENT_USER, app_key, "EmulateModeset");
+        return 0;
+    }
     const bool d3d11 = argc > 1 && !strcmp(argv[1], "d3d11");
     if (!emulated()) { printf("not emulated\n"); return 1; }
     const UINT width = 640, height = 360, count = 2;
@@ -54,8 +79,6 @@ int main(int argc, char **argv) {
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     game = CreateWindowA("d3d12_fullscreen", "d3d12_fullscreen", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60,
                          r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
-    HWND other = CreateWindowA("d3d12_fullscreen", "other", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 300, 300, 320, 180,
-                               nullptr, nullptr, wc.hInstance, nullptr);
 
     IDXGIFactory2 *factory;
     CHECK(CreateDXGIFactory1(__uuidof(IDXGIFactory2), (void **)&factory));
@@ -95,12 +118,42 @@ int main(int argc, char **argv) {
 
     CHECK(swap1->SetFullscreenState(TRUE, nullptr));
     pump(300);
-    SetForegroundWindow(other);
+    HWND popup = CreateWindowA("d3d12_fullscreen", "popup", WS_POPUP | WS_CAPTION | WS_VISIBLE, 300, 300, 320, 180, game,
+                               nullptr, wc.hInstance, nullptr);
+    SetForegroundWindow(popup);
     pump(300);
-    front = GetForegroundWindow() == other;
+    front = GetForegroundWindow() == popup;
+    CHECK(swap1->SetFullscreenState(FALSE, nullptr));
+    pump(500);
+    printf("popup-leave %d %d\n", front, (int)IsIconic(game));
+    DestroyWindow(popup);
+    if (IsIconic(game)) ShowWindow(game, SW_RESTORE);
+    SetForegroundWindow(game);
+    pump(300);
+
+    CHECK(swap1->SetFullscreenState(TRUE, nullptr));
+    pump(300);
+    char exe[MAX_PATH], cmd[MAX_PATH + 64];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    HANDLE front_done = CreateEventA(nullptr, TRUE, FALSE, "d3d12_fullscreen_front");
+    snprintf(cmd, sizeof cmd, "\"%s\" front d3d12_fullscreen_front", exe);
+    STARTUPINFOA si = {sizeof si};
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessA(exe, cmd, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        printf("CreateProcess failed %lu\n", GetLastError());
+        return 1;
+    }
+    DWORD pid = 0;
+    for (int i = 0; i < 100 && pid != pi.dwProcessId; i++) {  // up to 5 s for its window to come to the front
+        pump(50);
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    }
+    front = pid == pi.dwProcessId;
     CHECK(swap1->SetFullscreenState(FALSE, nullptr));
     pump(500);
     printf("bg-leave %d %d\n", front, (int)IsIconic(game));
+    SetEvent(front_done);
+    WaitForSingleObject(pi.hProcess, 5000);
     if (d3d11) return 0;
     if (!IsIconic(game)) {  // the presents below are checked on a minimised window whatever bg-leave found
         ShowWindow(game, SW_MINIMIZE);

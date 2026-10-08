@@ -71,10 +71,11 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 | Launch options | Effect |
 |---|---|
 | `/usr/bin/env MACNEUTRON_GRAPHICS=dxmt\|wined3d %command%` | Pick the Direct3D backend (default `dxmt`; `wined3d` is Wine's own, Direct3D 9-11 only) |
-| `/usr/bin/env MACNEUTRON_LOG=1 %command%` | Wine log in `~/Library/Logs/MacNeutron/steam-<appid>.log` |
+| `/usr/bin/env MACNEUTRON_LOG=1 %command%` | Wine log in `~/Library/Logs/MacNeutron/steam-<appid>.log` (Wine's warnings, without exception handling's); `MACNEUTRON_LOG=2` logs those too, and every Steam API call. Past 50 MB the log moves to `steam-<appid>.log.1` at the next launch |
 | `/usr/bin/env MACNEUTRON_NO_MSYNC=1 %command%` | Turn off msync |
 | `/usr/bin/env MACNEUTRON_NO_STEAM_BRIDGE=1 %command%` | Start the game without the Steam bridge (the game then can't reach Steam) |
 | `/usr/bin/env MACNEUTRON_NO_METALFX=1 %command%` | Don't upscale with MetalFX (macOS then stretches smaller images with its nearest-neighbour filter) |
+| `/usr/bin/env DXMT_MAX_ANISOTROPY=0\|4\|8\|16 %command%` | Anisotropic filtering on the game's trilinear textures: 16x by default, `0` keeps the game's own (also "Anisotropic filtering" in the Games window) |
 | `/usr/bin/env MACNEUTRON_POST_AA=cmaa2 %command%` | Anti-alias each frame with Intel's CMAA2 (for games without their own anti-aliasing; also "Anti-aliasing (post)" in the Games window) |
 | `/usr/bin/env MACNEUTRON_XESS=1 %command%` | Load the game's own Intel XeSS (for comparison: on Apple GPUs it is many times slower, SMITE 2 ~4 FPS). By default XeSS on D3D12 runs on MetalFX's upscaler |
 | `/usr/bin/env DXMT_D3D12_SM6=1 %command%` | On DXMT, report the Direct3D 12 features Shader Model 6 games check for (Unreal Engine 5 games need it) |
@@ -105,6 +106,11 @@ starts, and a notification says so; other DXMT updates keep the translated shade
 - Deleting `$(getconf DARWIN_USER_CACHE_DIR)dxmt/<game exe>/shaders_*.db` clears the cache.
 - Deleting the `dxmt-pipelines` folder clears the recordings.
 
+**Anisotropic filtering** is 16x by default for every game, on DXMT. Metal's anisotropic filter drops an upscaler's
+negative mip bias on surfaces seen at an angle, which blurs ground textures when a game asks for 4x (SMITE 2's High
+textures); 16x keeps it to steeper angles. "Anisotropic filtering" in the Games window sets 4x, 8x or the game's own
+choice; point-filtered textures (pixel art, UI) and shadow-map samplers are never changed.
+
 **GPU work overlap** (experimental). By default DXMT runs a Direct3D 12 game's GPU passes in strict order. With
 `/usr/bin/env DXMT_D3D12_OVERLAP=1 %command%` a pass waits only on the passes the game's barriers order before it.
 In SMITE 2 on Apple GPUs this added more idle time between passes than it saved
@@ -125,10 +131,10 @@ Windows games talk to your running Mac Steam through the runtime's Steam client 
 built for arm64 by `wine.app`, and shipped under Valve's Steamworks SDK licence, see `licenses/lsteamclient/`). MacNeutron's `steam.exe` tells each game that Steam is running. Anti-cheat
 that needs a Windows kernel driver (Easy Anti-Cheat, BattlEye, Vanguard and others) still won't run.
 
-Game logs (`MACNEUTRON_LOG=1`) hide your Steam account ID and login name, and any environment variable whose name
-looks like a secret (`…TOKEN…`, `…SECRET…`, `…PASSWORD…`, `…_KEY`); they still contain file paths that name your macOS
-user, and Wine's `+steamclient` lines in them can contain your SteamID or persona name: check before posting a log
-publicly.
+Game logs (`MACNEUTRON_LOG=1` or `2`) hide your Steam account ID and login name, and any environment variable whose
+name looks like a secret (`…TOKEN…`, `…SECRET…`, `…PASSWORD…`, `…_KEY`); they still contain file paths that name your
+macOS user, and Wine's `steamclient` lines in them (all of its calls with `MACNEUTRON_LOG=2`) can contain your SteamID
+or persona name: check before posting a log publicly.
 
 ## Upscaling
 

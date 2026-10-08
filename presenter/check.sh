@@ -37,7 +37,7 @@ frame_ms() { LC_ALL=C /usr/bin/grep -o 'avg frame [0-9.]*' "$WORK/$1.txt" | awk 
 
 # CMAA2 natively: wine.app's presenter on layers outside any window, under Metal's shader validation, then again under
 # its API validation (both at once crash inside MetalTools on a view of a drawable's texture). BGRA8 layers, then
-# RGB10A2 (10-bit SDR, no sRGB view: CMAA2 decodes and encodes by hand and keeps 10 bits).
+# RGB10A2 and BGR10A2 (10-bit SDR, no sRGB view: CMAA2 decodes and encodes by hand and keeps 10 bits).
 LIB="$ROOT/build/wine-arm64/wine.app/Contents/Resources/lib/wine/aarch64-unix/libmacneutron-present.dylib"
 native() {  # native <name> <variable=value...> <cmaa2_check args...>  →  $WORK/<name>.txt, the exit statuses in <name>.status
   name=$1; shift
@@ -47,7 +47,7 @@ native() {  # native <name> <variable=value...> <cmaa2_check args...>  →  $WOR
 }
 value() { sed -n "s/^$1: //p" "$WORK/$2.txt"; }  # value <what> <run>
 statuses=
-for fmt in "" rgb10a2; do for size in "2560 1440" "1728 1117"; do
+for fmt in "" rgb10a2 bgr10a2; do for size in "2560 1440" "1728 1117"; do
   at="${size% *}${fmt:+ $fmt}" n=aa_on_${size% *}$fmt o=aa_off_${size% *}$fmt
   native "$n" MACNEUTRON_POST_AA=cmaa2 "$B/cmaa2_check" "$LIB" frames $size $fmt
   native "$o" "$B/cmaa2_check" "$LIB" frames $size $fmt
@@ -55,6 +55,7 @@ for fmt in "" rgb10a2; do for size in "2560 1440" "1728 1117"; do
   expect "post-AA off leaves frames byte for byte at $at" "$(value 'dense changed' "$o"):$(value 'sparse changed' "$o")" "0:0"
   expect "CMAA2 leaves a flat frame alone at $at" "$(value 'flat changed' "$n")" 0
   expect "CMAA2 changes only pixels next to edges at $at" "$(value 'sparse changed far from edges' "$n")" 0
+  expect "CMAA2 keeps every pixel's alpha at $at" "$(value 'alpha changed' "$n")" 0
   expect "CMAA2 changes 2-12 per mille of a frame of silhouettes at $at" \
     "$(awk -v v="$(value 'sparse changed per mille' "$n")" 'BEGIN { print (v != "" && v >= 2 && v <= 12) ? "yes" : "no (" v ")" }')" yes
   expect "CMAA2 keeps 80 % of 1-px glyph strokes' contrast at $at" \
@@ -77,7 +78,7 @@ expect "CMAA2 runs on the game-size frame before MetalFX" \
     cmp -s "$WORK/aa_up.ppm" "$WORK/aa_up_off.ppm" && echo same || { [ -s "$WORK/aa_up.ppm" ] && echo differs; } || echo none)" \
   "1:1:0:changed:differs"
 expect "Metal validation clean" "$statuses$(cat "$WORK/aa_hdr.status" "$WORK/aa_up.status" "$WORK/aa_up_off.status" | tr -d '\n')" \
-  0000000000000000000000
+  000000000000000000000000000000
 for fmt in "" rgb10a2; do for size in "1728 1117" "2560 1440"; do  # the GPU time CMAA2 adds per frame, printed (no validation)
   MACNEUTRON_POST_AA=cmaa2 MACNEUTRON_PRESENT_SCALE=1 "$B/cmaa2_check" "$LIB" cost $size $fmt 2>/dev/null | sed 's/^/info /'
 done; done
@@ -102,12 +103,17 @@ expect "Retina density is upscaled" "$(count 'macneutron-present: MetalFX 1280x7
 run_loop resize 1 1 1280 720 640 360 300 0 resize=150:960x540
 expect "overlay follows a window resize" "$(count 'macneutron-present: MetalFX 640x360 -> 960x540' resize)" 1
 
-# A size MetalFX refuses falls back to Core Animation's linear filter for that size only: the next size upscales again.
+# A size MetalFX refuses falls back to Core Animation's linear filter for that size only, asked once: the next size
+# upscales again. A refusal whatever the size (no MetalFX on the GPU, a pixel format it can't scale) lasts.
 refuse=1280x720
 run_loop refuse 1 1 1280 720 640 360 300 0 resize=150:960x540
+expect "a MetalFX refusal falls back for that size only, asked once" \
+  "$(count 'macneutron-present: linear filter (refused for the test)' refuse):$(count 'macneutron-present: MetalFX 640x360 -> 960x540' refuse):$(count 'macneutron-present: test refusal at 1280x720' refuse)" "1:1:1"
+refuse=all
+run_loop refuseall 1 1 1280 720 640 360 300 0 resize=150:960x540
 refuse=
-expect "a MetalFX refusal falls back for that size only" \
-  "$(count 'macneutron-present: linear filter (refused for the test)' refuse):$(count 'macneutron-present: MetalFX 640x360 -> 960x540' refuse)" "1:1"
+expect "a refusal whatever the size lasts for the session, asked once" \
+  "$(count 'macneutron-present: linear filter (refused for the test)' refuseall):$(count 'macneutron-present: MetalFX' refuseall):$(count 'macneutron-present: test refusal' refuseall)" "1:0:1"
 
 run_loop grow 1 1 1280 720 640 360 300 0 grow=150
 expect "overlay goes away at full size" "$(count 'macneutron-present: pass-through (full size)' grow)" 1
