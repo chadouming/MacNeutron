@@ -69,6 +69,9 @@ check() {  # check <wine.app> <build dir>
   if has 'libav*' || has 'libsw*'; then
     for f in COPYING.LGPLv2.1 LICENSE.md; do [ -s "$L/ffmpeg/$f" ] || miss "ffmpeg/$f"; done
     g -q '^## FFmpeg ' "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md section for FFmpeg"
+    # Its files under notices of their own: faandct.c (ISC) and avsscanf.c (MIT; FEX's musl says 2005-2020).
+    g -qF "Roman Shaposhnik" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for FFmpeg's faandct.c"
+    g -qF "2005-2014 Rich Felker" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for FFmpeg's avsscanf.c"
     g -q '^FFmpeg [0-9.]* (' "$L/README" 2> /dev/null || miss "FFmpeg entry in README"
     key FFMPEG_URL; key FFMPEG_SHA256
   fi

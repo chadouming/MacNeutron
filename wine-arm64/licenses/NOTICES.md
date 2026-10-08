@@ -303,9 +303,10 @@ License along with FFmpeg; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 ```
 
-`libavcodec.62.dylib` contains FFmpeg's `libavcodec/jrevdct.c`, an inverse DCT built in with the video decoders' shared
-DSP code, from the Independent JPEG Group's software (unmodified by us). This software is based in part on the work of
-the Independent JPEG Group. The file's notice:
+`libavcodec.62.dylib` contains FFmpeg's `libavcodec/jrevdct.c`, `jfdctfst.c` and `jfdctint_template.c`, DCTs built in
+with the video decoders' shared DSP code, from the Independent JPEG Group's software (unmodified by us). This software
+is based in part on the work of the Independent JPEG Group. The notice of `jrevdct.c` (the other two carry the same
+one, copyright 1994-1996 and 1991-1996):
 
 ```
 This file is part of the Independent JPEG Group's software.
@@ -344,6 +345,31 @@ JPEG Group's software".
 We specifically permit and encourage the use of this software as the basis
 of commercial products, provided that all warranty or liability claims are
 assumed by the product vendor.
+```
+
+`libavcodec.62.dylib` also contains `libavcodec/faandct.c`, a floating-point DCT, under this notice:
+
+```
+Copyright (c) 2003 Michael Niedermayer <michaelni@gmx.at>
+Copyright (c) 2003 Roman Shaposhnik
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+`libavutil.60.dylib` contains `libavutil/avsscanf.c` (`av_sscanf`, from musl), under the MIT licence below:
+
+```
+Copyright (c) 2005-2014 Rich Felker, et al.
 ```
 
 ## Intel XeSS headers (in Wine: `libxess.dll`)

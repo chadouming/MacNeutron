@@ -70,9 +70,11 @@ GMP 6.3.0 (linked statically into libgnutls.30.dylib)
 FFmpeg 8.1.3 (libavutil.60.dylib, libavcodec.62.dylib, libavformat.62.dylib, libswscale.9.dylib,
 libswresample.6.dylib: winedmo's demuxers, and the audio and video decoders macOS doesn't provide)
   Licence: LGPL-2.1-or-later, ffmpeg/COPYING.LGPLv2.1; ffmpeg/LICENSE.md names the files under other terms. Built with
-  no GPL or nonfree part and without FFmpeg's own H.264, HEVC and AAC decoders. Its notice, and the Independent JPEG
-  Group's for the inverse DCT in libavcodec: NOTICES.md. The dylibs are separate files, linked by @rpath, and the
-  loader accepts libraries signed by anyone, so a rebuilt FFmpeg can replace them.
+  no GPL or nonfree part and without FFmpeg's own H.264, HEVC and AAC decoders. Its notice, the Independent JPEG
+  Group's for libavcodec's DCTs, and those of faandct.c (ISC) and avsscanf.c (MIT): NOTICES.md. To use a modified
+  FFmpeg, build it and put its dylibs in place of these (lib/wine/aarch64-unix), then sign each of them again: an ad
+  hoc signature is enough (codesign -f -s - <dylib>). Leave the loader's signature (Contents/MacOS/wine) as it is: it
+  loads libraries signed by anyone, and re-signing it, even ad hoc, drops the entitlement it needs to start.
   Source: https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz (SHA-256 FFMPEG_SHA256), unmodified, pinned and built as
   FreeType is, with the configure options in the repository's wine-arm64/build.sh.
 

@@ -120,10 +120,11 @@ no arm64 code in the bundle names x18 (`ntdll.so` aside, which the `x18` step ch
 reading the routines.
 
 The same step builds FFmpeg 8.1.3 (video playback spec §6), LGPL, as five dylibs that `winedmo.so` links
-(`--with-ffmpeg --without-gstreamer`), and stops unless FFmpeg's generated `config.h` and `config_components.h` show no
+(`--with-ffmpeg --without-gstreamer`). It stops unless FFmpeg's generated `config.h` and `config_components.h` show no
 GPL part, no VideoToolbox, none of FFmpeg's own H.264, HEVC or AAC decoders, and exactly the decoders, demuxers,
-parsers and bitstream filters `build.sh` lists, and unless the dylibs link only each other by `@rpath` and the system's
-and hold no build path. `bundle.sh` puts them beside `winedmo.so`.
+parsers and bitstream filters `build.sh` lists; it also stops if an object with code in it was built from a file whose
+licence is GPL-only (`--disable-arm-crc` keeps libavutil's GPL-2.0+ `aarch64/crc.S` out), or if the dylibs link
+anything but each other by `@rpath` and the system's, or hold a build path. `bundle.sh` puts them beside `winedmo.so`.
 
 ### The Steam bridge
 

@@ -194,10 +194,12 @@ ffmpeg_libs="avutil.60 avcodec.62 avformat.62 swscale.9 swresample.6"  # lib<nam
 # shellcheck disable=SC2086  # a list in, a comma list out
 commas() { echo $* | tr ' ' ,; }
 # One option per word: the options are a list. Apple's clang by path (llvm-mingw's clang is first on PATH), @rpath
-# install names (libavformat links libavcodec by them too), no install-time strip (deps_post strips).
+# install names (libavformat links libavcodec by them too), no install-time strip (deps_post strips). No ARMv8 CRC
+# instructions: their code, libavutil/aarch64/crc.S, is GPL-2.0-or-later (av_crc keeps its table code).
 conf_ffmpeg="--arch=aarch64 --target-os=darwin --cc=/usr/bin/clang --enable-shared --disable-static --disable-programs
   --disable-doc --disable-network --disable-autodetect --disable-everything --disable-iconv --disable-videotoolbox
-  --disable-stripping --disable-avdevice --disable-avfilter --enable-audiotoolbox --enable-swscale --enable-swresample
+  --disable-stripping --disable-avdevice --disable-avfilter --disable-arm-crc --enable-audiotoolbox --enable-swscale
+  --enable-swresample
   --install-name-dir=@rpath --extra-cflags=-mmacosx-version-min=27.0 --extra-ldflags=-mmacosx-version-min=27.0
   --enable-decoder=$(commas $ffmpeg_decoder) --enable-demuxer=$(commas $ffmpeg_demuxer)
   --enable-parser=$(commas $ffmpeg_parser) --enable-bsf=$(commas $ffmpeg_bsf)"
@@ -230,6 +232,20 @@ build_dep() {
   echo "wine-arm64: building $n (log: $SRC/deps-$n.log)" >&2
   ( cd "$SRC/deps-src/$n" && eval "$m" ) > "$SRC/deps-$n.log" 2>&1 \
     || die "building $n failed; see $SRC/deps-$n.log"
+}
+# ffmpeg_gpl_only <FFmpeg build folder>: GPL-only code in the build, which CONFIG_GPL 0 doesn't rule out (a GPL file
+# can be built whatever --enable-gpl says). Prints each file of FFmpeg's tree that an object with code or data in it
+# was built from (its .d file names them; an object whose source is all #if'd out is empty) and whose licence says
+# "General Public License" but never "Lesser".
+ffmpeg_gpl_only() {
+  ( cd "$1" && for d in $(find . -name '*.d'); do
+      [ "$(size "${d%.d}.o" | awk 'NR == 2 { print $1 + $2 }')" != 0 ] || continue
+      tr -s ' \\' '\n\n' < "$d"
+    done | LC_ALL=C /usr/bin/grep -vE '(^/|:$|^$)' | LC_ALL=C sort -u | while IFS= read -r f; do
+      if LC_ALL=C /usr/bin/grep -q 'General Public License' "$f" && ! LC_ALL=C /usr/bin/grep -q Lesser "$f"; then
+        echo "$f"
+      fi
+    done )
 }
 unpack() {  # unpack <name>:<url>: the tarball into deps-src/<name>, through <name>.tmp so a stop leaves none
   rm -rf "$SRC/deps-src/${1%%:*}.tmp"
@@ -271,10 +287,12 @@ else
   [ -z "$out" ] || die "libgnutls.30.dylib links nettle or gmp as a library: $out (see $SRC/deps-gnutls.log)"
   out=$(sed -n 's/^Requires.private: *//p' "$DEPS/lib/pkgconfig/freetype2.pc")
   [ -z "$out" ] || die "libfreetype.6.dylib's freetype2.pc requires $out (see $SRC/deps-freetype.log)"
-  # FFmpeg as configured (video playback spec §5, §6): LGPL, no VideoToolbox, none of its own H.264, HEVC or AAC
-  # decoders, and exactly the components above.
+  # FFmpeg as configured (video playback spec §5, §6): LGPL, with no GPL-only file built either, no VideoToolbox, none
+  # of its own H.264, HEVC or AAC decoders, and exactly the components above.
   fc="$SRC/deps-src/ffmpeg"
-  for x in 'config.h:#define CONFIG_GPL 0' 'config.h:#define CONFIG_VIDEOTOOLBOX 0' \
+  out=$(ffmpeg_gpl_only "$fc") || die "can't read FFmpeg's build in $fc"
+  [ -z "$out" ] || die "FFmpeg built GPL-only code from $(echo "$out" | tr '\n' ' ')(see $SRC/deps-ffmpeg.log)"
+  for x in 'config.h:#define CONFIG_GPL 0' 'config.h:#define HAVE_ARM_CRC 0' 'config.h:#define CONFIG_VIDEOTOOLBOX 0' \
     'config_components.h:#define CONFIG_H264_DECODER 0' 'config_components.h:#define CONFIG_HEVC_DECODER 0' \
     'config_components.h:#define CONFIG_AAC_DECODER 0'; do
     LC_ALL=C /usr/bin/grep -qx "${x#*:}" "$fc/${x%%:*}" || die "FFmpeg's ${x%%:*} lacks the line '${x#*:}'"

@@ -602,10 +602,12 @@ media_run() {
   [ -z "$fails" ] || { echo "FAIL $s: $fails"; return 1; }
 }
 # media-mf: the source reader on test.mp4 (H.264 + AAC). DisableGstByteStreamHandler, set in this prefix until Wine's
-# wine.inf sets it: MP4 files go to winedmo, not to the GStreamer handler, which this Wine doesn't build.
+# wine.inf sets it: MP4 files go to winedmo, not to the GStreamer handler, which this Wine doesn't build. The crash
+# dialog off: a crash ends the run, with its stage lines, instead of waiting out the cap.
 media_mf_cmd() {
   mp4=$(clip mfreadwrite/tests/test.mp4 485a145b3d3a82fe3356c574899b13467a8672c0bbfcf8a5d51b6bedb256408f) \
     || { echo "$mp4"; return 1; }
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || return 1
   wine_run reg add 'HKCU\Software\Wine\MediaFoundation' /v DisableGstByteStreamHandler /t REG_DWORD /d 1 /f || return 1
   media_run media-mf open "$mp4"
 }
