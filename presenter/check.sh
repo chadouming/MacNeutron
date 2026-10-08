@@ -36,7 +36,8 @@ count() { LC_ALL=C /usr/bin/grep -c "$1" "$WORK/$2.txt" || true; }   # count <pa
 frame_ms() { LC_ALL=C /usr/bin/grep -o 'avg frame [0-9.]*' "$WORK/$1.txt" | awk '{print $3}'; }
 
 # CMAA2 natively: wine.app's presenter on layers outside any window, under Metal's shader validation, then again under
-# its API validation (both at once crash inside MetalTools on a view of a drawable's texture).
+# its API validation (both at once crash inside MetalTools on a view of a drawable's texture). BGRA8 layers, then
+# RGB10A2 (10-bit SDR, no sRGB view: CMAA2 decodes and encodes by hand and keeps 10 bits).
 LIB="$ROOT/build/wine-arm64/wine.app/Contents/Resources/lib/wine/aarch64-unix/libmacneutron-present.dylib"
 native() {  # native <name> <variable=value...> <cmaa2_check args...>  →  $WORK/<name>.txt, the exit statuses in <name>.status
   name=$1; shift
@@ -46,20 +47,23 @@ native() {  # native <name> <variable=value...> <cmaa2_check args...>  →  $WOR
 }
 value() { sed -n "s/^$1: //p" "$WORK/$2.txt"; }  # value <what> <run>
 statuses=
-for size in "2560 1440" "1728 1117"; do
-  n=aa_on_${size% *}
-  native "$n" MACNEUTRON_POST_AA=cmaa2 "$B/cmaa2_check" "$LIB" frames $size
-  native "aa_off_${size% *}" "$B/cmaa2_check" "$LIB" frames $size
-  statuses="$statuses$(cat "$WORK/$n.status")$(cat "$WORK/aa_off_${size% *}.status")"
-  expect "post-AA off leaves frames byte for byte at ${size% *}" \
-    "$(value 'dense changed' "aa_off_${size% *}"):$(value 'sparse changed' "aa_off_${size% *}")" "0:0"
-  expect "CMAA2 leaves a flat frame alone at ${size% *}" "$(value 'flat changed' "$n")" 0
-  expect "CMAA2 changes only pixels next to edges at ${size% *}" "$(value 'sparse changed far from edges' "$n")" 0
-  expect "CMAA2 changes 2-12 per mille of a frame of silhouettes at ${size% *}" \
+for fmt in "" rgb10a2; do for size in "2560 1440" "1728 1117"; do
+  at="${size% *}${fmt:+ $fmt}" n=aa_on_${size% *}$fmt o=aa_off_${size% *}$fmt
+  native "$n" MACNEUTRON_POST_AA=cmaa2 "$B/cmaa2_check" "$LIB" frames $size $fmt
+  native "$o" "$B/cmaa2_check" "$LIB" frames $size $fmt
+  statuses="$statuses$(cat "$WORK/$n.status")$(cat "$WORK/$o.status")"
+  expect "post-AA off leaves frames byte for byte at $at" "$(value 'dense changed' "$o"):$(value 'sparse changed' "$o")" "0:0"
+  expect "CMAA2 leaves a flat frame alone at $at" "$(value 'flat changed' "$n")" 0
+  expect "CMAA2 changes only pixels next to edges at $at" "$(value 'sparse changed far from edges' "$n")" 0
+  expect "CMAA2 changes 2-12 per mille of a frame of silhouettes at $at" \
     "$(awk -v v="$(value 'sparse changed per mille' "$n")" 'BEGIN { print (v != "" && v >= 2 && v <= 12) ? "yes" : "no (" v ")" }')" yes
-  expect "CMAA2 keeps 80 % of 1-px glyph strokes' contrast at ${size% *}" \
+  expect "CMAA2 keeps 80 % of 1-px glyph strokes' contrast at $at" \
     "$(awk -v v="$(value 'glyph contrast kept percent' "$n")" 'BEGIN { print (v != "" && v >= 80 && v < 100) ? "yes" : "no (" v ")" }')" yes
-done
+  # 10 bits all the way: about 3 in 4 of the blended channel values are codes no 8-bit value gives (27-29 % when the
+  # blends went through 8-bit sRGB, the 8-bit path's packing)
+  [ -z "$fmt" ] || expect "CMAA2 blends at 10 bits, no 8-bit step, at $at" \
+    "$(awk -v v="$(value 'sparse blended values off the 8-bit grid percent' "$n")" 'BEGIN { print (v != "" && v >= 60) ? "yes" : "no (" v ")" }')" yes
+done; done
 native aa_hdr MACNEUTRON_POST_AA=cmaa2 "$B/cmaa2_check" "$LIB" frames 1280 720 fp16
 expect "CMAA2 leaves HDR layers alone" \
   "$(value 'dense changed' aa_hdr):$(value 'sparse changed' aa_hdr):$(count 'left alone (HDR' aa_hdr)" "0:0:1"
@@ -73,10 +77,10 @@ expect "CMAA2 runs on the game-size frame before MetalFX" \
     cmp -s "$WORK/aa_up.ppm" "$WORK/aa_up_off.ppm" && echo same || { [ -s "$WORK/aa_up.ppm" ] && echo differs; } || echo none)" \
   "1:1:0:changed:differs"
 expect "Metal validation clean" "$statuses$(cat "$WORK/aa_hdr.status" "$WORK/aa_up.status" "$WORK/aa_up_off.status" | tr -d '\n')" \
-  00000000000000
-for size in "1728 1117" "2560 1440"; do  # the GPU time CMAA2 adds per frame, printed (no validation)
-  MACNEUTRON_POST_AA=cmaa2 MACNEUTRON_PRESENT_SCALE=1 "$B/cmaa2_check" "$LIB" cost $size 2>/dev/null | sed 's/^/info /'
-done
+  0000000000000000000000
+for fmt in "" rgb10a2; do for size in "1728 1117" "2560 1440"; do  # the GPU time CMAA2 adds per frame, printed (no validation)
+  MACNEUTRON_POST_AA=cmaa2 MACNEUTRON_PRESENT_SCALE=1 "$B/cmaa2_check" "$LIB" cost $size $fmt 2>/dev/null | sed 's/^/info /'
+done; done
 
 # The prefix, prepared before the timed runs (a no-op when it is current).
 env STEAM_COMPAT_DATA_PATH="$WORK/compat/0" SteamAppId=0 MACNEUTRON_GRAPHICS=dxmt \

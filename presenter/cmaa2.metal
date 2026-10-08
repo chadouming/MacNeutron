@@ -26,12 +26,15 @@
 //
 // MODIFIED: ported to the Metal Shading Language by MacNeutron from Projects/CMAA2/CMAA2/CMAA2.hlsl (GameTechDev/CMAA2,
 // commit 071c6b0), for MacNeutron's presenter (presenter/present.m), which runs it in place on a game's frame through an
-// sRGB view. The changes from the HLSL:
+// sRGB view, or, on a 10-bit frame (no sRGB view), on the frame itself. The changes from the HLSL:
 //  - the single-sample path only, at upstream's defaults: luma path 1 (sqrt luma computed in place), preset HIGH
 //    (threshold 0.07), c_maxLineLength 86, edges packed 2x4 bit into a half-width R8Uint texture, the 768-item
 //    threadgroup expansion, float precision, typed store; with CMAA2_EXTRA_SHARPNESS 1, its constants written in;
 //  - a blend colour is packed with Metal's pack_float_to_srgb_unorm4x8, not MiniEngine's R11G11B10_E4 packing, and
 //    carries the pixel's own alpha, which the apply pass writes back (upstream writes alpha 0);
+//  - a function constant (kTenBit) for RGB10A2/BGR10A2 frames: colour loads decode sRGB by hand (the reads an sRGB view
+//    would do), a blend colour is sRGB-encoded and packed 10:10:10:2 (the frame's own precision, no 8-bit step), and
+//    the apply pass encodes its linear mean by hand (upstream's CMAA2_UAV_STORE_CONVERT_TO_SRGB);
 //  - the R32_UINT list-heads texture is a device atomic_uint buffer (the same traffic, no texture atomics);
 //  - D3D drops out-of-bounds UAV writes and returns 0 for out-of-bounds loads, Metal does neither: colour loads are
 //    clamped, loadEdge returns 0 off the image, every write is bounds-guarded, and the apply pass stops at a list index
@@ -48,11 +51,25 @@ constant uint kMaxLine = 86;
 #define SLM_ITEMS 768
 
 struct Caps { uint candCap, itemCap, locCap, headsW, W, H; };
+constant bool kTenBit [[function_constant(0)]];
+
+// The sRGB curve both ways: upstream's LINEAR_to_SRGB, and its inverse (DXMT's present pass encodes with the same curve).
+static inline float3 srgbToLinear(float3 c) { return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045); }
+static inline float3 linearToSrgb(float3 c) { return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c < 0.0031308); }
+static inline uint packBlend(float3 c, float a) {
+  return kTenBit ? pack_float_to_unorm10a2(float4(linearToSrgb(saturate(c)), a)) : pack_float_to_srgb_unorm4x8(float4(saturate(c), a));
+}
+static inline float4 unpackBlend(uint v) {
+  if (!kTenBit) return unpack_unorm4x8_srgb_to_float(v);
+  float4 c = unpack_unorm10a2_to_float(v);
+  return float4(srgbToLinear(c.rgb), c.a);
+}
 
 static inline uint packEdges(float4 e) { return (uint)dot(e, float4(1, 2, 4, 8)); }
 static inline float4 unpackEdgesF(uint v) { return float4((v & 1) != 0, (v & 2) != 0, (v & 4) != 0, (v & 8) != 0); }
 static inline float3 loadColor(texture2d<float> s, int2 p) {
-  return s.read(uint2(clamp(p, int2(0), int2(s.get_width() - 1, s.get_height() - 1)))).rgb;
+  float3 c = s.read(uint2(clamp(p, int2(0), int2(s.get_width() - 1, s.get_height() - 1)))).rgb;
+  return kTenBit ? srgbToLinear(c) : c;
 }
 static inline uint loadEdge(texture2d<uint> e, int2 p, constant Caps &cp) {
   if (p.x < 0 || p.y < 0 || p.x >= int(cp.W) || p.y >= int(cp.H)) return 0;   // D3D OOB load returns 0
@@ -69,7 +86,7 @@ static void storeColorSample(int2 p, float3 color, bool complexShape, texture2d<
   uint offXY = (uint(p.y) % 2) * 2 + (uint(p.x) % 2);
   uint header = (offXY << 30) | (uint(complexShape) << 26);
   uint orig = atomic_exchange_explicit(&heads[q.y * cp.headsW + q.x], idx | header, memory_order_relaxed);
-  items[idx] = uint2(orig, pack_float_to_srgb_unorm4x8(float4(saturate(color), src.read(uint2(p)).a)));
+  items[idx] = uint2(orig, packBlend(color, src.read(uint2(p)).a));
   if (orig == 0xFFFFFFFFu) {
     uint e = atomic_fetch_add_explicit(&ctrl[8], 1u, memory_order_relaxed);
     if (e < cp.locCap) locs[e] = (q.x << 16) | q.y;
@@ -340,8 +357,9 @@ kernel void cmaa2_apply(texture2d<float, access::write> out [[texture(0)]], devi
     if (at >= cp.itemCap) break;
     uint2 v = items[at];
     head = v.x;
-    if (off == qoff) { float w = 0.8 + 1.0 * float(cx); acc += unpack_unorm4x8_srgb_to_float(v.y) * w; weights += w; }
+    if (off == qoff) { float w = 0.8 + 1.0 * float(cx); acc += unpackBlend(v.y) * w; weights += w; }
   }
   if (weights == 0 || p.x >= cp.W || p.y >= cp.H) return;
-  out.write(acc / weights, p);
+  acc /= weights;
+  out.write(kTenBit ? float4(linearToSrgb(acc.rgb), acc.a) : acc, p);
 }

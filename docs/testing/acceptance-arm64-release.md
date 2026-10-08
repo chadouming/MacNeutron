@@ -678,8 +678,10 @@ its replay, so the row read the new, one-line file; the replay line was in `laun
 
 Per game, off by default: "Anti-aliasing (post): Off / CMAA2" in the Games window (`GameSettings.postAA`) or
 `MACNEUTRON_POST_AA=cmaa2`. The presenter runs our Metal port of Intel's CMAA2 (`presenter/cmaa2.metal`, Apache-2.0,
-Extra Sharpness, preset HIGH; `libmacneutron-present.metallib` beside the dylib) in place on every SDR 8-bit frame
-through an sRGB view of the drawable, before any MetalFX upscale; HDR and 10-bit layers pass through. With MetalFX off
+Extra Sharpness, preset HIGH; `libmacneutron-present.metallib` beside the dylib) in place on every SDR frame, before
+any MetalFX upscale: an 8-bit one through an sRGB view of the drawable, a 10-bit one (RGB10A2/BGR10A2, which have no
+sRGB view) with the sRGB curve decoded and encoded in the shader and its blends kept at 10 bits (10:10:10:2 working
+colours, a function constant). HDR layers pass through. With MetalFX off
 the launcher still loads the presenter when post-AA is on, and the presenter skips only its upscale. Notices:
 `licenses/macneutron/CMAA2-LICENSE.txt`, a NOTICES.md section, the README entry; `licences_test.sh` checks "CMAA2" and
 the file (red before they existed, and its self-test deletes the file).
@@ -693,6 +695,8 @@ window, `presenter/tests/cmaa2_check.m`; the Wine part runs `present_loop.exe` t
 | Flat gradient frame, on | unchanged |
 | Silhouette frame, on: pixels changed / more than 1 px from an edge | 6.70 ‰ / 0 (2560x1440); 6.72 ‰ / 0 (1728x1117) |
 | 1-px glyph strokes, stroke-to-background contrast kept (through the sRGB view) | 83.3 % (2560x1440), 83.2 % (1728x1117); the study's raw-read probe: 85.9 % |
+| RGB10A2 (10-bit SDR), both sizes: off / flat / silhouettes / glyphs | byte for byte / unchanged / 6.70 ‰ and 6.72 ‰, 0 far from edges / 83.3 % |
+| RGB10A2: blended channel values that are codes no 8-bit value gives | 74.3 % (2560x1440), 74.4 % (1728x1117), ≥ 60 % required; blends packed through 8-bit sRGB (the 8-bit path's packing) give 27.6 % / 28.7 % |
 | HDR (RGBA16Float) layer, on | unchanged, `left alone` logged, no CMAA2 |
 | Upscale (640x360 to 1280x720): game-size drawable changed; MetalFX output against the off run | 30801 px changed; differs (CMAA2 runs before MetalFX) |
 | Metal shader validation, then API validation, every native run | exit 0 (both layers at once crash inside MetalTools on a view of a drawable's texture, so they run one after the other) |
@@ -705,7 +709,9 @@ scratch bench on a drawable's texture that is not re-acquired each frame, costs 
 Anything run on a freshly acquired, presented drawable of these offscreen layers is 3-5x slower (a plain 9-tap kernel:
 0.13 ms, against 0.67 ms), and a blit into the drawable first in the same command buffer did not remove that. The
 mechanism isn't pinned down, and a game acquires a fresh drawable every frame too, so the in-game cost is open: Phase
-2's to measure (synthesis §6).
+2's to measure (synthesis §6). On an RGB10A2 layer (the same harness): at 1728x1117 0.269 / 0.351 / 0.815 ms, at
+2560x1440 0.492 / 0.581 / 1.411 ms; the shader's sRGB decode of every colour load is about 0.07-0.14 ms of that
+(measured against a build without it).
 
 Also: `make test` (246), `make smoke` 15/15, `make bridge-check` (all ok), `licences_test` and its self-test PASS. The
 build is a development one (the DXMT and Wine trees carry another task's diagnostic commits), so `make wine-arm64`

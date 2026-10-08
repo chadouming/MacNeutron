@@ -1,8 +1,9 @@
 /* Test program for presenter/check.sh: presents test frames through the presenter's own present hook, natively, on
  * CAMetalLayers outside any window, the way DXMT does (framebufferOnly off), and reports what came out.
- *   cmaa2_check <libmacneutron-present.dylib> frames <w> <h> [fp16]   one frame of each test image, compared with its input
+ *   cmaa2_check <libmacneutron-present.dylib> frames <w> <h> [fp16|rgb10a2|bgr10a2]   one frame of each test image,
+ *                                                                     compared with its input (default BGRA8)
  *   cmaa2_check <libmacneutron-present.dylib> upscale                 130 frames of 640x360 on a 640x360-point layer
- *   cmaa2_check <libmacneutron-present.dylib> cost <w> <h>            GPU time of the presenter's work per frame
+ *   cmaa2_check <libmacneutron-present.dylib> cost <w> <h> [rgb10a2]  GPU time of the presenter's work per frame
  * The presenter reads MACNEUTRON_POST_AA, MACNEUTRON_PRESENT_SCALE and MACNEUTRON_PRESENT_DUMP when it loads: the caller
  * sets them. Output: "<what>: <value>" lines. Exit 1 on a Metal error (Metal's validation layers report through it).
  * The test images are the CMAA2 study's (no anti-aliasing anywhere, 128x128 tiles on a low-contrast gradient): flat
@@ -120,7 +121,27 @@ static NSUInteger changed(id<MTLBuffer> a, id<MTLBuffer> b, NSUInteger bpp)
     return n;
 }
 
-static double luma(const uint8_t *px) { return (0.299 * px[2] + 0.587 * px[1] + 0.114 * px[0]) / 255.0; }  // BGRA
+static MTLPixelFormat F = MTLPixelFormatBGRA8Unorm;  // the layer's format: how a pixel's bytes read
+static NSUInteger code(const uint8_t *px, int c)  // channel c (0 red, 1 green, 2 blue) of a 10-bit pixel, 0-1023
+{
+    uint32_t v; memcpy(&v, px, 4);
+    int shift = F == MTLPixelFormatRGB10A2Unorm ? 10 * c : 10 * (2 - c);
+    return v >> shift & 1023;
+}
+static double luma(const uint8_t *px)
+{
+    if (F == MTLPixelFormatBGRA8Unorm) return (0.299 * px[2] + 0.587 * px[1] + 0.114 * px[0]) / 255.0;
+    return (0.299 * code(px, 0) + 0.587 * code(px, 1) + 0.114 * code(px, 2)) / 1023.0;
+}
+static MTLPixelFormat formatNamed(const char *name)
+{
+    if (!name) return MTLPixelFormatBGRA8Unorm;
+    if (!strcmp(name, "fp16")) return MTLPixelFormatRGBA16Float;
+    if (!strcmp(name, "rgb10a2")) return MTLPixelFormatRGB10A2Unorm;
+    if (!strcmp(name, "bgr10a2")) return MTLPixelFormatBGR10A2Unorm;
+    fprintf(stderr, "cmaa2_check: unknown format %s\n", name);
+    exit(2);
+}
 static uint32_t hashu(uint32_t x) { x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; return x; }
 
 int main(int argc, char **argv)
@@ -137,8 +158,8 @@ int main(int argc, char **argv)
 
     if (!strcmp(mode, "frames") && argc >= 5) {
         NSUInteger w = strtoul(argv[3], NULL, 10), h = strtoul(argv[4], NULL, 10);
-        BOOL fp16 = argc > 5 && !strcmp(argv[5], "fp16");
-        MTLPixelFormat format = fp16 ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm;
+        MTLPixelFormat format = F = formatNamed(argc > 5 ? argv[5] : NULL);
+        BOOL fp16 = format == MTLPixelFormatRGBA16Float, ten = format != MTLPixelFormatBGRA8Unorm && !fp16;
         NSUInteger bpp = fp16 ? 8 : 4;
         CAMetalLayer *layer = layerFor(format, w, h);
         id<MTLBuffer> in = [D newBufferWithLength:w * h * bpp options:MTLResourceStorageModeShared];
@@ -168,6 +189,16 @@ int main(int argc, char **argv)
                 }
                 printf("sparse changed far from edges: %lu\n", (unsigned long)far);
                 printf("sparse changed per mille: %.2f\n", 1000.0 * changed(in, out, bpp) / (w * h));
+                if (ten) {  // blended channel values a 10-bit code an 8-bit value can't give: none if 8 bits were in between
+                    NSUInteger values = 0, off = 0;
+                    for (NSUInteger i = 0; i < w * h * 4; i += 4) for (int c = 0; c < 3; c++) {
+                        NSUInteger v = code(b + i, c);
+                        if (v == code(a + i, c)) continue;
+                        values++;
+                        off += (NSUInteger)lround(lround(v * 255.0 / 1023) * 1023.0 / 255) != v;
+                    }
+                    printf("sparse blended values off the 8-bit grid percent: %.1f\n", values ? 100.0 * off / values : 0);
+                }
             }
             if (kind == DENSE) {  // glyph tiles: stroke-to-background luma contrast kept, over every 4-neighbour pair
                 double cin = 0, cout = 0;
@@ -202,16 +233,18 @@ int main(int argc, char **argv)
 
     if (!strcmp(mode, "cost") && argc >= 5) {
         NSUInteger w = strtoul(argv[3], NULL, 10), h = strtoul(argv[4], NULL, 10);
-        CAMetalLayer *layer = layerFor(MTLPixelFormatBGRA8Unorm, w, h);
+        MTLPixelFormat format = formatNamed(argc > 5 ? argv[5] : NULL);
+        CAMetalLayer *layer = layerFor(format, w, h);
         const char *names[3] = {"dense", "flat", "sparse"};
         for (uint32_t kind = 0; kind < 3; kind++) {
-            id<MTLTexture> img = image(MTLPixelFormatBGRA8Unorm, w, h, kind);
+            id<MTLTexture> img = image(format, w, h, kind);
             double ms[100];
             for (int i = 0; i < 20; i++) present(layer, img, nil, nil);
             for (int i = 0; i < 100; i++) ms[i] = present(layer, img, nil, nil);
             qsort_b(ms, 100, sizeof(double), ^int(const void *x, const void *y) {
                 double a = *(const double *)x, b = *(const double *)y; return (a > b) - (a < b); });
-            printf("cost %lux%lu %s: median %.3f ms, p90 %.3f ms\n", (unsigned long)w, (unsigned long)h, names[kind], ms[50], ms[90]);
+            printf("cost %lux%lu%s%s %s: median %.3f ms, p90 %.3f ms\n", (unsigned long)w, (unsigned long)h,
+                   argc > 5 ? " " : "", argc > 5 ? argv[5] : "", names[kind], ms[50], ms[90]);
         }
         return 0;
     }

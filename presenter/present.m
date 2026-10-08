@@ -198,34 +198,38 @@ static NSString *prepareScaler(id<MTLDevice> device, MNLayerState *st, id<MTLTex
     return nil;
 }
 
-/* CMAA2's four kernels, from the metallib beside this library (wine-arm64/build.sh). nil: ready.
- * ponytail: one set of pipelines for the first device that asks; Wine's games draw on one GPU. */
-static id<MTLComputePipelineState> aaEdgesPS, aaArgsPS, aaProcessPS, aaApplyPS;
-static NSString *loadCMAA2(id<MTLDevice> device)
+/* CMAA2's four kernels, from the metallib beside this library (wine-arm64/build.sh), for 8-bit frames (read through an
+ * sRGB view) or 10-bit ones (the shader's kTenBit: sRGB by hand). nil: ready.
+ * ponytail: one set of pipelines per depth for the first device that asks; Wine's games draw on one GPU. */
+static id<MTLComputePipelineState> aaPS[2][4];  // [tenBit][edges, args, process, apply]
+static NSString *loadCMAA2(id<MTLDevice> device, BOOL tenBit)
 {
-    static NSString *failure;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
+    static NSString *failure[2];
+    static dispatch_once_t once[2];
+    dispatch_once(&once[tenBit], ^{
         Dl_info info;
-        if (!dladdr((const void *)loadCMAA2, &info) || !info.dli_fname) { failure = @"CMAA2 off (no library path)"; return; }
+        if (!dladdr((const void *)loadCMAA2, &info) || !info.dli_fname) { failure[tenBit] = @"CMAA2 off (no library path)"; return; }
         NSURL *url = [[NSURL fileURLWithPath:@(info.dli_fname)].URLByDeletingLastPathComponent
                       URLByAppendingPathComponent:@"libmacneutron-present.metallib"];
         NSError *error;
         id<MTLLibrary> lib = [device newLibraryWithURL:url error:&error];
+        MTLFunctionConstantValues *constants = [MTLFunctionConstantValues new];
+        bool ten = tenBit;
+        [constants setConstantValue:&ten type:MTLDataTypeBool atIndex:0];
         id<MTLComputePipelineState> ps[4];
         NSArray *names = @[ @"cmaa2_edges", @"cmaa2_args", @"cmaa2_process", @"cmaa2_apply" ];
         for (NSUInteger i = 0; i < 4; i++) {
-            id<MTLFunction> f = [lib newFunctionWithName:names[i]];
+            id<MTLFunction> f = [lib newFunctionWithName:names[i] constantValues:constants error:&error];
             ps[i] = f ? [device newComputePipelineStateWithFunction:f error:&error] : nil;
             if (!ps[i]) {
-                failure = [NSString stringWithFormat:@"CMAA2 off (%@: %@)", lib ? names[i] : url.lastPathComponent,
-                           error.localizedDescription ?: @"missing"];
+                failure[tenBit] = [NSString stringWithFormat:@"CMAA2 off (%@: %@)", lib ? names[i] : url.lastPathComponent,
+                                   error.localizedDescription ?: @"missing"];
                 return;
             }
         }
-        aaEdgesPS = ps[0]; aaArgsPS = ps[1]; aaProcessPS = ps[2]; aaApplyPS = ps[3];
+        for (NSUInteger i = 0; i < 4; i++) aaPS[tenBit][i] = ps[i];
     });
-    return failure;
+    return failure[tenBit];
 }
 
 /* CMAA2's working set for this frame size (upstream's default sizes, vaCMAA2DX12.cpp), made once per size. */
@@ -254,21 +258,24 @@ static NSString *prepareCMAA2(id<MTLDevice> device, MNLayerState *st, id<MTLText
     return nil;
 }
 
-/* CMAA2 in place on the game's frame, read and written through an sRGB view: upstream works on linear colour, and DXMT's
- * layer is non-sRGB (and framebufferOnly off). Five dispatches in one serial encoder, two of them sized by the GPU. HDR
- * and 10-bit layers pass through. */
+/* CMAA2 in place on the game's frame. Upstream works on linear colour: an 8-bit frame is read and written through an
+ * sRGB view (DXMT's layer is non-sRGB, and framebufferOnly off); a 10-bit SDR frame has no sRGB view, so the shader
+ * decodes and encodes it by hand and keeps its blends at 10 bits. Five dispatches in one serial encoder, two of them
+ * sized by the GPU. HDR layers pass through. */
 static void antialias(id<MTLCommandBuffer> cb, id<MTLTexture> src, MNLayerState *st)
 {
     if (!postAA || st.hdr || st.aaFailed || src.framebufferOnly) return;
-    MTLPixelFormat view;
+    MTLPixelFormat view = src.pixelFormat;
+    BOOL tenBit = NO;
     switch (src.pixelFormat) {
     case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB: view = MTLPixelFormatBGRA8Unorm_sRGB; break;
     case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: view = MTLPixelFormatRGBA8Unorm_sRGB; break;
+    case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatBGR10A2Unorm: tenBit = YES; break;
     default:
         aaNote(st, [NSString stringWithFormat:@"CMAA2 skipped (pixel format %lu)", (unsigned long)src.pixelFormat]);
         return;
     }
-    NSString *failure = loadCMAA2(cb.device) ?: prepareCMAA2(cb.device, st, src);
+    NSString *failure = loadCMAA2(cb.device, tenBit) ?: prepareCMAA2(cb.device, st, src);
     id<MTLTexture> color = failure || view == src.pixelFormat ? src : [src newTextureViewWithPixelFormat:view];
     if (!color) failure = @"CMAA2 off (no sRGB view of the drawable)";
     if (failure) { st.aaFailed = YES; aaNote(st, failure); return; }
@@ -282,15 +289,15 @@ static void antialias(id<MTLCommandBuffer> cb, id<MTLTexture> src, MNLayerState 
     [ce setBuffer:st.aaLocs offset:0 atIndex:2]; [ce setBuffer:st.aaItems offset:0 atIndex:3];
     [ce setBuffer:st.aaHeads offset:0 atIndex:4]; [ce setBuffer:st.aaArgs offset:0 atIndex:5];
     [ce setBytes:&caps length:sizeof caps atIndex:6];
-    [ce setComputePipelineState:aaEdgesPS];
+    [ce setComputePipelineState:aaPS[tenBit][0]];
     [ce dispatchThreadgroups:MTLSizeMake((caps.w + 27) / 28, (caps.h + 27) / 28, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
-    [ce setComputePipelineState:aaArgsPS];
+    [ce setComputePipelineState:aaPS[tenBit][1]];
     [ce dispatchThreadgroups:MTLSizeMake(2, 1, 1) threadsPerThreadgroup:one];
-    [ce setComputePipelineState:aaProcessPS];
+    [ce setComputePipelineState:aaPS[tenBit][2]];
     [ce dispatchThreadgroupsWithIndirectBuffer:st.aaArgs indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-    [ce setComputePipelineState:aaArgsPS];
+    [ce setComputePipelineState:aaPS[tenBit][1]];
     [ce dispatchThreadgroups:MTLSizeMake(1, 2, 1) threadsPerThreadgroup:one];
-    [ce setComputePipelineState:aaApplyPS];
+    [ce setComputePipelineState:aaPS[tenBit][3]];
     [ce dispatchThreadgroupsWithIndirectBuffer:st.aaArgs indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(4, 32, 1)];
     [ce endEncoding];
 }
