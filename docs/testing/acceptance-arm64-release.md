@@ -673,3 +673,39 @@ release: `b3eea49c…` → `735ba5c4…`.
 Both lanes of `make dxmt-check` on the applied build (DXMT 0029, Wine 0029): `dxmt-check: all passed`, 264 ok per lane,
 no FAIL. (The first ARM64EC run's replay row read 0: the launcher log rotated at 1 MB between that run's line count and
 its replay, so the row read the new, one-line file; the replay line was in `launcher.log.1`, and the lane rerun passed.)
+
+## CMAA2 post-AA in the presenter (XeSS plan, Task CMAA2; Ruling 36)
+
+Per game, off by default: "Anti-aliasing (post): Off / CMAA2" in the Games window (`GameSettings.postAA`) or
+`MACNEUTRON_POST_AA=cmaa2`. The presenter runs our Metal port of Intel's CMAA2 (`presenter/cmaa2.metal`, Apache-2.0,
+Extra Sharpness, preset HIGH; `libmacneutron-present.metallib` beside the dylib) in place on every SDR 8-bit frame
+through an sRGB view of the drawable, before any MetalFX upscale; HDR and 10-bit layers pass through. With MetalFX off
+the launcher still loads the presenter when post-AA is on, and the presenter skips only its upscale. Notices:
+`licenses/macneutron/CMAA2-LICENSE.txt`, a NOTICES.md section, the README entry; `licences_test.sh` checks "CMAA2" and
+the file (red before they existed, and its self-test deletes the file).
+
+`make presenter-check` (the native part drives wine.app's presenter through its own present hook on layers outside any
+window, `presenter/tests/cmaa2_check.m`; the Wine part runs `present_loop.exe` through the launcher), all ok:
+
+| Check | Result |
+| --- | --- |
+| Off: dense and sparse test frames, 2560x1440 and 1728x1117 | byte for byte |
+| Flat gradient frame, on | unchanged |
+| Silhouette frame, on: pixels changed / more than 1 px from an edge | 6.70 ‰ / 0 (2560x1440); 6.72 ‰ / 0 (1728x1117) |
+| 1-px glyph strokes, stroke-to-background contrast kept (through the sRGB view) | 83.3 % (2560x1440), 83.2 % (1728x1117); the study's raw-read probe: 85.9 % |
+| HDR (RGBA16Float) layer, on | unchanged, `left alone` logged, no CMAA2 |
+| Upscale (640x360 to 1280x720): game-size drawable changed; MetalFX output against the off run | 30801 px changed; differs (CMAA2 runs before MetalFX) |
+| Metal shader validation, then API validation, every native run | exit 0 (both layers at once crash inside MetalTools on a view of a drawable's texture, so they run one after the other) |
+| Wine: full size, 640x360 upscaled, MetalFX off, fp16 | `CMAA2 1280x720` once; `CMAA2 640x360` before `MetalFX`, checkerboard intact; with `MACNEUTRON_NO_METALFX=1` CMAA2 and no MetalFX; fp16 no CMAA2 |
+
+**Cost.** The check prints the GPU time of the present's command buffer, which holds only CMAA2: at 1728x1117 0.155 /
+0.223 / 0.712 ms (flat / sparse / dense median), at 2560x1440 0.283 / 0.388 / 1.258 ms. That is 2.5-4x the study's
+probe (0.059 / 0.090 / 0.330 at 2560x1440), and the excess isn't CMAA2's: the same encoder run from a scratch bench on a
+drawable's texture that is not re-acquired each frame costs 0.066 / 0.084 / 0.281 ms at 2560x1440, and a plain 9-tap
+kernel costs 0.13 ms on that texture against 0.67 ms on a freshly acquired, presented drawable of these offscreen layers.
+In a game DXMT's render pass touches the drawable first in the same command buffer; the in-game cost is Phase 2's to
+measure (synthesis §6).
+
+Also: `make test` (246), `make smoke` 15/15, `make bridge-check` (all ok), `licences_test` and its self-test PASS. The
+build is a development one (the DXMT and Wine trees carry another task's diagnostic commits), so `make wine-arm64`
+rebuilds incrementally each time rather than saying up to date. Not yet seen in a game.

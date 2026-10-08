@@ -33,11 +33,13 @@ bridge-check: build bridge wine-arm64
 	sh bridge/probe.sh --redact-self-test
 	sh bridge/check.sh
 
-# The MetalFX presenter's test program. The presenter itself is built into wine.app (wine-arm64/build.sh), where
-# winemetal.so loads it.
+# The MetalFX presenter's test programs: present_loop.exe for Wine, cmaa2_check for the Mac (CMAA2, no Wine). The
+# presenter itself is built into wine.app (wine-arm64/build.sh), where winemetal.so loads it.
 presenter:
 	mkdir -p $(PRESENTER)
 	$(MINGW) -o $(PRESENTER)/present_loop.exe presenter/tests/present_loop.c -ld3d11 -ldxgi -luser32 -lgdi32 -ldxguid -luuid
+	/usr/bin/clang -fobjc-arc -O1 -o $(PRESENTER)/cmaa2_check presenter/tests/cmaa2_check.m -framework Foundation \
+		-framework Metal -framework QuartzCore
 
 # The presenter in wine.app through the launcher on DXMT (real Wine, no Steam).
 presenter-check: build wine-arm64 presenter

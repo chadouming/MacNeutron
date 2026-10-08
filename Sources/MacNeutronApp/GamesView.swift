@@ -55,6 +55,14 @@ struct GamesView: View {
                     Toggle("msync", isOn: binding(row, \.msync, default: true))
                     Toggle("MetalFX upscaling", isOn: binding(row, \.metalFX, default: true))
                         .help("Upscales with Apple's MetalFX when the game renders below its window or the display's pixel density.")
+                    Picker("Anti-aliasing (post)", selection: Binding(
+                        get: { row.settings.postAA ?? "off" },
+                        set: { value in Task { await model.update(row.id) { $0.postAA = value == "off" ? nil : value } } })) {
+                        Text("Off").tag("off")
+                        Text("CMAA2").tag("cmaa2")
+                    }
+                    .fixedSize()
+                    .help("for games without their own anti-aliasing")
                     Spacer()
                 }
                 .padding(10)

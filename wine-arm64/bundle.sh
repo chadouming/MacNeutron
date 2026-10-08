@@ -84,8 +84,9 @@ put "$DXMT_IN" translator "$R/DXMT/"
 # their LC_RPATH @loader_path/.
 U="$R/lib/wine/aarch64-unix"
 for l in libfreetype.6.dylib libgnutls.30.dylib; do put "$DEPS/lib" "$l" "$U/"; done
-# The MetalFX presenter (arm64 release spec §5.3): winemetal.so loads it from its own folder (DXMT patch 0002).
-put "$B/wine-arm64-src/presenter" libmacneutron-present.dylib "$U/"
+# The MetalFX presenter (arm64 release spec §5.3): winemetal.so loads it from its own folder (DXMT patch 0002), and it
+# loads its CMAA2 shaders from beside itself.
+for f in libmacneutron-present.dylib libmacneutron-present.metallib; do put "$B/wine-arm64-src/presenter" "$f" "$U/"; done
 # Licences (ship-base spec §4): the components' own texts, the committed README and NOTICES.md, and build.sh's SOURCE.
 # DXMT's stay in DXMT/.
 L="$R/licenses"
@@ -93,6 +94,7 @@ S="$B/wine-arm64-src"
 mkdir -p "$L/wine" "$L/fex" "$L/llvm" "$L/llvm-mingw" "$L/macneutron"
 for f in README NOTICES.md; do put "$ROOT/wine-arm64/licenses" "$f" "$L/"; done
 put "$ROOT" LICENSE "$L/macneutron/"  # the presenter's and the patch files' (arm64 release spec §7.1)
+put "$ROOT/presenter" CMAA2-LICENSE.txt "$L/macneutron/"  # the presenter's CMAA2 shaders' (Apache-2.0)
 # A release names HEAD (release.sh refuses a dirty tree): build.sh's SOURCE keeps the commit of the last build that
 # changed something, which commits that touch no build input leave behind (arm64 release spec §14).
 if [ -n "$release" ]; then write_source "$L/SOURCE" "$(git -C "$ROOT" rev-parse HEAD)"; else put "$S" SOURCE "$L/"; fi

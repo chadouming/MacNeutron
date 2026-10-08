@@ -75,6 +75,7 @@ Start launch options with `/usr/bin/env`. macOS Steam runs them without a shell,
 | `/usr/bin/env MACNEUTRON_NO_MSYNC=1 %command%` | Turn off msync |
 | `/usr/bin/env MACNEUTRON_NO_STEAM_BRIDGE=1 %command%` | Start the game without the Steam bridge (the game then can't reach Steam) |
 | `/usr/bin/env MACNEUTRON_NO_METALFX=1 %command%` | Don't upscale with MetalFX (macOS then stretches smaller images with its nearest-neighbour filter) |
+| `/usr/bin/env MACNEUTRON_POST_AA=cmaa2 %command%` | Anti-alias each frame with Intel's CMAA2 (for games without their own anti-aliasing; also "Anti-aliasing (post)" in the Games window) |
 | `/usr/bin/env MACNEUTRON_XESS=1 %command%` | Load the game's own Intel XeSS (for comparison: on Apple GPUs it is many times slower, SMITE 2 ~4 FPS). By default XeSS on D3D12 runs on MetalFX's upscaler |
 | `/usr/bin/env DXMT_D3D12_SM6=1 %command%` | On DXMT, report the Direct3D 12 features Shader Model 6 games check for (Unreal Engine 5 games need it) |
 | `/usr/bin/env DXMT_D3D12_OVERLAP=1 %command%` | On DXMT, let a Direct3D 12 game's GPU passes overlap between barriers (experimental: not faster on Apple GPUs so far) |
@@ -137,6 +138,10 @@ sharpness for frame rate, pick a lower resolution in the game's windowed or bord
 GPU time per frame while active and nothing when the game renders at full size; switch "MetalFX upscaling" off for a
 game in the Games window if it misbehaves.
 
+For games without their own anti-aliasing, "Anti-aliasing (post)" in the Games window runs Intel's CMAA2 on each
+frame (before any upscale; HDR frames are left alone). It is off by default: it softens HUD text slightly, and a game
+with its own anti-aliasing or XeSS gains nothing from it.
+
 ## Licences
 
 `wine.app` carries the licence texts of everything in it under `Contents/Resources/licenses/`, and `MacNeutron.app`
@@ -146,6 +151,7 @@ profile stops launching, so a release is rebuilt before its profile runs out.
 
 ## Licence
 
-MacNeutron's own code is MIT (`LICENSE`). The patches in `wine-arm64/patches/` keep the licence of the tree they patch:
+MacNeutron's own code is MIT (`LICENSE`), except `presenter/cmaa2.metal`, our Metal port of Intel's CMAA2, which is
+Apache-2.0 (`presenter/CMAA2-LICENSE.txt`). The patches in `wine-arm64/patches/` keep the licence of the tree they patch:
 Wine's and DXMT's are LGPL-2.1+ and FEX's are MIT (details in `wine-arm64/README.md`'s Licences section). The source
 archive of a release holds every tree as built.

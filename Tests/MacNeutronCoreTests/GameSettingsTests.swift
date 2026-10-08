@@ -7,6 +7,8 @@ import Testing
         "MACNEUTRON_GRAPHICS": "dxmt", "MACNEUTRON_LOG": "1", "MACNEUTRON_NO_MSYNC": "1", "MACNEUTRON_NO_METALFX": "1",
     ])
     #expect(GameSettings(log: false, msync: true, metalFX: true).environment.isEmpty)
+    #expect(GameSettings(postAA: "cmaa2").environment == ["MACNEUTRON_POST_AA": "cmaa2"])
+    #expect(GameSettings(postAA: "off").environment.isEmpty)
 }
 
 @Test func storeRoundTripsAndDefaultsWhenMissing() throws {

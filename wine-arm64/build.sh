@@ -113,7 +113,8 @@ stamp=$(stamp_of "$ROOT/wine-arm64/pins" "$PATCHES"/*.patch "$FEX_PATCHES"/*.pat
   "$ROOT/dxmt/tools/dxil-probe.cpp" "$ROOT/dxmt/tools/dxil-translate.mm" "$ROOT/wine-arm64/licenses/NOTICES.md" \
   "$ROOT/wine-arm64/licenses/README" "$ROOT/wine-arm64/tests/licences_test.sh" "$ROOT/wine-arm64/deps.pins" \
   "$ROOT/dxmt/fetch.sh" "$ROOT/wine-arm64/x18-allow.txt" "$ROOT/wine-arm64/tools/x18scan.sh" "$LSC_PATCHES"/*.patch \
-  "$ROOT/presenter/present.m" "$ROOT/LICENSE" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
+  "$ROOT/presenter/present.m" "$ROOT/presenter/cmaa2.metal" "$ROOT/presenter/CMAA2-LICENSE.txt" "$ROOT/LICENSE" \
+  "$ROOT/wine-arm64/tools/xcrun-metal.sh")
 mkdir -p "$SRC"
 wine_mode=$(build_mode "$W" "$SRC/wine.applied" "$SRC/wine.series" "$wine_series")
 fex_mode=$(build_mode "$F" "$SRC/fex.applied" "$SRC/fex.series" "$fex_series")
@@ -359,6 +360,11 @@ mkdir -p "$SRC/presenter"
   -install_name @rpath/libmacneutron-present.dylib -framework Foundation -framework AppKit -framework QuartzCore \
   -framework Metal -framework MetalFX -o "$SRC/presenter/libmacneutron-present.dylib" "$ROOT/presenter/present.m" \
   > "$SRC/presenter.log" 2>&1 || die "building the presenter failed; see $SRC/presenter.log"
+# Its CMAA2 shaders, beside it; compiled from stdin by tools/xcrun-metal.sh, so no build path ships in them (Ruling 20).
+sh "$ROOT/wine-arm64/tools/xcrun-metal.sh" -sdk macosx metal -o "$SRC/presenter/cmaa2.air" -c "$ROOT/presenter/cmaa2.metal" \
+  -mmacosx-version-min=27.0 >> "$SRC/presenter.log" 2>&1 \
+  && /usr/bin/xcrun -sdk macosx metallib -o "$SRC/presenter/libmacneutron-present.metallib" "$SRC/presenter/cmaa2.air" \
+  >> "$SRC/presenter.log" 2>&1 || die "building the presenter's shaders failed; see $SRC/presenter.log"
 
 # 8. Bundle and sign (make install into wine.app, the loader's entitlements, every check on the result). First the
 #    bundle's licenses/SOURCE (ship-base spec §4): the inputs it is built from, each tree's series or dev.

@@ -2,7 +2,8 @@
 # Runs the MetalFX presenter inside wine.app through the launcher on DXMT: real Wine, no Steam (upscaler spec §6,
 # release spec §9 L4). Needs `make build wine-arm64 presenter`. The tool folder is assembled from
 # build/wine-arm64/wine.app with `macneutron install`; the launcher sets MACNEUTRON_PRESENT=1 for the game, and DXMT's
-# winemetal.so loads the presenter from beside itself. MACNEUTRON_NO_METALFX=1 turns that off (the runs without it).
+# winemetal.so loads the presenter from beside itself. MACNEUTRON_NO_METALFX=1 turns that off (the runs without it)
+# unless MACNEUTRON_POST_AA=cmaa2 asks for its CMAA2 anti-aliasing, which runs natively first (tests/cmaa2_check.m).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/build/presenter"
@@ -14,12 +15,15 @@ mkdir -p "$WORK/compat"
 fail=0
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 
-# run_loop <name> <inject 0|1> <scale> <present_loop args...>  →  output in $WORK/<name>.txt
+# run_loop <name> <inject 0|1> <scale> <present_loop args...>  →  output in $WORK/<name>.txt; $aa, when set, is
+# MACNEUTRON_POST_AA
+aa=
 run_loop() {
   name=$1 inject=$2 scale=$3; shift 3
   off=; [ "$inject" = 1 ] || off=1
   env STEAM_COMPAT_DATA_PATH="$WORK/compat/0" SteamAppId=0 MACNEUTRON_GRAPHICS=dxmt MACNEUTRON_NO_STEAM_BRIDGE=1 \
-      ${off:+MACNEUTRON_NO_METALFX=1} MACNEUTRON_PRESENT_SCALE="$scale" MACNEUTRON_PRESENT_DUMP="$WORK/frame.ppm" \
+      ${off:+MACNEUTRON_NO_METALFX=1} ${aa:+MACNEUTRON_POST_AA=$aa} MACNEUTRON_PRESENT_SCALE="$scale" \
+      MACNEUTRON_PRESENT_DUMP="$WORK/frame.ppm" \
       "$TOOL/bin/macneutron" launch waitforexitandrun "$B/present_loop.exe" "$@" > "$WORK/$name.out" 2>&1 &
   pid=$!
   ( sleep 120; kill "$pid" 2>/dev/null ) & dog=$!
@@ -29,6 +33,49 @@ run_loop() {
 }
 count() { LC_ALL=C /usr/bin/grep -c "$1" "$WORK/$2.txt" || true; }   # count <pattern> <run>
 frame_ms() { LC_ALL=C /usr/bin/grep -o 'avg frame [0-9.]*' "$WORK/$1.txt" | awk '{print $3}'; }
+
+# CMAA2 natively: wine.app's presenter on layers outside any window, under Metal's shader validation, then again under
+# its API validation (both at once crash inside MetalTools on a view of a drawable's texture).
+LIB="$ROOT/build/wine-arm64/wine.app/Contents/Resources/lib/wine/aarch64-unix/libmacneutron-present.dylib"
+native() {  # native <name> <variable=value...> <cmaa2_check args...>  →  $WORK/<name>.txt, the exit statuses in <name>.status
+  name=$1; shift
+  s1=0; env MTL_SHADER_VALIDATION=1 MACNEUTRON_PRESENT_SCALE=1 "$@" > "$WORK/$name.txt" 2>&1 || s1=$?
+  s2=0; env MTL_DEBUG_LAYER=1 MACNEUTRON_PRESENT_SCALE=1 "$@" > "$WORK/$name.api.txt" 2>&1 || s2=$?
+  echo "$s1$s2" > "$WORK/$name.status"
+}
+value() { sed -n "s/^$1: //p" "$WORK/$2.txt"; }  # value <what> <run>
+statuses=
+for size in "2560 1440" "1728 1117"; do
+  n=aa_on_${size% *}
+  native "$n" MACNEUTRON_POST_AA=cmaa2 "$B/cmaa2_check" "$LIB" frames $size
+  native "aa_off_${size% *}" "$B/cmaa2_check" "$LIB" frames $size
+  statuses="$statuses$(cat "$WORK/$n.status")$(cat "$WORK/aa_off_${size% *}.status")"
+  expect "post-AA off leaves frames byte for byte at ${size% *}" \
+    "$(value 'dense changed' "aa_off_${size% *}"):$(value 'sparse changed' "aa_off_${size% *}")" "0:0"
+  expect "CMAA2 leaves a flat frame alone at ${size% *}" "$(value 'flat changed' "$n")" 0
+  expect "CMAA2 changes only pixels next to edges at ${size% *}" "$(value 'sparse changed far from edges' "$n")" 0
+  expect "CMAA2 changes 2-12 per mille of a frame of silhouettes at ${size% *}" \
+    "$(awk -v v="$(value 'sparse changed per mille' "$n")" 'BEGIN { print (v != "" && v >= 2 && v <= 12) ? "yes" : "no (" v ")" }')" yes
+  expect "CMAA2 keeps 80 % of 1-px glyph strokes' contrast at ${size% *}" \
+    "$(awk -v v="$(value 'glyph contrast kept percent' "$n")" 'BEGIN { print (v != "" && v >= 80 && v < 100) ? "yes" : "no (" v ")" }')" yes
+done
+native aa_hdr MACNEUTRON_POST_AA=cmaa2 "$B/cmaa2_check" "$LIB" frames 1280 720 fp16
+expect "CMAA2 leaves HDR layers alone" \
+  "$(value 'dense changed' aa_hdr):$(value 'sparse changed' aa_hdr):$(count 'left alone (HDR' aa_hdr)" "0:0:1"
+rm -f "$WORK/aa_up.ppm" "$WORK/aa_up_off.ppm"
+native aa_up MACNEUTRON_POST_AA=cmaa2 MACNEUTRON_PRESENT_SCALE=2 MACNEUTRON_PRESENT_DUMP="$WORK/aa_up.ppm" \
+  "$B/cmaa2_check" "$LIB" upscale
+native aa_up_off MACNEUTRON_PRESENT_SCALE=2 MACNEUTRON_PRESENT_DUMP="$WORK/aa_up_off.ppm" "$B/cmaa2_check" "$LIB" upscale
+expect "CMAA2 runs on the game-size frame before MetalFX" \
+  "$(count 'MetalFX 640x360 -> 1280x720' aa_up):$(count 'MetalFX 640x360 -> 1280x720' aa_up_off):$(value 'drawable changed' aa_up_off):$(
+    awk -v v="$(value 'drawable changed' aa_up)" 'BEGIN { print (v > 0 ? "changed" : "unchanged") }'):$(
+    cmp -s "$WORK/aa_up.ppm" "$WORK/aa_up_off.ppm" && echo same || { [ -s "$WORK/aa_up.ppm" ] && echo differs; } || echo none)" \
+  "1:1:0:changed:differs"
+expect "Metal validation clean" "$statuses$(cat "$WORK/aa_hdr.status" "$WORK/aa_up.status" "$WORK/aa_up_off.status" | tr -d '\n')" \
+  00000000000000
+for size in "1728 1117" "2560 1440"; do  # the GPU time CMAA2 adds per frame, printed (no validation)
+  MACNEUTRON_POST_AA=cmaa2 MACNEUTRON_PRESENT_SCALE=1 "$B/cmaa2_check" "$LIB" cost $size 2>/dev/null | sed 's/^/info /'
+done
 
 # The prefix, prepared before the timed runs (a no-op when it is current).
 env STEAM_COMPAT_DATA_PATH="$WORK/compat/0" SteamAppId=0 MACNEUTRON_GRAPHICS=dxmt \
@@ -68,6 +115,24 @@ expect "switching vsync on keeps upscaling" \
 run_loop format 1 1 1280 720 640 360 300 0 format_at=100
 expect "a pixel-format switch rebuilds the overlay" \
   "$(count 'macneutron-present: MetalFX 640x360 -> 1280x720' format):$(count 'avg frame' format)" "2:1"
+
+# CMAA2 in Wine: at full size, before MetalFX, with MetalFX off (the launcher still loads the presenter), never on HDR.
+aa=cmaa2
+run_loop aa 1 1 1280 720 0 0 200 0
+expect "CMAA2 runs at full size" "$(count 'macneutron-present: CMAA2 1280x720' aa):$(count 'macneutron-present: MetalFX' aa)" "1:0"
+rm -f "$WORK/frame.ppm"
+run_loop aaup 1 1 1280 720 640 360 300 0
+expect "CMAA2 runs before MetalFX" "$(LC_ALL=C /usr/bin/grep -o 'macneutron-present: [CM][A-Za-z0-9]*' "$WORK/aaup.txt" \
+  | head -n 2 | tr '\n' ' ')" "macneutron-present: CMAA2 macneutron-present: MetalFX "
+expect "upscaled anti-aliased frame shows the whole checkerboard" \
+  "$( [ -f "$WORK/frame.ppm" ] && python3 "$ROOT/presenter/tests/pixels.py" "$WORK/frame.ppm" || echo none)" "WNWNWNWN"
+run_loop aanofx 0 1 1280 720 640 360 200 0
+expect "MetalFX off keeps CMAA2 and skips only the upscale" \
+  "$(count 'macneutron-present: CMAA2 640x360' aanofx):$(count 'macneutron-present: MetalFX' aanofx)" "1:0"
+run_loop aahdr 1 1 1280 720 640 360 200 0 fp16
+expect "CMAA2 leaves HDR layers alone in Wine" \
+  "$(count 'left alone (HDR/extended-range layer)' aahdr):$(count 'macneutron-present: CMAA2' aahdr)" "1:0"
+aa=
 
 run_loop base 0 1 1280 720 640 360 600 0
 expect "MACNEUTRON_NO_METALFX=1 loads no presenter" "$(count 'macneutron-present' base)" 0

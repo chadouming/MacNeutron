@@ -348,6 +348,21 @@ private func i386Exe(named name: String) throws -> String {
     #expect(f.runner.calls.last?.environment["MACNEUTRON_PRESENT"] == nil)
 }
 
+@Test func postAntiAliasingKeepsThePresenterWithMetalFXOff() throws {
+    // The presenter runs CMAA2 and reads MACNEUTRON_NO_METALFX itself to skip only its upscaling.
+    let f = try makeFixture()
+    try f.launcher.settings.save(GameSettings(metalFX: false, postAA: "cmaa2"), for: "42")
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: f.env)
+    let env = try #require(f.runner.calls.last?.environment)
+    #expect(env["MACNEUTRON_PRESENT"] == "1")
+    #expect(env["MACNEUTRON_NO_METALFX"] == "1")
+    #expect(env["MACNEUTRON_POST_AA"] == "cmaa2")
+    var off = f.env
+    off["MACNEUTRON_POST_AA"] = "off"  // a launch option wins over the game's setting
+    _ = f.launcher.launch(["run", "/g/Game.exe"], environment: off)
+    #expect(f.runner.calls.last?.environment["MACNEUTRON_PRESENT"] == nil)
+}
+
 @Test func toolCommandsGetNoPresenter() throws {
     let f = try makeFixture()
     _ = f.launcher.launch(["runinprefix", "/g/tool.exe"], environment: f.env)

@@ -3,7 +3,8 @@
 # Prints MISSING <what> per gap, then PASS or FAIL. Read-only. BUILD_DIR replaces build/ (FEX's External list).
 # --app <MacNeutron.app> (arm64 release spec §7.1, gate R4): the app's own licences (MIT, llvm-mingw's for steam.exe,
 # equal to wine.app's copies, a README pointing into wine.app), then the check above on its Contents/Helpers/wine.app.
-# --self-test proves it red on copies in $TMPDIR: a licence file deleted (FEX's, MacNeutron's), an extra FEX external.
+# --self-test proves it red on copies in $TMPDIR: a licence file deleted (FEX's, MacNeutron's, CMAA2's), an extra FEX
+# external.
 # ponytail: a flat path list, no manifest format; add one when a second bundle needs the same list.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -29,15 +30,16 @@ check() {  # check <wine.app> <build dir>
     licenses/fex/range-v3-LICENSE.txt licenses/fex/cephes-LICENSE \
     licenses/llvm/LICENSE.TXT licenses/llvm/COPYRIGHT.regex \
     licenses/llvm-mingw/LICENSE.TXT licenses/llvm-mingw/COPYING.MinGW-w64-runtime.txt \
-    licenses/macneutron/LICENSE
+    licenses/macneutron/LICENSE licenses/macneutron/CMAA2-LICENSE.txt
   do [ -s "$R/$f" ] || miss "$f"; done
 
   # 2. Notices that live only in source headers: the committed NOTICES.md names each holder.
   for h in "Regents of the University of California" "VIXL authors" "Rich Felker" "Arm Limited" "Will Faust" \
            "Microsoft Corporation" "Alexander Bessonov" "Unicode, Inc." "Henry Spencer" "Zebediah Figura" \
-           "Marc-Aurel Zent" "Intel Corporation"
+           "Marc-Aurel Zent" "Intel Corporation" "CMAA2"
   do g -qF "$h" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for $h"; done
   g -qF 'macneutron/LICENSE' "$L/README" 2> /dev/null || miss "MacNeutron entry (macneutron/LICENSE) in README"
+  g -qF 'macneutron/CMAA2-LICENSE.txt' "$L/README" 2> /dev/null || miss "CMAA2 entry (macneutron/CMAA2-LICENSE.txt) in README"
 
   # 3. Drift: every FEX external the build compiled has a licence above (vixl, zydis, tracy... must stay out).
   for d in "$2"/wine-arm64-src/fex-ec/External/*/; do
@@ -120,6 +122,9 @@ cp -c "$APP/Contents/Resources/licenses/fex/xxhash-LICENSE" "$T/wine.app/Content
 rm "$T/wine.app/Contents/Resources/licenses/macneutron/LICENSE"
 red "a copy without macneutron/LICENSE" licenses/macneutron/LICENSE
 cp -c "$APP/Contents/Resources/licenses/macneutron/LICENSE" "$T/wine.app/Contents/Resources/licenses/macneutron/"
+rm "$T/wine.app/Contents/Resources/licenses/macneutron/CMAA2-LICENSE.txt"
+red "a copy without macneutron/CMAA2-LICENSE.txt" licenses/macneutron/CMAA2-LICENSE.txt
+cp -c "$APP/Contents/Resources/licenses/macneutron/CMAA2-LICENSE.txt" "$T/wine.app/Contents/Resources/licenses/macneutron/"
 mkdir "$T/b/wine-arm64-src/fex-ec/External/vixl"
 red "an extra External/vixl" "a licence decision for FEX External/vixl"
 echo "PASS licences_test self-test"

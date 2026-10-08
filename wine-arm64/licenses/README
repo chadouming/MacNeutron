@@ -76,9 +76,11 @@ steamclient.dylib)
   wine-arm64/deps.pins), with the patches in the repository's wine-arm64/patches/lsteamclient (dappermint/winecx's
   three Mac fixes).
 
-MacNeutron (libmacneutron-present.dylib, the MetalFX presenter)
-  Licence: MIT, macneutron/LICENSE.
-  Source: the repository at MACNEUTRON_COMMIT: presenter/present.m. The patch files in wine-arm64/patches keep the
-  licence of the tree they patch (Wine and DXMT: LGPL-2.1-or-later; FEX: MIT; lsteamclient: Valve's terms).
+MacNeutron (libmacneutron-present.dylib and libmacneutron-present.metallib, the MetalFX presenter)
+  Licence: MIT, macneutron/LICENSE; its CMAA2 anti-aliasing shader (libmacneutron-present.metallib) is Apache-2.0
+  (Intel), macneutron/CMAA2-LICENSE.txt and NOTICES.md.
+  Source: the repository at MACNEUTRON_COMMIT: presenter/present.m and presenter/cmaa2.metal. The patch files in
+  wine-arm64/patches keep the licence of the tree they patch (Wine and DXMT: LGPL-2.1-or-later; FEX: MIT;
+  lsteamclient: Valve's terms).
 
 FreeType: Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.

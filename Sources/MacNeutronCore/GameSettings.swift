@@ -7,13 +7,17 @@ public struct GameSettings: Codable, Equatable, Sendable {
     public var msync: Bool?
     public var runAs: RunAs?
     public var metalFX: Bool?
+    /// Post-process anti-aliasing in the presenter: "off" or "cmaa2".
+    public var postAA: String?
 
-    public init(graphics: String? = nil, log: Bool? = nil, msync: Bool? = nil, runAs: RunAs? = nil, metalFX: Bool? = nil) {
+    public init(graphics: String? = nil, log: Bool? = nil, msync: Bool? = nil, runAs: RunAs? = nil, metalFX: Bool? = nil,
+                postAA: String? = nil) {
         self.graphics = graphics
         self.log = log
         self.msync = msync
         self.runAs = runAs
         self.metalFX = metalFX
+        self.postAA = postAA
     }
 
     /// The launch-option variables these settings stand for (`runAs` is for the mapping planner only).
@@ -23,6 +27,7 @@ public struct GameSettings: Codable, Equatable, Sendable {
         if log == true { env["MACNEUTRON_LOG"] = "1" }
         if msync == false { env["MACNEUTRON_NO_MSYNC"] = "1" }
         if metalFX == false { env["MACNEUTRON_NO_METALFX"] = "1" }
+        if let postAA, postAA != "off" { env["MACNEUTRON_POST_AA"] = postAA }
         return env
     }
 }

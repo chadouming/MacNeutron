@@ -2,13 +2,16 @@
 // MACNEUTRON_PRESENT=1.
 // When a game's drawable is smaller than the pixels its layer covers (a lower in-game resolution, or Wine's
 // half-density rendering on a Retina screen), it upscales the frame with MetalFX into an overlay layer on top,
-// instead of Core Animation's nearest-neighbour stretch. Any failure passes the frame through untouched.
+// instead of Core Animation's nearest-neighbour stretch. MACNEUTRON_POST_AA=cmaa2 also runs CMAA2 anti-aliasing
+// (cmaa2.metal) in place on every SDR frame, before any upscale; MACNEUTRON_NO_METALFX=1 then skips only the upscale.
+// Any failure passes the frame through untouched.
 // Spec: docs/superpowers/specs/2026-09-28-macneutron-metalfx-upscaler-design.md
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#include <dlfcn.h>
 
 @interface MNLayerState : NSObject
 @property CAMetalLayer *overlay;       // over the game's layer while upscaling
@@ -22,6 +25,12 @@
 @property NSUInteger frames;
 @property BOOL linear, hdr, dumped;    // linear/hdr: permanent for this layer
 @property NSString *lastNote;
+// CMAA2's working set, for one frame size; aaFailed: off for this layer
+@property id<MTLTexture> aaEdges;
+@property id<MTLBuffer> aaCtrl, aaCands, aaLocs, aaItems, aaHeads, aaArgs;
+@property NSUInteger aaWidth, aaHeight;
+@property BOOL aaFailed;
+@property NSString *lastAANote;
 @end
 @implementation MNLayerState
 @end
@@ -33,11 +42,20 @@ static void (*origPresentAfter)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>, CFTi
 static void (*origPresentAt)(id<MTLCommandBuffer>, SEL, id<MTLDrawable>, CFTimeInterval);
 static const char *dumpPath;      // test-only: write the 120th upscaled frame as a PPM
 static double scaleOverride;      // test-only: pretend the window has this backing scale
+static BOOL postAA, noMetalFX;    // MACNEUTRON_POST_AA=cmaa2, MACNEUTRON_NO_METALFX=1
 
 static void note(MNLayerState *st, NSString *message)
 {
     if ([message isEqualToString:st.lastNote]) return;
     st.lastNote = message;
+    fprintf(stderr, "macneutron-present: %s\n", message.UTF8String);
+}
+
+/* CMAA2's notes, kept apart from the upscaler's so neither repeats every frame. */
+static void aaNote(MNLayerState *st, NSString *message)
+{
+    if ([message isEqualToString:st.lastAANote]) return;
+    st.lastAANote = message;
     fprintf(stderr, "macneutron-present: %s\n", message.UTF8String);
 }
 
@@ -89,7 +107,7 @@ static CGSize targetSize(CAMetalLayer *layer, MNLayerState *st)
 
 static BOOL wantsUpscale(CAMetalLayer *layer, MNLayerState *st, CGSize drawable)
 {
-    if (st.scale <= 0 || st.linear || st.hdr) return NO;
+    if (noMetalFX || st.scale <= 0 || st.linear || st.hdr) return NO;
     CGSize t = targetSize(layer, st);
     return drawable.width >= 16 && drawable.width < t.width && drawable.height < t.height;
 }
@@ -168,6 +186,103 @@ static NSString *prepareScaler(id<MTLDevice> device, MNLayerState *st, id<MTLTex
     return nil;
 }
 
+/* CMAA2's four kernels, from the metallib beside this library (wine-arm64/build.sh). nil: ready.
+ * ponytail: one set of pipelines for the first device that asks; Wine's games draw on one GPU. */
+static id<MTLComputePipelineState> aaEdgesPS, aaArgsPS, aaProcessPS, aaApplyPS;
+static NSString *loadCMAA2(id<MTLDevice> device)
+{
+    static NSString *failure;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Dl_info info;
+        if (!dladdr((const void *)loadCMAA2, &info) || !info.dli_fname) { failure = @"CMAA2 off (no library path)"; return; }
+        NSURL *url = [[NSURL fileURLWithPath:@(info.dli_fname)].URLByDeletingLastPathComponent
+                      URLByAppendingPathComponent:@"libmacneutron-present.metallib"];
+        NSError *error;
+        id<MTLLibrary> lib = [device newLibraryWithURL:url error:&error];
+        id<MTLComputePipelineState> ps[4];
+        NSArray *names = @[ @"cmaa2_edges", @"cmaa2_args", @"cmaa2_process", @"cmaa2_apply" ];
+        for (NSUInteger i = 0; i < 4; i++) {
+            id<MTLFunction> f = [lib newFunctionWithName:names[i]];
+            ps[i] = f ? [device newComputePipelineStateWithFunction:f error:&error] : nil;
+            if (!ps[i]) {
+                failure = [NSString stringWithFormat:@"CMAA2 off (%@: %@)", lib ? names[i] : url.lastPathComponent,
+                           error.localizedDescription ?: @"missing"];
+                return;
+            }
+        }
+        aaEdgesPS = ps[0]; aaArgsPS = ps[1]; aaProcessPS = ps[2]; aaApplyPS = ps[3];
+    });
+    return failure;
+}
+
+/* CMAA2's working set for this frame size (upstream's default sizes, vaCMAA2DX12.cpp), made once per size. */
+static NSString *prepareCMAA2(id<MTLDevice> device, MNLayerState *st, id<MTLTexture> src)
+{
+    if (st.aaCtrl && st.aaWidth == src.width && st.aaHeight == src.height) return nil;
+    st.aaCtrl = nil;
+    NSUInteger w = src.width, h = src.height, hw = (w + 1) / 2, hh = (h + 1) / 2;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint width:hw
+                                                                                  height:h mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite; td.storageMode = MTLStorageModePrivate;
+    MTLResourceOptions gpu = MTLResourceStorageModePrivate, cpu = MTLResourceStorageModeShared;
+    id<MTLTexture> edges = [device newTextureWithDescriptor:td];
+    id<MTLBuffer> ctrl = [device newBufferWithLength:64 options:cpu];
+    id<MTLBuffer> cands = [device newBufferWithLength:4 * (w * h / 4 + 1) options:gpu];
+    id<MTLBuffer> locs = [device newBufferWithLength:4 * ((w * h + 3) / 6 + 1) options:gpu];
+    id<MTLBuffer> items = [device newBufferWithLength:8 * (w * h / 2 + 1) options:gpu];
+    id<MTLBuffer> heads = [device newBufferWithLength:4 * hw * hh options:cpu];
+    id<MTLBuffer> args = [device newBufferWithLength:16 options:gpu];
+    if (!edges || !ctrl || !cands || !locs || !items || !heads || !args) return @"CMAA2 off (no memory for its buffers)";
+    memset(ctrl.contents, 0, ctrl.length);       // the counters; each frame's last pass resets them
+    memset(heads.contents, 0xFF, heads.length);  // empty lists
+    st.aaEdges = edges; st.aaCands = cands; st.aaLocs = locs; st.aaItems = items; st.aaHeads = heads; st.aaArgs = args;
+    st.aaWidth = w; st.aaHeight = h; st.aaCtrl = ctrl;
+    aaNote(st, [NSString stringWithFormat:@"CMAA2 %lux%lu", (unsigned long)w, (unsigned long)h]);
+    return nil;
+}
+
+/* CMAA2 in place on the game's frame, read and written through an sRGB view: upstream works on linear colour, and DXMT's
+ * layer is non-sRGB (and framebufferOnly off). Five dispatches in one serial encoder, two of them sized by the GPU. HDR
+ * and 10-bit layers pass through. */
+static void antialias(id<MTLCommandBuffer> cb, id<MTLTexture> src, MNLayerState *st)
+{
+    if (!postAA || st.hdr || st.aaFailed || src.framebufferOnly) return;
+    MTLPixelFormat view;
+    switch (src.pixelFormat) {
+    case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB: view = MTLPixelFormatBGRA8Unorm_sRGB; break;
+    case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: view = MTLPixelFormatRGBA8Unorm_sRGB; break;
+    default:
+        aaNote(st, [NSString stringWithFormat:@"CMAA2 skipped (pixel format %lu)", (unsigned long)src.pixelFormat]);
+        return;
+    }
+    NSString *failure = loadCMAA2(cb.device) ?: prepareCMAA2(cb.device, st, src);
+    id<MTLTexture> color = failure || view == src.pixelFormat ? src : [src newTextureViewWithPixelFormat:view];
+    if (!color) failure = @"CMAA2 off (no sRGB view of the drawable)";
+    if (failure) { st.aaFailed = YES; aaNote(st, failure); return; }
+    struct { uint32_t candCap, itemCap, locCap, headsW, w, h; } caps = {
+        (uint32_t)(st.aaCands.length / 4), (uint32_t)(st.aaItems.length / 8), (uint32_t)(st.aaLocs.length / 4),
+        (uint32_t)st.aaEdges.width, (uint32_t)src.width, (uint32_t)src.height};
+    MTLSize one = MTLSizeMake(1, 1, 1);
+    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+    [ce setTexture:color atIndex:0]; [ce setTexture:st.aaEdges atIndex:1];
+    [ce setBuffer:st.aaCtrl offset:0 atIndex:0]; [ce setBuffer:st.aaCands offset:0 atIndex:1];
+    [ce setBuffer:st.aaLocs offset:0 atIndex:2]; [ce setBuffer:st.aaItems offset:0 atIndex:3];
+    [ce setBuffer:st.aaHeads offset:0 atIndex:4]; [ce setBuffer:st.aaArgs offset:0 atIndex:5];
+    [ce setBytes:&caps length:sizeof caps atIndex:6];
+    [ce setComputePipelineState:aaEdgesPS];
+    [ce dispatchThreadgroups:MTLSizeMake((caps.w + 27) / 28, (caps.h + 27) / 28, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+    [ce setComputePipelineState:aaArgsPS];
+    [ce dispatchThreadgroups:MTLSizeMake(2, 1, 1) threadsPerThreadgroup:one];
+    [ce setComputePipelineState:aaProcessPS];
+    [ce dispatchThreadgroupsWithIndirectBuffer:st.aaArgs indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    [ce setComputePipelineState:aaArgsPS];
+    [ce dispatchThreadgroups:MTLSizeMake(1, 2, 1) threadsPerThreadgroup:one];
+    [ce setComputePipelineState:aaApplyPS];
+    [ce dispatchThreadgroupsWithIndirectBuffer:st.aaArgs indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(4, 32, 1)];
+    [ce endEncoding];
+}
+
 /* Test-only: the 120th upscaled frame of a layer as a PPM (BGRA8 only). */
 static void dumpFrame(id<MTLCommandBuffer> cb, id<MTLTexture> t, MNLayerState *st)
 {
@@ -200,9 +315,10 @@ static BOOL upscaleInto(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable, v
     MNLayerState *st = stateFor(layer);
     st.frames += 1;
     if (st.frames % 120 == 0) refreshScale(layer, st);  // the window may have moved to another screen
+    antialias(cb, src, st);  // on the game's own frame: before the upscale, or the frame presented as it is
     if (!wantsUpscale(layer, st, CGSizeMake(src.width, src.height))) {
         if (st.overlay) removeOverlay(st);
-        if (st.scale > 0 && !st.linear && !st.hdr) note(st, @"pass-through (full size)");
+        if (st.scale > 0 && !st.linear && !st.hdr) note(st, noMetalFX ? @"pass-through (MetalFX off)" : @"pass-through (full size)");
         return NO;
     }
     if (src.framebufferOnly) return NO;  // switched this frame: the next drawable is readable
@@ -282,7 +398,7 @@ static id<CAMetalDrawable> mnNextDrawable(CAMetalLayer *self, SEL _cmd)
     if (objc_getAssociatedObject(self, kIsOverlay)) return origNextDrawable(self, _cmd);
     MNLayerState *st = stateFor(self);
     if (!st.hdr && isHDR(self)) { st.hdr = YES; note(st, @"left alone (HDR/extended-range layer)"); }
-    if (wantsUpscale(self, st, self.drawableSize) && self.framebufferOnly) self.framebufferOnly = NO;
+    if ((wantsUpscale(self, st, self.drawableSize) || (postAA && !st.hdr)) && self.framebufferOnly) self.framebufferOnly = NO;
     id<CAMetalDrawable> drawable = origNextDrawable(self, _cmd);
     if (self.device) hookPresent(self.device);
     return drawable;
@@ -293,6 +409,9 @@ __attribute__((constructor)) static void mnInit(void)
     const char *scale = getenv("MACNEUTRON_PRESENT_SCALE");
     dumpPath = getenv("MACNEUTRON_PRESENT_DUMP");
     scaleOverride = scale ? atof(scale) : 0;
+    const char *aa = getenv("MACNEUTRON_POST_AA"), *noFX = getenv("MACNEUTRON_NO_METALFX");
+    postAA = aa && !strcmp(aa, "cmaa2");
+    noMetalFX = noFX && !strcmp(noFX, "1");
     Method m = class_getInstanceMethod(CAMetalLayer.class, @selector(nextDrawable));
     if (m) origNextDrawable = (void *)method_setImplementation(m, (IMP)mnNextDrawable);
 }

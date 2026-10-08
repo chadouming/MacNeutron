@@ -66,9 +66,10 @@ public struct Launcher: Sendable {
         var env = LaunchEnvironment.build(base: environment, context: context, backend: backend, logging: logging)
         let steamBridge = usesSteamBridge(request.verb, env)
         if steamBridge { addSteamClient(to: &env) }
-        // The MetalFX presenter inside wine.app reads this; only the game's verbs ask for it.
-        if request.verb == .run || request.verb == .waitforexitandrun, env["MACNEUTRON_NO_METALFX"] != "1",
-           env["MACNEUTRON_PRESENT"] == nil {
+        // The MetalFX presenter inside wine.app reads this; only the game's verbs ask for it. With MetalFX off it still
+        // runs for post-AA, and reads MACNEUTRON_NO_METALFX itself to skip only its upscaling.
+        if request.verb == .run || request.verb == .waitforexitandrun,
+           env["MACNEUTRON_NO_METALFX"] != "1" || env["MACNEUTRON_POST_AA"] == "cmaa2", env["MACNEUTRON_PRESENT"] == nil {
             env["MACNEUTRON_PRESENT"] = "1"
         }
         if let gameLog { writeHeader(to: gameLog, request: request, environment: env) }

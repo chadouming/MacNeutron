@@ -69,3 +69,9 @@ private let context = try! CompatContext(environment: ["STEAM_COMPAT_DATA_PATH":
     #expect(record(["MACNEUTRON_PRECACHE": "0"], .dxmt) == nil)
     #expect(record(["DXMT_PIPELINE_RECORD": "/mine"], .dxmt) == "/mine")
 }
+
+@Test func postAntiAliasingReachesWine() {
+    let env = LaunchEnvironment.build(base: GameSettings(postAA: "cmaa2").environment, context: context, backend: .dxmt,
+                                      logging: false)
+    #expect(env["MACNEUTRON_POST_AA"] == "cmaa2")
+}

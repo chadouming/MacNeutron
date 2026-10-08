@@ -291,6 +291,30 @@ Copyright (c) 2026 Intel Corporation
 SPDX-License-Identifier: MIT
 ```
 
+## CMAA2 (in MacNeutron: `libmacneutron-present.metallib`)
+
+The presenter's post-process anti-aliasing, `presenter/cmaa2.metal` in the MacNeutron repository, is our Metal port of
+Intel's Conservative Morphological Anti-Aliasing 2.0 (CMAA2), `Projects/CMAA2/CMAA2/CMAA2.hlsl` from
+`https://github.com/GameTechDev/CMAA2.git` at commit `071c6b0`. We modified it (the port, and the changes listed in the
+file's header). It is under the Apache License 2.0, whose text is `macneutron/CMAA2-LICENSE.txt`, not the MIT licence
+below. The notice it carries:
+
+```
+Copyright (c) 2018, Intel Corporation
+
+Licensed under the Apache License, Version 2.0 ( the "License" );
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
 ## The MIT licence
 
 The terms of the MIT entries above, with each entry's copyright line (the text of FEX's `LICENSE`):
