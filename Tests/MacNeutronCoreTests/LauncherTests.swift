@@ -230,6 +230,7 @@ private func i386Exe(named name: String) throws -> String {
     try write("{ not json", to: f.launcher.settings.directory.appending(path: "42.json"))
     #expect(f.launcher.launch(["run", "/g/Game.exe"], environment: f.env) == 0)
     #expect(try String(contentsOf: f.launcher.log.launcherLog, encoding: .utf8).contains("ignoring unreadable game settings for 42"))
+    #expect(f.runner.calls.last?.environment["DXMT_MAX_ANISOTROPY"] == "16")  // the defaults still apply
 }
 
 @Test func gameGoesThroughSteamExeWhenTheBridgeIsInstalled() throws {

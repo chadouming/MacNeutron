@@ -25,7 +25,7 @@
 @property NSUInteger frames;
 @property BOOL hdr, dumped;            // hdr: permanent for this layer
 @property CGSize refusedIn, refusedOut; // the sizes MetalFX last refused: the linear filter while they last
-@property BOOL refusedAll;             // MetalFX refused whatever the size (GPU, pixel format): for the session
+@property BOOL refusedAll;             // MetalFX refused whatever the size (GPU, pixel format): for this layer
 @property NSString *lastNote;
 // CMAA2's working set, for one frame size; aaFailed: off for this layer
 @property id<MTLTexture> aaEdges;
@@ -161,7 +161,7 @@ static void placeOverlay(CAMetalLayer *layer, MNLayerState *st, CGSize target)
 }
 
 /* MetalFX refused this drawable size for this target: Core Animation's linear filter until either changes, then MetalFX
- * again; or for the session when the refusal doesn't depend on the size (`all`). The filter stays: an upscaled frame
+ * again; or for this layer when the refusal doesn't depend on the size (`all`). The filter stays: an upscaled frame
  * shows only the overlay, and a full-size one isn't magnified. */
 static void useLinear(CAMetalLayer *layer, MNLayerState *st, NSString *reason, BOOL all, CGSize drawable, CGSize target)
 {

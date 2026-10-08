@@ -1,6 +1,7 @@
 # MacNeutron: XeSS answered by MetalFX
 
-Status: approved by the maintainer (2026-10-05).
+Status: approved by the maintainer (2026-10-05). Implemented 2026-10-08 (the 30-minute soak waived by the maintainer;
+Task 5 in docs/testing/acceptance-arm64-release.md).
 
 ## 1. Goal
 

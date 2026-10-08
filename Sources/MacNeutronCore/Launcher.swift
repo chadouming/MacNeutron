@@ -47,6 +47,8 @@ public struct Launcher: Sendable {
             environment = try withSettings(environment, appID: context.appID)
         } catch {
             log.append("note: ignoring unreadable game settings for \(context.appID): \(error)")
+            // The defaults still apply (16x anisotropic filtering is a default, not an empty setting).
+            environment = GameSettings().environment.merging(environment) { _, launchOption in launchOption }
         }
         let logging = environment["MACNEUTRON_LOG"] == "1" || environment["MACNEUTRON_LOG"] == "2"
         let gameLog = logging ? log.gameLog(appID: context.appID) : nil

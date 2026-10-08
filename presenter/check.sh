@@ -112,7 +112,7 @@ expect "a MetalFX refusal falls back for that size only, asked once" \
 refuse=all
 run_loop refuseall 1 1 1280 720 640 360 300 0 resize=150:960x540
 refuse=
-expect "a refusal whatever the size lasts for the session, asked once" \
+expect "a refusal whatever the size lasts for the layer, asked once" \
   "$(count 'macneutron-present: linear filter (refused for the test)' refuseall):$(count 'macneutron-present: MetalFX' refuseall):$(count 'macneutron-present: test refusal' refuseall)" "1:0:1"
 
 run_loop grow 1 1 1280 720 640 360 300 0 grow=150

@@ -756,7 +756,9 @@ plus the bar colour.
 
 ## Follow-ups before the push: anisotropic filtering, fullscreen, presenter, logging, gradient bias (XeSS plan, Task FU)
 
-2026-10-08. DXMT patches 0034-0037; Wine unchanged (0030). Each item has a row that failed first.
+2026-10-08. DXMT patches 0034-0037; Wine unchanged (0030). Each item has a row that failed first, except 0035 (no
+second display here) and the framebufferOnly gate (the test layers already have it off); the BGR10A2 rows are new
+coverage.
 - **Anisotropic filtering 16x by default** (maintainer's decision). `GameSettings.anisotropy`: none (16x), `game` (no
   override), `4`, `8`, `16`; anything else runs at 16x. It becomes `DXMT_MAX_ANISOTROPY` (DXMT 0030's floor on
   trilinear, non-comparison samplers; unset for `game`), under the launch options as every setting. Games window:
@@ -783,7 +785,7 @@ plus the bar colour.
   emulated` before, `guard not emulated` after).
 - **Presenter**: a refused size asks MetalFX once (`test refusal at 1280x720` 1, before 0: no count); a refusal that
   doesn't depend on the size (no MetalFX on the GPU, a pixel format it can't scale; `MACNEUTRON_PRESENT_REFUSE=all`)
-  lasts for the session (`linear filter` 1, `MetalFX` 0; before: 0, 2). CMAA2: framebufferOnly is turned off only for
+  lasts for the layer (`linear filter` 1, `MetalFX` 0; before: 0, 2). CMAA2: framebufferOnly is turned off only for
   the 8- and 10-bit layers CMAA2 handles; every frames run counts pixels whose alpha changed (0; a mutant writing
   alpha 0 counts 290673); BGR10A2 has its rows now. `postAA` values other than `cmaa2` are off in the launch variables
   and the Games window.
@@ -799,3 +801,19 @@ dispatch measured alone ten times its usual ~134000 ticks while other lanes ran)
 133833-220208) and the whole check passed on the rerun. `make presenter-check` 62 ok, `make test` 251 tests,
 `make smoke` 15 PASS, `make bridge-check` 15 ok and `PASS probe redaction`, `licences_test` PASS. DXMT 37 of 37 and
 Wine 30 of 30 apply from the pins to the trees' exact trees.
+
+## The maintainer's gate (XeSS plan, Task 5)
+
+2026-10-07/08, SMITE 2 in a scratch copy on the built-in display (the external display was unavailable; the maintainer
+accepted judging there), the dev runtime of each step, Steam bridge on, practice and lobby only.
+
+- **Image:** XeSS Balanced through the bridge at 1728x1117 and, with RetinaMode, 3456x2234; then emulated exclusive
+  Fullscreen (EmulateModeset) at 1728x1080 and 2560x1440 with black letterbox bars, minimise on Cmd-Tab and a scaled
+  return, and 16x anisotropic filtering: "looked pretty good". CMAA2 on SMITE's 10-bit swapchain (no 8-bit step):
+  "Looks good to me". The earlier "textures are blurry" report traced to Metal's anisotropic filter cancelling
+  Unreal's negative LOD bias on angled surfaces; 16x by default (Task FU) moves that loss to much steeper angles.
+- **Memory:** several 10-15-minute runs, footprint flat after the lobby load (about 6.0-6.5 GB, GPU 0.8-1.1 GB) and
+  clean quits. The 30-minute soak was waived by the maintainer (Ruling 42); one attempt recorded nothing because the
+  sampler's process pattern didn't match Wine's command line.
+- **Upscale cost:** 0.93-1.01 ms at 1728x1117 output and 1.76 ms at ~2560x1440 (Tasks 3, 3c): under the spec's 5 ms.
+
