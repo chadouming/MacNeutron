@@ -16,7 +16,7 @@
 //
 // Conservative Morphological Anti-Aliasing, version: 2.3
 //
-// Author(s):       Filip Strugar
+// Author(s):       Filip Strugar (filip.strugar@intel.com)
 //
 // More info:       https://github.com/GameTechDev/CMAA2
 //
