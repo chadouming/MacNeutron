@@ -356,8 +356,8 @@ steam.exe (Contents/Resources/steam.exe), MacNeutron's own Windows-side Steam st
 its mingw-w64 runtime: llvm-mingw's licence is LICENSE.TXT and the runtime's notices COPYING.MinGW-w64-runtime.txt,
 beside this file.
 
-The runtime, Contents/Helpers/wine.app (Wine, FEX, DXMT, FreeType, gnutls, nettle, GMP, LLVM, lsteamclient and
-MacNeutron's MetalFX presenter), carries every component's licence and the exact sources it is built from in
+The runtime, Contents/Helpers/wine.app (Wine, FEX, DXMT, FreeType, gnutls, nettle, GMP, FFmpeg, LLVM, lsteamclient
+and MacNeutron's MetalFX presenter), carries every component's licence and the exact sources it is built from in
 Contents/Helpers/wine.app/Contents/Resources/licenses/ (README there first; SOURCE names each commit).
 EOF
   out=$(build_paths "$A")  # no build path ships (Ruling 20)

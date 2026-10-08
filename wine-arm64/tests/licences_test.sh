@@ -3,8 +3,8 @@
 # Prints MISSING <what> per gap, then PASS or FAIL. Read-only. BUILD_DIR replaces build/ (FEX's External list).
 # --app <MacNeutron.app> (arm64 release spec §7.1, gate R4): the app's own licences (MIT, llvm-mingw's for steam.exe,
 # equal to wine.app's copies, a README pointing into wine.app), then the check above on its Contents/Helpers/wine.app.
-# --self-test proves it red on copies in $TMPDIR: a licence file deleted (FEX's, MacNeutron's, CMAA2's), an extra FEX
-# external.
+# --self-test proves it red on copies in $TMPDIR: a licence file deleted (FEX's, MacNeutron's, CMAA2's), NOTICES.md
+# without its FFmpeg section (the bundle has to ship FFmpeg), an extra FEX external.
 # ponytail: a flat path list, no manifest format; add one when a second bundle needs the same list.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -63,6 +63,14 @@ check() {  # check <wine.app> <build dir>
   fi
   if has 'libfreetype*' || has 'libgnutls*'; then
     for n in FREETYPE GNUTLS NETTLE GMP; do key "${n}_URL"; key "${n}_SHA256"; done
+  fi
+  # FFmpeg (video playback spec §6): its own entries, matched by FFmpeg's name in them, not by any holder another
+  # component shares.
+  if has 'libav*' || has 'libsw*'; then
+    for f in COPYING.LGPLv2.1 LICENSE.md; do [ -s "$L/ffmpeg/$f" ] || miss "ffmpeg/$f"; done
+    g -q '^## FFmpeg ' "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md section for FFmpeg"
+    g -q '^FFmpeg [0-9.]* (' "$L/README" 2> /dev/null || miss "FFmpeg entry in README"
+    key FFMPEG_URL; key FFMPEG_SHA256
   fi
   if has lsteamclient.so; then
     for f in LICENSE NOTE; do [ -s "$L/lsteamclient/$f" ] || miss "lsteamclient/$f"; done
@@ -125,6 +133,10 @@ cp -c "$APP/Contents/Resources/licenses/macneutron/LICENSE" "$T/wine.app/Content
 rm "$T/wine.app/Contents/Resources/licenses/macneutron/CMAA2-LICENSE.txt"
 red "a copy without macneutron/CMAA2-LICENSE.txt" licenses/macneutron/CMAA2-LICENSE.txt
 cp -c "$APP/Contents/Resources/licenses/macneutron/CMAA2-LICENSE.txt" "$T/wine.app/Contents/Resources/licenses/macneutron/"
+N="$T/wine.app/Contents/Resources/licenses/NOTICES.md"
+sed -i '' 's/^## FFmpeg /## FFmpeg-less /' "$N"
+red "a NOTICES.md without its FFmpeg section" "NOTICES.md section for FFmpeg"
+cp -c "$APP/Contents/Resources/licenses/NOTICES.md" "$N"
 mkdir "$T/b/wine-arm64-src/fex-ec/External/vixl"
 red "an extra External/vixl" "a licence decision for FEX External/vixl"
 echo "PASS licences_test self-test"

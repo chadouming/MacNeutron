@@ -7,7 +7,7 @@
 #   SOURCE lists, each archived from the submodule into its place in the tree (git archive leaves submodules empty);
 # - lsteamclient.tar: the files of its clean sparse worktree (its blob-less clone can't be git archived offline):
 #   Proton's lsteamclient/ without the Steamworks SDK folders and gen_wrapper.py, exactly what the build used;
-# - the four pinned tarballs (FreeType, gnutls, nettle, GMP) as downloaded;
+# - the five pinned tarballs (FreeType, gnutls, nettle, GMP, FFmpeg) as downloaded;
 # - SOURCES.txt: tree, pin, applied commit, patch count, file. release/verify-sources.sh checks it all (R5).
 # release.sh calls it after its refusals: every tree applied, the repository clean. BUILD_DIR replaces build/.
 set -eu
@@ -71,7 +71,7 @@ COPYFILE_DISABLE=1 tar -cf "$W/lsteamclient.tar" --no-mac-metadata --no-xattrs -
 rm "$W/lsteamclient.list"
 row lsteamclient "$LSTEAMCLIENT_COMMIT" "$a" "$n" lsteamclient.tar
 
-for u in "$FREETYPE_URL" "$GNUTLS_URL" "$NETTLE_URL" "$GMP_URL"; do
+for u in "$FREETYPE_URL" "$GNUTLS_URL" "$NETTLE_URL" "$GMP_URL" "$FFMPEG_URL"; do
   cp -c "$S/${u##*/}" "$W/" || die "no ${u##*/} in $S"
 done
 

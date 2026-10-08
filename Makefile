@@ -1,4 +1,4 @@
-.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check
+.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check media-check
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -121,9 +121,13 @@ WA_FLAGS_x64-bench = -O2
 WA_FLAGS_arm64-fonts-tls = -lgdi32 -lsecur32 -ldwrite -lcrypt32
 WA_FLAGS_arm64-x18v = -lntdll
 WA_FLAGS_arm64-x18path = -lntdll
+WA_FLAGS_arm64-media-mf = -lmfplat -lmfreadwrite -lole32
+# The media programs (video playback spec §8) built for x64 too, from the same source: games are x64, run under FEX.
+WA_MEDIA_X64 = $(patsubst wine-arm64/tests/arm64-media-%.c,build/wine-arm64-tests/x64-media-%.exe,\
+	$(wildcard wine-arm64/tests/arm64-media-*.c))
 wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
-	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) build/wine-arm64-tests/x64-x18path.exe build/wine-arm64-tests/winshot
+	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) $(WA_MEDIA_X64) build/wine-arm64-tests/x64-x18path.exe build/wine-arm64-tests/winshot
 build/wine-arm64-tests/arm64-%.exe: wine-arm64/tests/arm64-%.c
 	$(MINGW_BIN)/aarch64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
 build/wine-arm64-tests/arm64ec-%.exe: wine-arm64/tests/arm64ec-%.c
@@ -135,6 +139,8 @@ build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.cpp
 # arm64-x18path's source built for x64 too: its paths under FEX (ship-base spec §9, T2).
 build/wine-arm64-tests/x64-x18path.exe: wine-arm64/tests/arm64-x18path.c
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-x18path)
+build/wine-arm64-tests/x64-media-%.exe: wine-arm64/tests/arm64-media-%.c
+	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-media-$*)
 build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
 	/usr/bin/clang -O1 -o $@ $< -framework CoreGraphics -framework ImageIO -framework CoreFoundation
 
@@ -149,3 +155,9 @@ wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter 
 	sh wine-arm64/tests/licences_test.sh build/wine-arm64/wine.app
 	sh wine-arm64/tests/licences_test.sh --self-test build/wine-arm64/wine.app
 	sh wine-arm64/check.sh
+
+# Video playback in games (docs/superpowers/specs/2026-10-08-macneutron-video-playback-design.md §8): the media
+# programs on wine.app, arm64 and x64 under FEX, in a fresh prefix, on Wine's own test clips read in place; the media-*
+# steps of wine-arm64/check.sh, which its full run leaves out until they pass. Needs the signing variables.
+media-check: wine-arm64 wine-arm64-tests
+	sh wine-arm64/check.sh media-mf

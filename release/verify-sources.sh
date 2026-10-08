@@ -90,7 +90,7 @@ if [ -n "$a" ] && [ -f "$D/lsteamclient.tar" ]; then
     "gen_wrapper.py ($(count "$got") files, want $(count "$want"))"
 fi
 
-for t in FREETYPE GNUTLS NETTLE GMP; do
+for t in FREETYPE GNUTLS NETTLE GMP FFMPEG; do
   u=$(key "${t}_URL") f=
   [ -n "$u" ] && f="$D/${u##*/}"
   if [ -z "$f" ] || [ ! -f "$f" ]; then bad "no $t tarball (${u:-no ${t}_URL in SOURCE})"; continue; fi

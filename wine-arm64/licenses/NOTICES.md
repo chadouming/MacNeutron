@@ -3,8 +3,8 @@
 `wine.app` contains code whose licence notice is in its source files, not in a licence file of its own. Each section
 names the component, the binaries it is compiled into, the file the notice is quoted from (in the source tree pinned in
 `SOURCE`), and the notice itself. The licence files of the components (`wine/`, `fex/`, `llvm/`, `llvm-mingw/`,
-`freetype/`, `gnutls/`, `nettle/`, `gmp/`, `lsteamclient/`, `macneutron/`, and `../DXMT/` for DXMT) are beside this
-file; `README` says where each component's source is.
+`freetype/`, `gnutls/`, `nettle/`, `gmp/`, `ffmpeg/`, `lsteamclient/`, `macneutron/`, and `../DXMT/` for DXMT) are
+beside this file; `README` says where each component's source is.
 
 ## SoftFloat-3e (in FEX: `libarm64ecfex.dll`)
 
@@ -277,6 +277,73 @@ THE COMPUTING RESEARCH LAB OR NEW MEXICO STATE UNIVERSITY BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
 OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
 THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## FFmpeg (in FFmpeg: the `libavutil`, `libavcodec`, `libavformat`, `libswscale` and `libswresample` dylibs)
+
+FFmpeg 8.1.3, from `https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz` unmodified and built with no GPL or nonfree part,
+is under the GNU Lesser General Public License 2.1 or later, whose text is `ffmpeg/COPYING.LGPLv2.1`;
+`ffmpeg/LICENSE.md` names its files under other terms. The notice its files carry, from `libavcodec/avcodec.c`:
+
+```
+This file is part of FFmpeg.
+
+FFmpeg is free software; you can redistribute it and/or
+modify it under the terms of the GNU Lesser General Public
+License as published by the Free Software Foundation; either
+version 2.1 of the License, or (at your option) any later version.
+
+FFmpeg is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public
+License along with FFmpeg; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+```
+
+`libavcodec.62.dylib` contains FFmpeg's `libavcodec/jrevdct.c`, an inverse DCT built in with the video decoders' shared
+DSP code, from the Independent JPEG Group's software (unmodified by us). This software is based in part on the work of
+the Independent JPEG Group. The file's notice:
+
+```
+This file is part of the Independent JPEG Group's software.
+
+The authors make NO WARRANTY or representation, either express or implied,
+with respect to this software, its quality, accuracy, merchantability, or
+fitness for a particular purpose.  This software is provided "AS IS", and
+you, its user, assume the entire risk as to its quality and accuracy.
+
+This software is copyright (C) 1991, 1992, Thomas G. Lane.
+All Rights Reserved except as specified below.
+
+Permission is hereby granted to use, copy, modify, and distribute this
+software (or portions thereof) for any purpose, without fee, subject to
+these conditions:
+(1) If any part of the source code for this software is distributed, then
+this README file must be included, with this copyright and no-warranty
+notice unaltered; and any additions, deletions, or changes to the original
+files must be clearly indicated in accompanying documentation.
+(2) If only executable code is distributed, then the accompanying
+documentation must state that "this software is based in part on the work
+of the Independent JPEG Group".
+(3) Permission for use of this software is granted only if the user accepts
+full responsibility for any undesirable consequences; the authors accept
+NO LIABILITY for damages of any kind.
+
+These conditions apply to any software derived from or based on the IJG
+code, not just to the unmodified library.  If you use our work, you ought
+to acknowledge us.
+
+Permission is NOT granted for the use of any IJG author's name or company
+name in advertising or publicity relating to this software or products
+derived from it.  This software may be referred to only as "the Independent
+JPEG Group's software".
+
+We specifically permit and encourage the use of this software as the basis
+of commercial products, provided that all warranty or liability claims are
+assumed by the product vendor.
 ```
 
 ## Intel XeSS headers (in Wine: `libxess.dll`)

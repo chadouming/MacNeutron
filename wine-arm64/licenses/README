@@ -67,6 +67,15 @@ GMP 6.3.0 (linked statically into libgnutls.30.dylib)
   Source: https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz (SHA-256 GMP_SHA256), unmodified, pinned and built as FreeType
   is.
 
+FFmpeg 8.1.3 (libavutil.60.dylib, libavcodec.62.dylib, libavformat.62.dylib, libswscale.9.dylib,
+libswresample.6.dylib: winedmo's demuxers, and the audio and video decoders macOS doesn't provide)
+  Licence: LGPL-2.1-or-later, ffmpeg/COPYING.LGPLv2.1; ffmpeg/LICENSE.md names the files under other terms. Built with
+  no GPL or nonfree part and without FFmpeg's own H.264, HEVC and AAC decoders. Its notice, and the Independent JPEG
+  Group's for the inverse DCT in libavcodec: NOTICES.md. The dylibs are separate files, linked by @rpath, and the
+  loader accepts libraries signed by anyone, so a rebuilt FFmpeg can replace them.
+  Source: https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz (SHA-256 FFMPEG_SHA256), unmodified, pinned and built as
+  FreeType is, with the configure options in the repository's wine-arm64/build.sh.
+
 lsteamclient (lsteamclient.dll and lsteamclient.so: the Steam bridge, from Windows games' Steam API to Mac Steam's
 steamclient.dylib)
   Licence: Valve's Steamworks SDK licence, lsteamclient/LICENSE (lsteamclient is Steamworks-SDK-derived); its cxx.h is

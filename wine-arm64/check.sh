@@ -45,6 +45,11 @@ NEEDS_DXMT="dxmt-present dxmt-arm64ec dxmt-x64"
 NEEDS_PREFIX="pages arm64 isec g3-cpu fex $G1 g2-litmus viewec wxflip wxflip-x64 msync x18 g5-jit fonts-tls steam-bridge"
 NEEDS_PREFIX="$NEEDS_PREFIX dxmt $NEEDS_DXMT g4-bench"
 NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync x18 g5-jit steam-bridge $NEEDS_DXMT g4-bench"
+# The media steps (video playback spec §8): run by name (make media-check), each its arm64 program and its x64 twin
+# under FEX; not in the full run while they are red. Each later task adds its step here.
+MEDIA="media-mf"
+NEEDS_PREFIX="$NEEDS_PREFIX $MEDIA"
+NEEDS_FEX="$NEEDS_FEX $MEDIA"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the reference's
@@ -576,6 +581,35 @@ dxmt_lane_cmd() {
   [ -z "${5:-}" ] || grep -qxF "$5" "$l" || { echo "$(grep -m 1 '^skip the FSR 3' "$l" || echo "no '$5' line")"; return 1; }
 }
 
+# Video playback (video playback spec §8): Wine's own test clips, read in place by their Z: path. clip <path under
+# dlls/> <sha256>: the clip's Z: path, or a failure naming it when Wine's tree holds another file there.
+WD="$B/wine-arm64-src/wine/dlls"
+clip() {
+  [ "$(shasum -a 256 "$WD/$1" 2> /dev/null | cut -d ' ' -f 1)" = "$2" ] \
+    || { echo "dlls/$1 is not the pinned clip"; return 1; }
+  echo "Z:$WD/$1"
+}
+# media_run <step> <row> <args...>: the row in the step's arm64 program, then in its x64 twin under FEX, both always;
+# the last line names every lane that failed, with the program's own FAIL line.
+media_run() {
+  s=$1; shift
+  fails=
+  for t in "arm64-$s" "x64-$s"; do
+    out=$(exe_cmd "$t" "$@") || fails="$fails${fails:+; }$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 "^FAIL $t" \
+      || echo "$t: $(echo "$out" | tail -n 1)")"
+    echo "$out"
+  done
+  [ -z "$fails" ] || { echo "FAIL $s: $fails"; return 1; }
+}
+# media-mf: the source reader on test.mp4 (H.264 + AAC). DisableGstByteStreamHandler, set in this prefix until Wine's
+# wine.inf sets it: MP4 files go to winedmo, not to the GStreamer handler, which this Wine doesn't build.
+media_mf_cmd() {
+  mp4=$(clip mfreadwrite/tests/test.mp4 485a145b3d3a82fe3356c574899b13467a8672c0bbfcf8a5d51b6bedb256408f) \
+    || { echo "$mp4"; return 1; }
+  wine_run reg add 'HKCU\Software\Wine\MediaFoundation' /v DisableGstByteStreamHandler /t REG_DWORD /d 1 /f || return 1
+  media_run media-mf open "$mp4"
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -610,13 +644,14 @@ run_step() {
     dxmt-x64) step dxmt-x64 3600 dxmt_lane_cmd x64 AMD64 "$B/dxmt-tests" "$B/presenter/present_loop.exe" \
       'ok   the FSR 3 swapchain proxy presents on our DXMT'; grep '^info ' "$WORK/dxmt-x64.log" ;;
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
+    media-mf) step media-mf 120 media_mf_cmd ;;
     *) die "no runner for $1" ;;
   esac
 }
 
 want="${*:-$STEPS}"
 for s in $want; do
-  case " $STEPS " in *" $s "*) ;; *) die "no step named $s (steps: $STEPS)" ;; esac
+  case " $STEPS $MEDIA " in *" $s "*) ;; *) die "no step named $s (steps: $STEPS $MEDIA)" ;; esac
 done
 for s in $want; do
   case " $NEEDS_FEX " in *" $s "*) want="fex $want" ;; esac
@@ -636,6 +671,6 @@ rm -rf "$WORK"
 mkdir -p "$WORK/Application Support"
 # No staged bundle: the signature step says so.
 if [ -d "$STAGED" ]; then cp -cR "$STAGED" "$TOOL"; fi
-for s in $STEPS; do
+for s in $STEPS $MEDIA; do
   case " $want " in *" $s "*) run_step "$s" ;; esac
 done

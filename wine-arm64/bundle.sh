@@ -84,6 +84,10 @@ put "$DXMT_IN" translator "$R/DXMT/"
 # their LC_RPATH @loader_path/.
 U="$R/lib/wine/aarch64-unix"
 for l in libfreetype.6.dylib libgnutls.30.dylib; do put "$DEPS/lib" "$l" "$U/"; done
+# FFmpeg (video playback spec §6): beside winedmo.so, which links it and finds it through the same @loader_path/.
+for l in libavutil.60.dylib libavcodec.62.dylib libavformat.62.dylib libswscale.9.dylib libswresample.6.dylib; do
+  put "$DEPS/lib" "$l" "$U/"
+done
 # The MetalFX presenter (arm64 release spec §5.3): winemetal.so loads it from its own folder (DXMT patch 0002), and it
 # loads its CMAA2 shaders from beside itself.
 for f in libmacneutron-present.dylib libmacneutron-present.metallib; do put "$B/wine-arm64-src/presenter" "$f" "$U/"; done
@@ -114,7 +118,7 @@ put "$B/dxmt-src/llvm-mingw" aarch64-w64-mingw32/share/mingw32/COPYING.MinGW-w64
 # From the unpacked tarballs. libgnutls.30.dylib holds nettle, gmp and gnutls's own copy of libunistring (LGPL-3+):
 # gnutls's tarball has no LGPLv3 text, so its folder gets nettle's (the same GNU texts).
 DS="$S/deps-src"
-mkdir -p "$L/freetype" "$L/gnutls" "$L/nettle" "$L/gmp"
+mkdir -p "$L/freetype" "$L/gnutls" "$L/nettle" "$L/gmp" "$L/ffmpeg"
 put "$DS/freetype" LICENSE.TXT "$L/freetype/"
 put "$DS/freetype" docs/FTL.TXT "$L/freetype/"
 # The BDF and PCF drivers' X11-style licence, which LICENSE.TXT points to.
@@ -127,6 +131,8 @@ put "$DS/gnutls" lib/inih/LICENSE.txt "$L/gnutls/inih-LICENSE.txt"
 for f in COPYING.LESSERv3 COPYINGv3; do
   put "$DS/nettle" "$f" "$L/gnutls/"; put "$DS/nettle" "$f" "$L/nettle/"; put "$DS/gmp" "$f" "$L/gmp/"
 done
+# FFmpeg's LGPL-2.1 text and its LICENSE.md, which says which files are under other terms.
+for f in COPYING.LGPLv2.1 LICENSE.md; do put "$DS/ffmpeg" "$f" "$L/ffmpeg/"; done
 # lsteamclient (ship-base spec §7): Valve's Steamworks SDK licence, and a note for the one file under another.
 mkdir -p "$L/lsteamclient"
 put "$S/lsteamclient/lsteamclient" LICENSE "$L/lsteamclient/"

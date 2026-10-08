@@ -1,10 +1,10 @@
 #!/bin/sh
 # Builds MacNeutron's arm64 Wine (11.19 + wine-arm64/patches/wine) into build/wine-arm64-src/wine-build, against
-# FreeType and gnutls built from wine-arm64/deps.pins' tarballs into deps, FEX (+ wine-arm64/patches/fex) into fex-ec
-# and fex-unixlib, DXMT (dxmt/pins' commit + wine-arm64/patches/dxmt) for ARM64X into dxmt-install, and Proton's
+# FreeType, gnutls and FFmpeg built from wine-arm64/deps.pins' tarballs into deps, FEX (+ wine-arm64/patches/fex) into
+# fex-ec and fex-unixlib, DXMT (dxmt/pins' commit + wine-arm64/patches/dxmt) for ARM64X into dxmt-install, and Proton's
 # lsteamclient (deps.pins' commit + wine-arm64/patches/lsteamclient) as one of Wine's DLLs, then stages the signed
-# build/wine-arm64/wine.app (native arm64 spec §5.4, §6.3; arm64 DXMT spec §4; ship-base spec §5, §7). Never installs
-# tools. Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE.
+# build/wine-arm64/wine.app (native arm64 spec §5.4, §6.3; arm64 DXMT spec §4; ship-base spec §5, §7; video playback
+# spec §6). Never installs tools. Needs MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE.
 # BUILD_DIR replaces build/ (tests).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -163,16 +163,18 @@ else
   fi
 fi
 
-# 3. FreeType and gnutls (ship-base spec §5), which Wine dlopens, from the pinned tarballs into $DEPS: gmp and nettle
-#    static and folded into libgnutls.30.dylib, FreeType without PNG, HarfBuzz or Brotli. Nothing outside /usr/lib and
-#    /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins, the configure options or the step's
-#    environment and commands change (their hash is deps/.complete); deps-src stays, bundle.sh copies the licence texts
-#    from it.
-DEPS_TARS="gmp:$GMP_URL nettle:$NETTLE_URL gnutls:$GNUTLS_URL freetype:$FREETYPE_URL"  # <name>:<url>, build order
+# 3. FreeType and gnutls (ship-base spec §5), which Wine dlopens, and FFmpeg (video playback spec §6), which winedmo
+#    links, from the pinned tarballs into $DEPS: gmp and nettle static and folded into libgnutls.30.dylib, FreeType
+#    without PNG, HarfBuzz or Brotli, FFmpeg's five libraries LGPL and with only the components below. Nothing outside
+#    /usr/lib and /System gets in: pkg-config sees only $DEPS. Redone when the tarballs' pins, the configure options or
+#    the step's environment and commands change (their hash is deps/.complete); deps-src stays, bundle.sh copies the
+#    licence texts from it.
+DEPS_TARS="gmp:$GMP_URL nettle:$NETTLE_URL gnutls:$GNUTLS_URL freetype:$FREETYPE_URL ffmpeg:$FFMPEG_URL"  # build order
 fetch "$GMP_URL" "$SRC/${GMP_URL##*/}" "$GMP_SHA256"
 fetch "$NETTLE_URL" "$SRC/${NETTLE_URL##*/}" "$NETTLE_SHA256"
 fetch "$GNUTLS_URL" "$SRC/${GNUTLS_URL##*/}" "$GNUTLS_SHA256"
 fetch "$FREETYPE_URL" "$SRC/${FREETYPE_URL##*/}" "$FREETYPE_SHA256"
+fetch "$FFMPEG_URL" "$SRC/${FFMPEG_URL##*/}" "$FFMPEG_SHA256"
 conf_gmp="--enable-static --disable-shared --with-pic"
 conf_nettle="--enable-static --disable-shared --disable-documentation"  # PIC is nettle's default
 conf_gnutls="--enable-shared --disable-static --sysconfdir=/etc --with-included-libtasn1 --with-included-unistring
@@ -180,6 +182,25 @@ conf_gnutls="--enable-shared --disable-static --sysconfdir=/etc --with-included-
   --without-leancrypto --disable-nls --disable-tools --disable-cxx --disable-doc --disable-tests --disable-libdane"
 conf_freetype="--enable-shared --disable-static --without-png --without-harfbuzz --without-brotli --with-zlib=yes
   --with-bzip2=yes"
+# FFmpeg's components (video playback spec §5): these, and the build fails unless config_components.h enables exactly
+# these. AAC decodes through AudioToolbox (aac_at), H.264 through VideoToolbox, called by winegstreamer's unix side:
+# FFmpeg's own h264, hevc and aac decoders and its VideoToolbox code stay out.
+ffmpeg_decoder="aac_at h263 indeo5 mp1float mp2float mp3float mpeg1video pcm_f32le pcm_s16le pcm_s24le pcm_s32le pcm_u8
+  vc1 wmalossless wmapro wmav1 wmav2 wmavoice wmv1 wmv2 wmv3"
+ffmpeg_demuxer="asf avi mov mp3 mpegps mpegvideo wav"
+ffmpeg_parser="h264 mpegaudio mpegvideo"
+ffmpeg_bsf="aac_adtstoasc h264_mp4toannexb null"
+ffmpeg_libs="avutil.60 avcodec.62 avformat.62 swscale.9 swresample.6"  # lib<name>.<major>.dylib, what ships
+# shellcheck disable=SC2086  # a list in, a comma list out
+commas() { echo $* | tr ' ' ,; }
+# One option per word: the options are a list. Apple's clang by path (llvm-mingw's clang is first on PATH), @rpath
+# install names (libavformat links libavcodec by them too), no install-time strip (deps_post strips).
+conf_ffmpeg="--arch=aarch64 --target-os=darwin --cc=/usr/bin/clang --enable-shared --disable-static --disable-programs
+  --disable-doc --disable-network --disable-autodetect --disable-everything --disable-iconv --disable-videotoolbox
+  --disable-stripping --disable-avdevice --disable-avfilter --enable-audiotoolbox --enable-swscale --enable-swresample
+  --install-name-dir=@rpath --extra-cflags=-mmacosx-version-min=27.0 --extra-ldflags=-mmacosx-version-min=27.0
+  --enable-decoder=$(commas $ffmpeg_decoder) --enable-demuxer=$(commas $ffmpeg_demuxer)
+  --enable-parser=$(commas $ffmpeg_parser) --enable-bsf=$(commas $ffmpeg_bsf)"
 # The step's environment, its build of one library (in deps-src/<name>, with the options as "$@") and what each built
 # dylib gets after: kept as text, which is both run (eval) and hashed. The text, not its expansion: $DEPS is where
 # .complete lives, and the CPU count is no input.
@@ -187,16 +208,27 @@ conf_freetype="--enable-shared --disable-static --without-png --without-harfbuzz
 deps_env='CC=/usr/bin/clang PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" CPPFLAGS="-I$DEPS/include" LDFLAGS="-L$DEPS/lib"'
 # shellcheck disable=SC2016
 deps_make='./configure --prefix="$DEPS" "$@" && make -j"$(sysctl -n hw.ncpu)" && make install'
+# FFmpeg's: its configure only warns about an option that enables nothing or a component it had to turn off, so either
+# warning stops it; its config.h holds the configure line and data folder, compiled in, so the build folder goes from
+# it before make; make install leaves lib<name>.<major>.<minor>.<micro>.dylib and two links to it, so the file takes
+# the name that ships and lib<name>.dylib, which -l<name> finds, links to it.
+# shellcheck disable=SC2016
+ffmpeg_make='./configure --prefix="$DEPS" "$@" &&
+  ! LC_ALL=C /usr/bin/grep -E "did not match anything|not all dependencies are satisfied" ffbuild/config.log &&
+  sed -i "" "s|$SRC/|/|g" config.h && make -j"$(sysctl -n hw.ncpu)" && make install &&
+  for l in $ffmpeg_libs; do
+    mv "$DEPS/lib/lib$l".*.*.dylib "$DEPS/lib/lib$l.dylib" && ln -sfn "lib$l.dylib" "$DEPS/lib/lib${l%.*}.dylib" || exit
+  done'
 # shellcheck disable=SC2016
 deps_post='strip -S "$f" && install_name_tool -id "@rpath/lib$l.dylib" "$f"'
 deps_in=$({ deps_pins; echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"; echo "$deps_env"; echo "$deps_make"
-  echo "$deps_post"; echo "$conf_gmp"; echo "$conf_nettle"; echo "$conf_gnutls"; echo "$conf_freetype"; } \
-  | shasum -a 256 | cut -d ' ' -f 1)
-# build_dep <name> <configure options...>: configure, make and install one library from deps-src/<name>.
+  echo "$deps_post"; echo "$conf_gmp"; echo "$conf_nettle"; echo "$conf_gnutls"; echo "$conf_freetype"
+  echo "$ffmpeg_make"; echo "$ffmpeg_libs"; echo "$conf_ffmpeg"; } | shasum -a 256 | cut -d ' ' -f 1)
+# build_dep <name> <build text> <configure options...>: configure, make and install one library from deps-src/<name>.
 build_dep() {
-  n=$1; shift
+  n=$1 m=$2; shift 2
   echo "wine-arm64: building $n (log: $SRC/deps-$n.log)" >&2
-  ( cd "$SRC/deps-src/$n" && eval "$deps_make" ) > "$SRC/deps-$n.log" 2>&1 \
+  ( cd "$SRC/deps-src/$n" && eval "$m" ) > "$SRC/deps-$n.log" 2>&1 \
     || die "building $n failed; see $SRC/deps-$n.log"
 }
 unpack() {  # unpack <name>:<url>: the tarball into deps-src/<name>, through <name>.tmp so a stop leaves none
@@ -206,7 +238,7 @@ unpack() {  # unpack <name>:<url>: the tarball into deps-src/<name>, through <na
   mv "$SRC/deps-src/${1%%:*}.tmp" "$SRC/deps-src/${1%%:*}"
 }
 if [ "$(cat "$DEPS/.complete" 2> /dev/null)" = "$deps_in" ]; then
-  echo "wine-arm64: FreeType and gnutls are up to date" >&2
+  echo "wine-arm64: FreeType, gnutls and FFmpeg are up to date" >&2
   for t in $DEPS_TARS; do  # bundle.sh copies the licence texts from deps-src
     [ -d "$SRC/deps-src/${t%%:*}" ] || { echo "wine-arm64: unpacking ${t##*/} again" >&2; unpack "$t"; }
   done
@@ -217,34 +249,61 @@ else
     eval "export $deps_env"
     unset PKG_CONFIG_PATH CPATH LIBRARY_PATH CFLAGS CXXFLAGS  # the compiler's own search paths stay the SDK's
     # shellcheck disable=SC2086  # the options are lists
-    { build_dep gmp $conf_gmp; build_dep nettle $conf_nettle; build_dep gnutls $conf_gnutls
-      build_dep freetype $conf_freetype; }
+    { build_dep gmp "$deps_make" $conf_gmp; build_dep nettle "$deps_make" $conf_nettle
+      build_dep gnutls "$deps_make" $conf_gnutls; build_dep freetype "$deps_make" $conf_freetype
+      build_dep ffmpeg "$ffmpeg_make" $conf_ffmpeg; }
   )
   # The shipped form: no debug symbols (they name the build folder), found by @rpath beside the .so files that load
-  # it. Then what it links: /usr/lib and /System only (after otool -L's file and ID lines). A failure names the log.
-  for l in freetype.6 gnutls.30; do
-    f="$DEPS/lib/lib$l.dylib" log="$SRC/deps-${l%.*}.log"
+  # it, and no byte of the build folder's path. Then what it links: /usr/lib and /System only (after otool -L's file
+  # and ID lines), and for FFmpeg's, each other's by @rpath. A failure names the log.
+  for l in freetype.6 gnutls.30 $ffmpeg_libs; do
+    f="$DEPS/lib/lib$l.dylib" log="$SRC/deps-${l%.*}.log" ok='/usr/lib/|/System/'
+    case " $ffmpeg_libs " in
+      *" $l "*) log="$SRC/deps-ffmpeg.log" ok="$ok|@rpath/lib(avutil\.60|avcodec\.62)\.dylib\$" ;;
+    esac
     eval "$deps_post" || die "can't strip ${f##*/} or set its install name"
-    out=$(otool -L "$f" | tail -n +3 | awk '{ print $1 }' | LC_ALL=C /usr/bin/grep -vE '^(/usr/lib/|/System/)' || true)
+    out=$(otool -L "$f" | tail -n +3 | awk '{ print $1 }' | LC_ALL=C /usr/bin/grep -vE "^($ok)" || true)
     [ -z "$out" ] || die "${f##*/} depends on $(echo "$out" | tr '\n' ' ')(see $log)"
+    n=$(LC_ALL=C /usr/bin/grep -a -c -F "$B" "$f" || true)
+    [ "$n" = 0 ] || die "${f##*/} names the build folder $B ($n lines; see $log)"
   done
   out=$(otool -L "$DEPS/lib/libgnutls.30.dylib" | tail -n +3 | LC_ALL=C /usr/bin/grep -iE 'nettle|hogweed|gmp' || true)
   [ -z "$out" ] || die "libgnutls.30.dylib links nettle or gmp as a library: $out (see $SRC/deps-gnutls.log)"
   out=$(sed -n 's/^Requires.private: *//p' "$DEPS/lib/pkgconfig/freetype2.pc")
   [ -z "$out" ] || die "libfreetype.6.dylib's freetype2.pc requires $out (see $SRC/deps-freetype.log)"
+  # FFmpeg as configured (video playback spec §5, §6): LGPL, no VideoToolbox, none of its own H.264, HEVC or AAC
+  # decoders, and exactly the components above.
+  fc="$SRC/deps-src/ffmpeg"
+  for x in 'config.h:#define CONFIG_GPL 0' 'config.h:#define CONFIG_VIDEOTOOLBOX 0' \
+    'config_components.h:#define CONFIG_H264_DECODER 0' 'config_components.h:#define CONFIG_HEVC_DECODER 0' \
+    'config_components.h:#define CONFIG_AAC_DECODER 0'; do
+    LC_ALL=C /usr/bin/grep -qx "${x#*:}" "$fc/${x%%:*}" || die "FFmpeg's ${x%%:*} lacks the line '${x#*:}'"
+  done
+  for x in "DECODER $ffmpeg_decoder" "DEMUXER $ffmpeg_demuxer" "PARSER $ffmpeg_parser" "BSF $ffmpeg_bsf"; do
+    # shellcheck disable=SC2086  # a list
+    set -- $x
+    k=$1; shift
+    want=$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')
+    got=$(sed -n "s/^#define CONFIG_\(.*\)_$k 1\$/\1/p" "$fc/config_components.h" | tr 'A-Z' 'a-z' | LC_ALL=C sort \
+      | tr '\n' ' ')
+    [ "$got" = "$want" ] || die "FFmpeg's config_components.h enables the ${k}s ${got:-none}, not $want"
+  done
   echo "$deps_in" > "$DEPS/.complete"
 fi
 
 # 4. Configure: out of tree, with the configure the patches carry (no autoreconf, spec §5.4: it would rewrite configure
 #    with whatever autoconf is installed, and the tree would no longer be the applied one), against $DEPS alone for
-#    FreeType and gnutls (--with: missing is an error). FREETYPE_LIBS links only tools/sfnt2fon, which renders the
-#    bitmap fonts during the build and isn't installed: its rpath finds libfreetype's @rpath ID. Redone in a new build
-#    folder (a full Wine build) when the options or the deps change: both are recorded in wine-build/.configure-inputs.
+#    FreeType, gnutls and FFmpeg (--with: missing is an error). FREETYPE_LIBS links only tools/sfnt2fon, which renders
+#    the bitmap fonts during the build and isn't installed: its rpath finds libfreetype's @rpath ID. FFmpeg's flags are
+#    its pkg-config files' in $DEPS, with no rpath: winedmo.so finds the dylibs through its own @loader_path/. No
+#    GStreamer: winedmo demuxes. Redone in a new build folder (a full Wine build) when the options or the deps change:
+#    both are recorded in wine-build/.configure-inputs.
 #    Both compilers (Apple clang for the unix side, llvm-mingw for the PE side) map $SRC/ away, so __FILE__ and the
 #    debug info name wine/dlls/..., not the build folder (arm64 release Ruling 20); otherwise Wine's default -g -O2.
 set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --without-x --without-wayland \
   --without-oss --without-alsa --without-pulse --without-sane --without-usb --without-v4l2 --without-pcap \
-  --without-capi --without-opencl --without-cups --with-freetype --with-gnutls CC=/usr/bin/clang CXX=/usr/bin/clang++ \
+  --without-capi --without-opencl --without-cups --with-freetype --with-gnutls --with-ffmpeg --without-gstreamer \
+  CC=/usr/bin/clang CXX=/usr/bin/clang++ \
   PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" FREETYPE_CFLAGS="-I$DEPS/include/freetype2" \
   FREETYPE_LIBS="-L$DEPS/lib -lfreetype -Wl,-rpath,$DEPS/lib" GNUTLS_CFLAGS="-I$DEPS/include" \
   GNUTLS_LIBS="-L$DEPS/lib -lgnutls" CFLAGS="-g -O2 -ffile-prefix-map=$SRC/=" \

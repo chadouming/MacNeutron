@@ -95,8 +95,9 @@ write_source() {  # write_source <out> <mac>
   ) > "$1"
 }
 
-# The FreeType, gnutls, nettle and GMP tarballs' pins (<NAME>_URL, <NAME>_SHA256): build.sh's deps input and SOURCE's.
-deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP)_' "$ROOT/wine-arm64/deps.pins"; }
+# The FreeType, gnutls, nettle, GMP and FFmpeg tarballs' pins (<NAME>_URL, <NAME>_SHA256): build.sh's deps input and
+# SOURCE's.
+deps_pins() { LC_ALL=C /usr/bin/grep -E '^(FREETYPE|GNUTLS|NETTLE|GMP|FFMPEG)_' "$ROOT/wine-arm64/deps.pins"; }
 
 # A release ships no build path (arm64 release Ruling 20): the files under <dir> that contain, as bytes, the repository's
 # path, the build folder's (BUILD_DIR can move it outside the repository) or the home folder's. The first ten, relative

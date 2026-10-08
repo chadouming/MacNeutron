@@ -31,7 +31,7 @@ every game on it. A build needs the Developer ID setup below; there is no ad-hoc
 - Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once (again when
   `dxmt/pins` names another one). Objects already built keep the old compiler's output: after a toolchain pin bump,
   remove `build/wine-arm64-src` (or its `wine-build`, `fex-ec`, `fex-unixlib` and `dxmt-build` folders) for a clean build.
-- The first build downloads the four tarballs of `deps.pins` (15 MB, checked by SHA-256) and a sparse checkout of
+- The first build downloads the five tarballs of `deps.pins` (27 MB, checked by SHA-256) and a sparse checkout of
   Proton's `lsteamclient/` folder from GitHub (18 MB of source, about 10 s here); later builds reuse them.
 - **A Developer ID with the "Cross-architecture Compatibility Framework" capability** (`com.apple.developer.cross-architecture-support`)
   granted for the App ID `net.authspot.macneutron.wine` (team `49QMZXLR8S`), and a Developer ID provisioning profile for it.
@@ -119,6 +119,12 @@ no arm64 code in the bundle names x18 (`ntdll.so` aside, which the `x18` step ch
 `ret` in gnutls's CRYPTOGAMS routines that `x18-allow.txt` lists. A gnutls update that moves those fails the build until the allowlist is checked again, by
 reading the routines.
 
+The same step builds FFmpeg 8.1.3 (video playback spec §6), LGPL, as five dylibs that `winedmo.so` links
+(`--with-ffmpeg --without-gstreamer`), and stops unless FFmpeg's generated `config.h` and `config_components.h` show no
+GPL part, no VideoToolbox, none of FFmpeg's own H.264, HEVC or AAC decoders, and exactly the decoders, demuxers,
+parsers and bitstream filters `build.sh` lists, and unless the dylibs link only each other by `@rpath` and the system's
+and hold no build path. `bundle.sh` puts them beside `winedmo.so`.
+
 ### The Steam bridge
 
 `wine.app` carries the Steam bridge on arm64 (ship-base spec §7): Proton's `lsteamclient` (pinned in `deps.pins`, with
@@ -140,7 +146,7 @@ SteamID or the persona name; run it by hand the same way. The x18 hits in Valve'
 | Path | What |
 |---|---|
 | `pins` | Wine tag and commit, FEX commit, and the source of FEX's macOS unixlib |
-| `deps.pins` | The four tarballs (FreeType, gnutls, nettle, GMP), and lsteamclient's repository and commit |
+| `deps.pins` | The five tarballs (FreeType, gnutls, nettle, GMP, FFmpeg), and lsteamclient's repository and commit |
 | `patches/wine/`, `patches/fex/`, `patches/dxmt/`, `patches/lsteamclient/` | The patch series (`git format-patch` output, applied with `git am`): the source of truth |
 | `build.sh`, `bundle.sh` | Build, then assemble and sign `wine.app`, and check the result |
 | `wine.entitlements`, `Info.plist` | The loader's entitlements and the bundle's identity |
@@ -249,6 +255,9 @@ re-clone; that is why they wait for the rebase.
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
   `libgnutls.30.dylib`, are taken under LGPL-3+. Their texts come from the tarballs into `licenses/gnutls/`,
   `licenses/nettle/` and `licenses/gmp/`; their sources are the pinned tarballs (`deps.pins`, unmodified).
+- **FFmpeg** (8.1.3) is LGPL-2.1+, built without its GPL and nonfree parts; its texts come from the tarball into
+  `licenses/ffmpeg/`, its notice and the Independent JPEG Group's credit are in `licenses/NOTICES.md`, and its source
+  is the pinned tarball (`deps.pins`, unmodified).
 - **lsteamclient** is Steamworks-SDK-derived: Valve's Steamworks SDK licence (its `LICENSE`), except `cxx.h`, which is
   LGPL-2.1+ (CodeWeavers, from Wine); the bundle carries both in `licenses/lsteamclient/` (`LICENSE`, `NOTE`). Its
   patches are dappermint/winecx's three Mac fixes by millia ampora (`8d188ec0db`, `dada36ebab`, `6cfbd169a5`), each
