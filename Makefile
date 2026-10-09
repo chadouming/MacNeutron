@@ -1,4 +1,4 @@
-.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check media-check
+.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check media-check lanes-check
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -122,12 +122,16 @@ WA_FLAGS_arm64-fonts-tls = -lgdi32 -lsecur32 -ldwrite -lcrypt32
 WA_FLAGS_arm64-x18v = -lntdll
 WA_FLAGS_arm64-x18path = -lntdll
 WA_FLAGS_arm64-media-mf = -lmfplat -lmfreadwrite -lole32
+WA_FLAGS_x64-sync = -lsynchronization
+WA_FLAGS_arm64-xcall = -O2 -fno-builtin -lshlwapi
 # The media programs (video playback spec §8) built for x64 too, from the same source: games are x64, run under FEX.
 WA_MEDIA_X64 = $(patsubst wine-arm64/tests/arm64-media-%.c,build/wine-arm64-tests/x64-media-%.exe,\
 	$(wildcard wine-arm64/tests/arm64-media-*.c))
 wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
-	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) $(WA_MEDIA_X64) build/wine-arm64-tests/x64-x18path.exe build/wine-arm64-tests/winshot
+	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) $(WA_MEDIA_X64) build/wine-arm64-tests/x64-x18path.exe build/wine-arm64-tests/winshot \
+		build/wine-arm64-tests/arm64-sync.exe build/wine-arm64-tests/arm64ec-sync.exe \
+		build/wine-arm64-tests/arm64ec-xcall.exe build/wine-arm64-tests/x64-xcall.exe
 build/wine-arm64-tests/arm64-%.exe: wine-arm64/tests/arm64-%.c
 	$(MINGW_BIN)/aarch64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
 build/wine-arm64-tests/arm64ec-%.exe: wine-arm64/tests/arm64ec-%.c
@@ -139,6 +143,16 @@ build/wine-arm64-tests/x64-%.exe: wine-arm64/tests/x64-%.cpp
 # arm64-x18path's source built for x64 too: its paths under FEX (ship-base spec §9, T2).
 build/wine-arm64-tests/x64-x18path.exe: wine-arm64/tests/arm64-x18path.c
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-x18path)
+# The measurement lanes (check.sh's lanes step): x64-sync's and arm64-xcall's sources in all three lanes, ARM64,
+# ARM64EC and x64 (arm64-xcall.exe and x64-sync.exe come from the rules above).
+build/wine-arm64-tests/arm64-sync.exe: wine-arm64/tests/x64-sync.c
+	$(MINGW_BIN)/aarch64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_x64-sync)
+build/wine-arm64-tests/arm64ec-sync.exe: wine-arm64/tests/x64-sync.c
+	$(MINGW_BIN)/arm64ec-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_x64-sync)
+build/wine-arm64-tests/arm64ec-xcall.exe: wine-arm64/tests/arm64-xcall.c
+	$(MINGW_BIN)/arm64ec-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-xcall)
+build/wine-arm64-tests/x64-xcall.exe: wine-arm64/tests/arm64-xcall.c
+	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-xcall)
 build/wine-arm64-tests/x64-media-%.exe: wine-arm64/tests/arm64-media-%.c
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-media-$*)
 build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
@@ -161,3 +175,9 @@ wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter 
 # steps of wine-arm64/check.sh, which its full run leaves out until they pass. Needs the signing variables.
 media-check: wine-arm64 wine-arm64-tests
 	sh wine-arm64/check.sh media-mf
+
+# The measurement lanes (batch Task 2): x64-sync and arm64-xcall as ARM64, ARM64EC and x64 programs (x64 under FEX),
+# timed in the prefix's server's mode (msync on); gated only on each program's PASS and its number of time rows. Each
+# `info <program> <row> <ns>` line is a median; wine-arm64/tools/lanes_report.py turns three runs into a table.
+lanes-check: wine-arm64 wine-arm64-tests
+	sh wine-arm64/check.sh lanes

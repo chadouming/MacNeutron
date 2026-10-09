@@ -50,6 +50,11 @@ NEEDS_FEX="$G1 g2-litmus wxflip-x64 msync x18 g5-jit steam-bridge $NEEDS_DXMT g4
 MEDIA="media-mf"
 NEEDS_PREFIX="$NEEDS_PREFIX $MEDIA"
 NEEDS_FEX="$NEEDS_FEX $MEDIA"
+# The measurement lanes (batch Task 2): measured, not gated beyond each program's PASS and row count; run by name
+# (make lanes-check), not in the full run.
+LANES="lanes"
+NEEDS_PREFIX="$NEEDS_PREFIX $LANES"
+NEEDS_FEX="$NEEDS_FEX $LANES"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the reference's
@@ -292,6 +297,8 @@ wxflip_x64_cmd() {
 # whatever the caller's WINEDEBUG), and kills the server. The time rows are reported, not gated.
 msync_cmd() {
   S="$TOOL/Contents/Resources/bin/wineserver"
+  # The crash dialog off: a crash ends the run.
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || return 1
   WINEPREFIX="$PFX" "$S" -k || true  # exits 1 when no server was running
   for m in ${MSYNC_MODES:-1 0}; do  # MSYNC_MODES=1 (or 0) runs one mode: the red runs
     o=$((1 - m)) slog="$WORK/msync-server-$m.log"
@@ -615,6 +622,24 @@ media_mf_cmd() {
   media_run media-mf open "$mp4"
 }
 
+# The measurement lanes (batch Task 2): x64-sync and arm64-xcall as ARM64, ARM64EC and x64 programs, the x64 ones under
+# FEX with its defaults, in mode 1 against the prefix's server. Each has to pass and print all its time rows; each row
+# becomes `info <program> <row> <ns>` (lanes_report.py's input), and the programs' own info lines `info <program>: ...`.
+SYNC_ROWS=16 XCALL_ROWS=16
+lanes_cmd() {
+  export WINEDEBUG=-all
+  for v in $(env | sed -n 's/^\(FEX_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+  # The crash dialog off: a crash ends the run.
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f > /dev/null || return 1
+  for t in arm64-sync arm64ec-sync x64-sync arm64-xcall arm64ec-xcall x64-xcall; do
+    out=$(exe_cmd "$t") || { echo "$out"; echo "FAIL lanes: $t"; return 1; }
+    case $t in *-sync) want=$SYNC_ROWS ;; *) want=$XCALL_ROWS ;; esac
+    n=$(echo "$out" | LC_ALL=C /usr/bin/grep -c '^time ' || true)
+    [ "$n" = "$want" ] || { echo "$out"; echo "FAIL lanes: $t printed $n of $want time rows"; return 1; }
+    echo "$out" | sed -e "s/^info /info $t: /" -e "s/^time /info $t /"
+  done
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -650,13 +675,14 @@ run_step() {
       'ok   the FSR 3 swapchain proxy presents on our DXMT'; grep '^info ' "$WORK/dxmt-x64.log" ;;
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     media-mf) step media-mf 120 media_mf_cmd ;;
+    lanes) step lanes 900 lanes_cmd; grep '^info ' "$WORK/lanes.log" ;;
     *) die "no runner for $1" ;;
   esac
 }
 
 want="${*:-$STEPS}"
 for s in $want; do
-  case " $STEPS $MEDIA " in *" $s "*) ;; *) die "no step named $s (steps: $STEPS $MEDIA)" ;; esac
+  case " $STEPS $MEDIA $LANES " in *" $s "*) ;; *) die "no step named $s (steps: $STEPS $MEDIA $LANES)" ;; esac
 done
 for s in $want; do
   case " $NEEDS_FEX " in *" $s "*) want="fex $want" ;; esac
@@ -676,6 +702,6 @@ rm -rf "$WORK"
 mkdir -p "$WORK/Application Support"
 # No staged bundle: the signature step says so.
 if [ -d "$STAGED" ]; then cp -cR "$STAGED" "$TOOL"; fi
-for s in $STEPS $MEDIA; do
+for s in $STEPS $MEDIA $LANES; do
   case " $want " in *" $s "*) run_step "$s" ;; esac
 done

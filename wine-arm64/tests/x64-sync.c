@@ -1,12 +1,14 @@
 // Gate S3 (ship-base spec §6): Windows synchronisation objects as msync (Wine patch 0015) or the plain wineserver
-// serves them; check.sh's msync step runs it under FEX in both modes. One line per gated row, `ok <row>` or
-// `FAIL <row>: <why>`; then the reported rows: `info pulse-event` (PulseEvent can miss a waiter under msync) and
-// `time <row> <ns>` (the median of the batches, per operation); then `PASS x64-sync` when every gated row passed.
+// serves them; check.sh's msync step runs it under FEX in both modes. The same source is built for the three lanes of
+// check.sh's lanes step (batch Task 2), which runs them in mode 1: x64-sync.exe under FEX, arm64ec-sync.exe and
+// arm64-sync.exe. One line per gated row, `ok <row>` or `FAIL <row>: <why>`; then the reported rows: `info pulse-event`
+// (PulseEvent can miss a waiter under msync) and `time <row> <ns>` (the median of the batches, per operation); then
+// `PASS <program>` (the exe's file name without .exe) when every gated row passed, else `FAIL <program>`.
 // The wait-all rows (Wine patch 0031) print their own `info` lines before their verdict: `info wait-all-duplicate`, each
 // duplicate's answer (check.sh gates mode 1's), and the two races' counts. A time row whose wait times out prints
 // `FAIL <row>: stuck` instead of its time and fails the run. Blocking waits in those rows run on worker threads with
 // finite timeouts, so a wait that spins can't hang the program.
-// The cross-process rows start this program again as `x64-sync.exe child <role> <args...>`: a child prints nothing (it
+// The cross-process rows start this program again as `<program>.exe child <role> <args...>`: a child prints nothing (it
 // shares the parent's stdout) and answers through its exit code, 0 for success.
 #include <windows.h>
 #include <stdarg.h>
@@ -17,9 +19,10 @@
 #define BATCHES 21  // timing: odd, so the median is one batch
 #define MANY 3200   // more than three 16K chunks of 16-byte msync slots
 
-static char self[MAX_PATH], why[256];
+static char self[MAX_PATH], name[MAX_PATH], why[256];  // name: the program's, self without its folder and .exe
 static double ns_per_tick;
 static double t_wait, t_signal, t_wake, t_churn, t_all_wake, t_all_poll, t_handoff;  // the time rows, 0: not measured
+static double t_cs, t_srw, t_cs4, t_srw4, t_woa, t_woa4, t_any_wake, t_alert_wake, t_pool;  // the lanes' (batch Task 2)
 static int failed;  // a gated row or a time row failed
 
 // Sets the row's failure reason; returns 0, so a row can `return bad(...)`.
@@ -789,40 +792,48 @@ static void stuck(const char *row) {
   failed = 1;
 }
 
-// wait-all-wake: half a round trip between two threads, each blocked in a wait-all on {its own auto-reset event, Z}.
+// wait-all-wake, and the lanes' wait-any-wake and alertable-wake: half a round trip between two threads, each blocked
+// on its own auto-reset event: in a wait-all on {it, Z (set)}, in a wait-any on {it, Z (never set)} (msync's pump
+// path), or in an alertable WaitForSingleObjectEx.
+enum { WAKE_ALL, WAKE_ANY, WAKE_ALERTABLE };
 static HANDLE wake_ev[2], wake_z;
+static int wake_kind;
+static DWORD wake_wait(HANDLE own) {
+  HANDLE h[2] = {own, wake_z};
+  if (wake_kind == WAKE_ALERTABLE) return WaitForSingleObjectEx(own, 5000, TRUE);
+  return WaitForMultipleObjects(2, h, wake_kind == WAKE_ALL, 5000);
+}
 static DWORD WINAPI wake_partner(void *unused) {
-  HANDLE h[2] = {wake_ev[1], wake_z};
   while (!stop)
-    if (WaitForMultipleObjects(2, h, TRUE, 1000) == WAIT_OBJECT_0 && !stop) SetEvent(wake_ev[0]);
+    if (wake_wait(wake_ev[1]) == WAIT_OBJECT_0 && !stop) SetEvent(wake_ev[0]);
   return 0;
 }
-static void wait_all_wake(void) {
-  double v[BATCHES];
-  HANDLE h[2], t;
+static double wake_row(const char *row, int kind) {
+  double v[BATCHES], ns = 0;
+  HANDLE t;
   stop = 0;
+  wake_kind = kind;
   wake_ev[0] = CreateEventA(NULL, FALSE, FALSE, NULL);
   wake_ev[1] = CreateEventA(NULL, FALSE, FALSE, NULL);
-  wake_z = CreateEventA(NULL, TRUE, TRUE, NULL);
-  h[0] = wake_ev[0];
-  h[1] = wake_z;
+  wake_z = CreateEventA(NULL, TRUE, kind == WAKE_ALL, NULL);
   t = start(wake_partner, NULL);
   for (int b = 0; b < BATCHES && !stop; b++) {
     LONGLONG t0 = ticks();
     for (int j = 0; j < 100 && !stop; j++) {
       SetEvent(wake_ev[1]);
-      if (WaitForMultipleObjects(2, h, TRUE, 1000) != WAIT_OBJECT_0) stop = 1;
+      if (wake_wait(wake_ev[0]) != WAIT_OBJECT_0) stop = 1;
     }
     v[b] = (ticks() - t0) * ns_per_tick / 100 / 2;
   }
-  if (stop) stuck("wait-all-wake");
-  else t_all_wake = median(v, BATCHES);
+  if (stop) stuck(row);
+  else ns = median(v, BATCHES);
   stop = 1;
   SetEvent(wake_ev[1]);  // the partner sees stop now, not after its timeout
   join(t);
   CloseHandle(wake_ev[0]);
   CloseHandle(wake_ev[1]);
   CloseHandle(wake_z);
+  return ns;
 }
 
 // wait-all-poll: a 0 ms wait-all on {an unset auto-reset event, a set manual event}, per call.
@@ -870,6 +881,219 @@ static void auto_handoff_8(void) {
   for (int i = 0; i < 8; i++) join(t[i]);
   CloseHandle(handoff_ev);
   CloseHandle(handoff_done);
+}
+
+// The lanes' rows (batch Task 2), each the median of BATCHES batches. A batch whose threads aren't done in 10 s is
+// stuck.
+
+// cs-uncontended, srw-uncontended: an EnterCriticalSection/LeaveCriticalSection pair, an AcquireSRWLockExclusive/
+// ReleaseSRWLockExclusive pair.
+static void uncontended_locks(void) {
+  CRITICAL_SECTION cs;
+  SRWLOCK srw = SRWLOCK_INIT;
+  double c[BATCHES], w[BATCHES];
+  InitializeCriticalSection(&cs);
+  for (int i = 0; i < BATCHES; i++) {
+    LONGLONG t0 = ticks();
+    for (int j = 0; j < 2000; j++) {
+      EnterCriticalSection(&cs);
+      LeaveCriticalSection(&cs);
+    }
+    c[i] = (ticks() - t0) * ns_per_tick / 2000;
+    t0 = ticks();
+    for (int j = 0; j < 2000; j++) {
+      AcquireSRWLockExclusive(&srw);
+      ReleaseSRWLockExclusive(&srw);
+    }
+    w[i] = (ticks() - t0) * ns_per_tick / 2000;
+  }
+  t_cs = median(c, BATCHES);
+  t_srw = median(w, BATCHES);
+  DeleteCriticalSection(&cs);
+}
+
+// cs-contended-4, srw-contended-4: 4 threads parked on a manual go event each do 10,000 cycles of lock, counter++,
+// unlock; from SetEvent(go) to the 4th thread's last unlock, per cycle.
+static CRITICAL_SECTION lock_cs;
+static SRWLOCK lock_srw = SRWLOCK_INIT;
+static HANDLE lock_go;
+static int lock_kind;  // 0: the critical section, 1: the SRW lock
+static long counter;
+static LONGLONG lock_end[4];
+static volatile LONG lock_ready;
+static DWORD WINAPI locker(void *i) {
+  InterlockedIncrement(&lock_ready);
+  if (WaitForSingleObject(lock_go, 10000) != WAIT_OBJECT_0) return 1;
+  for (int j = 0; j < 10000; j++) {
+    if (lock_kind) AcquireSRWLockExclusive(&lock_srw);
+    else EnterCriticalSection(&lock_cs);
+    counter++;
+    if (lock_kind) ReleaseSRWLockExclusive(&lock_srw);
+    else LeaveCriticalSection(&lock_cs);
+  }
+  lock_end[(INT_PTR)i] = ticks();
+  return 0;
+}
+static void contended_4(int srw) {
+  const char *row = srw ? "srw-contended-4" : "cs-contended-4";
+  double v[BATCHES];
+  lock_kind = srw;
+  counter = 0;
+  InitializeCriticalSection(&lock_cs);
+  for (int b = 0; b < BATCHES; b++) {
+    HANDLE t[4];
+    LONGLONG t0, end = 0;
+    DWORD r;
+    lock_go = CreateEventA(NULL, TRUE, FALSE, NULL);
+    lock_ready = 0;
+    for (int i = 0; i < 4; i++) t[i] = start(locker, (void *)(INT_PTR)i);
+    for (t0 = ticks(); lock_ready < 4 && ms_since(t0) < 10000;) Sleep(1);
+    Sleep(1);  // parked on go
+    t0 = ticks();
+    SetEvent(lock_go);
+    r = WaitForMultipleObjects(4, t, TRUE, 10000);
+    for (int i = 0; i < 4; i++) CloseHandle(t[i]);
+    CloseHandle(lock_go);
+    if (r != WAIT_OBJECT_0) {  // the threads may still hold the lock: lock_cs is left alone
+      stuck(row);
+      return;
+    }
+    for (int i = 0; i < 4; i++)
+      if (lock_end[i] > end) end = lock_end[i];
+    v[b] = (end - t0) * ns_per_tick / 40000;
+  }
+  DeleteCriticalSection(&lock_cs);
+  if (counter != 40000 * BATCHES) printf("FAIL %s: counter %ld of %d\n", row, counter, 40000 * BATCHES), failed = 1;
+  else *(srw ? &t_srw4 : &t_cs4) = median(v, BATCHES);
+}
+
+// waitonaddress-uncontended: a WaitOnAddress that returns at once (the values differ) and a WakeByAddressSingle with
+// no waiter, per pair.
+static void waitonaddress_uncontended(void) {
+  static LONG v = 1, other = 0;
+  double w[BATCHES];
+  for (int i = 0; i < BATCHES; i++) {
+    LONGLONG t0 = ticks();
+    for (int j = 0; j < 2000; j++) {
+      WaitOnAddress(&v, &other, 4, INFINITE);
+      WakeByAddressSingle(&v);
+    }
+    w[i] = (ticks() - t0) * ns_per_tick / 2000;
+  }
+  t_woa = median(w, BATCHES);
+}
+
+// waitonaddress-contended-4: 4 threads pass a turn around a ring, 2,000 handoffs a batch, per handoff. Thread i waits
+// on turn until it is i, then sets it to the next thread's and wakes them all; the batch's last handoff gives the turn
+// to nobody (4), and main starts the next batch by giving it to thread 0.
+static volatile LONG turn, turns;
+static HANDLE ring_done;
+static DWORD WINAPI ring(void *p) {
+  LONG i = (LONG)(INT_PTR)p;
+  while (!stop) {
+    LONG seen = turn;
+    if (seen != i) {
+      WaitOnAddress((void *)&turn, &seen, 4, 5000);
+      continue;
+    }
+    if (InterlockedIncrement(&turns) == 2000) {
+      turn = 4;
+      SetEvent(ring_done);
+    } else {
+      turn = (i + 1) % 4;
+    }
+    WakeByAddressAll((void *)&turn);
+  }
+  return 0;
+}
+static void waitonaddress_contended_4(void) {
+  HANDLE t[4];
+  double v[BATCHES];
+  stop = 0;
+  turn = 4;
+  ring_done = CreateEventA(NULL, FALSE, FALSE, NULL);
+  for (int i = 0; i < 4; i++) t[i] = start(ring, (void *)(INT_PTR)i);
+  for (int b = 0; b < BATCHES && !stop; b++) {
+    turns = 0;
+    LONGLONG t0 = ticks();
+    turn = 0;
+    WakeByAddressAll((void *)&turn);
+    if (WaitForSingleObject(ring_done, 10000) != WAIT_OBJECT_0) stop = 1;
+    v[b] = (ticks() - t0) * ns_per_tick / 2000;
+  }
+  if (stop) stuck("waitonaddress-contended-4");
+  else t_woa4 = median(v, BATCHES);
+  stop = 1;
+  turn = 5;  // a change: every thread wakes and sees stop
+  WakeByAddressAll((void *)&turn);
+  for (int i = 0; i < 4; i++) join(t[i]);
+  CloseHandle(ring_done);
+}
+
+// auto-pool-8 (Ruling R20): what waking every waiter (Wine patch 0031's option (a)) costs a parked pool. 8 workers wait
+// in WaitForSingleObject on one auto-reset event; main sets it every 50 us (a spin on the performance counter, never a
+// Sleep), each set once the last was taken, and the worker that takes it does 10 us of busy work. The row is the
+// process's CPU time per set, less main's: the workers' work, their wakes and the herd's. Wine on macOS has no
+// per-thread CPU time (dlls/ntdll/unix/thread.c: get_thread_times() is unimplemented there, and ThreadTimes on the
+// current thread falls back to the process's times), so main's CPU time is taken as its wall time: it spins throughout.
+// The process's CPU time comes from times(), in 10 ms ticks; 10,000 sets a batch (0.5 s) keep a tick near 1 us a set.
+// `info auto-pool-8` gives the totals: the process's CPU time, what GetThreadTimes said for main, the wall time, the
+// signals (sets) and the takes. In mode 0 the wineserver's CPU time, another process's, isn't counted.
+#define POOL_SETS 10000
+static HANDLE pool_ev;
+static volatile LONG pool_takes;
+static LONGLONG pool_work;  // 10 us, in ticks
+static DWORD WINAPI pool_worker(void *unused) {
+  while (!stop) {
+    if (WaitForSingleObject(pool_ev, 1000) != WAIT_OBJECT_0) continue;
+    InterlockedIncrement(&pool_takes);
+    for (LONGLONG t0 = ticks(); ticks() - t0 < pool_work;) {}
+  }
+  return 0;
+}
+static LONGLONG cpu_time(int main_thread) {  // user + kernel, 100 ns units
+  FILETIME c, e, k, u;
+  if (main_thread) GetThreadTimes(GetCurrentThread(), &c, &e, &k, &u);
+  else GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+  return (LONGLONG)((ULONGLONG)k.dwHighDateTime << 32 | k.dwLowDateTime)
+         + (LONGLONG)((ULONGLONG)u.dwHighDateTime << 32 | u.dwLowDateTime);
+}
+static void auto_pool_8(void) {
+  HANDLE t[8];
+  double v[BATCHES], cpu = 0, main_cpu = 0, wall = 0;  // totals, ms
+  LONGLONG period = (LONGLONG)(50000 / ns_per_tick), limit = (LONGLONG)(1e10 / ns_per_tick);
+  long sets = 0, takes = 0;
+  stop = 0;
+  pool_work = (LONGLONG)(10000 / ns_per_tick);
+  pool_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+  for (int i = 0; i < 8; i++) t[i] = start(pool_worker, NULL);
+  Sleep(100);  // all parked
+  for (int b = 0; b < BATCHES && !stop; b++) {
+    LONGLONG m0 = cpu_time(1), c0 = cpu_time(0), t0 = ticks(), last = t0, now = t0;
+    pool_takes = 0;
+    for (int s = 0; s <= POOL_SETS && !stop; s++) {  // s == POOL_SETS: only the wait for the last take
+      while (((now = ticks()) - last < period || pool_takes < s) && !stop)
+        if (now - last > limit) stop = 1;  // set s - 1 not taken in 10 s
+      if (s == POOL_SETS || stop) break;
+      last = now;
+      SetEvent(pool_ev);
+    }
+    if (stop) break;
+    LONGLONG t1 = ticks(), c1 = cpu_time(0), m1 = cpu_time(1);
+    v[b] = ((c1 - c0) * 100.0 - (t1 - t0) * ns_per_tick) / POOL_SETS;
+    cpu += (c1 - c0) / 1e4;
+    main_cpu += (m1 - m0) / 1e4;
+    wall += (t1 - t0) * ns_per_tick / 1e6;
+    sets += POOL_SETS;
+    takes += pool_takes;
+  }
+  printf("info auto-pool-8 process-cpu %.0f main-thread-cpu %.0f wall %.0f ms, signals %ld takes %ld\n", cpu,
+         main_cpu, wall, sets, takes);
+  if (stop) stuck("auto-pool-8");
+  else t_pool = median(v, BATCHES);
+  stop = 1;
+  for (int i = 0; i < 8; i++) join(t[i]);
+  CloseHandle(pool_ev);
 }
 
 // The child roles; each returns 0 on success, else the step that failed.
@@ -944,6 +1168,8 @@ int main(int argc, char **argv) {
   GetModuleFileNameA(NULL, self, sizeof self);
   if (argc >= 3 && !strcmp(argv[1], "child")) return child(argc - 2, argv + 2);
   setvbuf(stdout, NULL, _IONBF, 0);  // a crash or a timeout keeps what was printed before it
+  snprintf(name, sizeof name, "%s", strrchr(self, '\\') ? strrchr(self, '\\') + 1 : self);
+  if (strrchr(name, '.')) *strrchr(name, '.') = 0;
   QueryPerformanceFrequency(&f);
   ns_per_tick = 1e9 / f.QuadPart;
   for (int i = 0; i < (int)(sizeof rows / sizeof rows[0]); i++) {
@@ -957,19 +1183,35 @@ int main(int argc, char **argv) {
   }
   pulse_event();
   uncontended();
-  wait_all_wake();
+  t_all_wake = wake_row("wait-all-wake", WAKE_ALL);
   wait_all_poll();
   auto_handoff_8();
+  uncontended_locks();
+  contended_4(0);
+  contended_4(1);
+  waitonaddress_uncontended();
+  waitonaddress_contended_4();
+  t_any_wake = wake_row("wait-any-wake", WAKE_ANY);
+  t_alert_wake = wake_row("alertable-wake", WAKE_ALERTABLE);
+  auto_pool_8();
   printf("time uncontended-wait %.0f\ntime uncontended-signal %.0f\n", t_wait, t_signal);
   if (t_wake > 0) printf("time cross-process-wake %.0f\n", t_wake);
   if (t_churn > 0) printf("time create-close %.0f\n", t_churn);
   if (t_all_wake > 0) printf("time wait-all-wake %.0f\n", t_all_wake);
   printf("time wait-all-poll %.0f\n", t_all_poll);
   if (t_handoff > 0) printf("time auto-handoff-8 %.0f\n", t_handoff);
+  printf("time cs-uncontended %.0f\ntime srw-uncontended %.0f\n", t_cs, t_srw);
+  if (t_cs4 > 0) printf("time cs-contended-4 %.0f\n", t_cs4);
+  if (t_srw4 > 0) printf("time srw-contended-4 %.0f\n", t_srw4);
+  printf("time waitonaddress-uncontended %.0f\n", t_woa);
+  if (t_woa4 > 0) printf("time waitonaddress-contended-4 %.0f\n", t_woa4);
+  if (t_any_wake > 0) printf("time wait-any-wake %.0f\n", t_any_wake);
+  if (t_alert_wake > 0) printf("time alertable-wake %.0f\n", t_alert_wake);
+  if (t_pool > 0) printf("time auto-pool-8 %.0f\n", t_pool);
   if (failed) {
-    printf("FAIL x64-sync\n");
+    printf("FAIL %s\n", name);
     return 1;
   }
-  printf("PASS x64-sync\n");
+  printf("PASS %s\n", name);
   return 0;
 }

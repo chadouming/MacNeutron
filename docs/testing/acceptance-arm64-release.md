@@ -880,3 +880,104 @@ the 19 rows in both modes and mode 1's duplicate line; `make test` 251 tests, `m
 15 ok and `PASS probe redaction`; `make media-check` as before (`FAIL media-mf: FAIL arm64-media-mf: stage=video-type
 hr=0xc00d5212; FAIL x64-media-mf: stage=video-type hr=0xc00d5212`). Wine 31 of 31 apply from the pin to the build
 tree's exact tree.
+
+## Measurement lanes: baseline (batch Task 2)
+
+2026-10-09; no runtime change. The bundle measured is the applied build of Wine 0031 that Task 1 left (`wine.applied`
+2c06186, `build/wine-arm64/version` `c12564359f1e…`, `SOURCE` at 8c3aa6e), staged by `make wine-arm64` before this
+task's edits.
+
+`make lanes-check` (`check.sh lanes`, run by name, outside the full run) runs each program from one source in three
+lanes, ARM64, ARM64EC and x64 under FEX (its defaults: the caller's `FEX_*` variables are dropped), in mode 1 against
+the prefix's server, with `WINEDEBUG=-all` and the crash dialog off. It passes when each program prints
+`PASS <program>` and its 16 time rows, and writes each row as `info <program> <row> <ns>`:
+- `x64-sync`, `arm64ec-sync`, `arm64-sync`: Task 1's 19 gated rows, which pass in all three lanes, and its 7 time rows,
+  plus `cs-uncontended`, `srw-uncontended`, `cs-contended-4`, `srw-contended-4`, `waitonaddress-uncontended`,
+  `waitonaddress-contended-4`, `wait-any-wake`, `alertable-wake` and `auto-pool-8` (Ruling R20). Each is the median of
+  21 batches, in ns per operation. The PASS and FAIL lines name the program.
+- `arm64-xcall`, `arm64ec-xcall`, `x64-xcall` (`-O2 -fno-builtin`, so each CRT routine is a call): 16 rows of calls
+  into Wine's DLLs, each the median of 100 batches after one of warm-up, in ns per call.
+
+The new `x64-sync` rows also run in the `msync` step's x64 lane, in both modes. The whole `check.sh msync` run (with
+`boot` and `fex`) went from 77-78 s to 104-106 s (4 runs), so its 300 s cap stays.
+
+The baseline is three runs of `caffeinate -i sh wine-arm64/check.sh lanes`, back to back (10:16-10:24). Each run was
+on AC power at its start and end, with the lid open. Before each, `pgrep -lx wineserver` and
+`pgrep -lf wine-arm64/check.sh` printed nothing. The load average was 4.2-4.6, from processes outside the task. The
+logs are in `build/lanes/baseline/run{1,2,3}.log`. The table is
+`python3 wine-arm64/tools/lanes_report.py build/lanes/baseline`, with cells `median (min–max)` of the three runs in ns
+and the last two columns differences of medians:
+
+| row | arm64 | arm64ec | x64 | arm64ec − arm64 | x64 − arm64ec |
+|---|---|---|---|---|---|
+| sync uncontended-wait | 83.0 (77.0–84.0) | 76.0 (73.0–78.0) | 127 (110–142) | -7.0 | +51.0 |
+| sync uncontended-signal | 38.0 (37.0–38.0) | 42.0 (36.0–43.0) | 90.0 (84.0–99.0) | +4.0 | +48.0 |
+| sync cross-process-wake | 4252 (553–4907) | 4245 (4140–4351) | 4366 (4246–4462) | -7.0 | +121 |
+| sync create-close | 28048 (28030–28077) | 28292 (28232–28319) | 28710 (28653–28807) | +244 | +418 |
+| sync wait-all-wake | 5903 (5820–6190) | 6148 (5854–6161) | 5953 (5640–6051) | +245 | -195 |
+| sync wait-all-poll | 85.0 (77.0–85.0) | 89.0 (88.0–89.0) | 122 (120–130) | +4.0 | +33.0 |
+| sync auto-handoff-8 | 642 (617–644) | 724 (638–740) | 703 (681–725) | +82.0 | -21.0 |
+| sync cs-uncontended | 12.0 (12.0–13.0) | 13.0 (10.0–14.0) | 85.0 (77.0–87.0) | +1.0 | +72.0 |
+| sync srw-uncontended | 31.0 (28.0–32.0) | 33.0 (26.0–34.0) | 108 (100–112) | +2.0 | +75.0 |
+| sync cs-contended-4 | 30.0 (28.0–30.0) | 31.0 (28.0–31.0) | 200 (197–201) | +1.0 | +169 |
+| sync srw-contended-4 | 96.0 (84.0–100) | 97.0 (95.0–102) | 192 (190–194) | +1.0 | +95.0 |
+| sync waitonaddress-uncontended | 18.0 (17.0–18.0) | 17.0 (15.0–18.0) | 63.0 (63.0–64.0) | -1.0 | +46.0 |
+| sync waitonaddress-contended-4 | 4652 (4630–4862) | 4616 (4598–4659) | 4617 (4593–4716) | -36.0 | +1.0 |
+| sync wait-any-wake | 7899 (7652–8284) | 7676 (7484–7940) | 7729 (7668–7774) | -223 | +53.0 |
+| sync alertable-wake | 7817 (7308–8016) | 7810 (7600–7888) | 7856 (7756–8014) | -7.0 | +46.0 |
+| sync auto-pool-8 | 50943 (50940–50953) | 48953 (47954–49872) | 50954 (50946–50962) | -1990 | +2001 |
+| xcall get-current-thread-id | 0.7 (0.7–0.7) | 1.7 (1.7–1.8) | 24.6 (24.3–24.8) | +1.0 | +22.9 |
+| xcall get-last-error | 0.9 (0.9–0.9) | 2.8 (2.4–2.8) | 25.6 (25.6–25.7) | +1.9 | +22.8 |
+| xcall tls-get-value | 0.9 (0.9–0.9) | 2.5 (2.2–2.5) | 25.2 (24.6–26.1) | +1.6 | +22.7 |
+| xcall get-tick-count | 0.7 (0.7–0.7) | 1.8 (1.7–1.8) | 24.5 (24.4–24.8) | +1.1 | +22.7 |
+| xcall qpc | 15.4 (15.4–15.4) | 16.8 (16.8–16.9) | 43.3 (43.0–43.4) | +1.4 | +26.5 |
+| xcall istream-addref | 3.5 (3.5–3.5) | 3.5 (3.5–3.5) | 27.2 (27.1–27.2) | 0.0 | +23.7 |
+| xcall memcpy-16 | 2.0 (1.9–2.2) | 3.0 (2.6–3.0) | 25.9 (25.7–25.9) | +1.0 | +22.9 |
+| xcall memcpy-16-offset | 2.8 (2.8–3.3) | 3.6 (3.5–4.1) | 27.1 (26.9–27.4) | +0.8 | +23.5 |
+| xcall memcpy-256 | 3.9 (3.7–4.3) | 4.6 (4.3–5.0) | 28.0 (27.8–28.1) | +0.7 | +23.4 |
+| xcall memcpy-256-offset | 5.5 (5.0–7.8) | 6.2 (6.2–6.3) | 29.5 (29.3–29.7) | +0.7 | +23.3 |
+| xcall memcpy-4k | 43.6 (43.5–43.9) | 45.2 (45.1–47.7) | 57.8 (57.8–58.0) | +1.6 | +12.6 |
+| xcall memcpy-4k-offset | 45.7 (45.4–47.7) | 40.1 (40.0–46.5) | 74.0 (73.9–74.3) | -5.6 | +33.9 |
+| xcall memcpy-1m | 15670 (15480–15710) | 15340 (15250–15700) | 15300 (15290–15320) | -330 | -40.0 |
+| xcall memcpy-1m-offset | 15140 (14220–15320) | 15760 (15620–15770) | 16300 (16090–16350) | +620 | +540 |
+| xcall strlen-1k | 235 (235–236) | 237 (237–237) | 262 (262–271) | +2.4 | +25.1 |
+| xcall qsort-4k | 104860 (104720–106830) | 164640 (163050–168000) | 3552710 (3547900–3558450) | +59780 | +3388070 |
+
+- x64 − arm64ec is FEX's entry and the x64→EC transition: +22.7 to +22.9 ns on the four trivial exports
+  (`get-current-thread-id`, `get-last-error`, `tls-get-value`, `get-tick-count`).
+- arm64ec − arm64 is the EC thunks and the aux-IAT checker: +1.0 to +1.9 ns on the same four.
+- x64 `istream-addref`, 27.2 ns, is the bare crossing: a vtable slot with no fast-forward sequence. The body,
+  `InterlockedIncrement`, is 3.5 ns in both native lanes.
+- x64 `get-current-thread-id` − x64 `istream-addref` is the fast-forward sequence's cost: 24.6 − 27.2 = −2.6 ns. The
+  two bodies differ by 2.8 ns (3.5 against 0.7 in the ARM64 lane), so the sequence costs about 0.2 ns, within the
+  noise.
+- x64 `get-last-error` − x64 `get-current-thread-id` is the alias hop: +1.0 ns (ARM64EC +1.1, ARM64 +0.2).
+
+`qsort-4k`'s comparator is the program's own code. In the x64 lane each of its ~49,000 comparisons crosses back from
+the ARM64EC `qsort` into x64 code: 3.55 ms against 0.16 ms in the ARM64EC lane, about 69 ns per comparison.
+
+**`auto-pool-8` (Ruling R20)** measures what option (a), every wake a wake-all, costs a parked pool:
+- 8 workers wait in `WaitForSingleObject(e, 1000)` on one auto-reset event.
+- Main sets it every 50 µs, spinning on `QueryPerformanceCounter`, and only once the last set was taken.
+- The worker that takes it does 10 µs of busy work.
+- A batch is 10,000 sets.
+
+The row is (process CPU − main's CPU) per set. R20 named `GetThreadTimes` for main's share, but Wine on macOS has no
+per-thread CPU time: `get_thread_times()` in `dlls/ntdll/unix/thread.c` is implemented only for Linux and FreeBSD, and
+`ThreadTimes` on the current thread falls back to the process's `times()`. Every run's `info auto-pool-8` line shows
+`main-thread-cpu` equal to `process-cpu`. Main spins for the whole batch, so the row takes its wall time as its CPU
+time. `times()` counts 10 ms ticks, so a 0.5 s batch resolves 1 µs per set.
+
+A scratch check in the ARM64 and x64 lanes confirmed the method:
+- The cost per set doesn't follow the period: 49.7, 52.0 and 54.9 µs at 25, 50 and 100 µs.
+- It grows with the number of waiters: 13.0, 16.5, 25.5 and 52.0 µs with 1, 2, 4 and 8.
+- It is 0.0 with main alone, or with 8 workers parked on an event nobody sets.
+
+Under (a), then, each extra parked waiter costs about 5.6 µs of CPU per set. The 8-waiter pool spends about 51 µs per
+set, of which 10 µs is the work, where a single waiter spends 13 µs.
+
+In the `msync` step's x64 lane (three runs back to back, AC, idle), mode 1 measured 51945 (51944–51948) ns per set and
+mode 0 12958 (12943–12961). Mode 0's number leaves out the wineserver's CPU, because the server is another process.
+
+`make test` passed 251 tests. `check.sh msync` printed `PASS msync` and `PASS orphans` in all four runs, both modes,
+with all 19 gated rows and the 16 time rows.

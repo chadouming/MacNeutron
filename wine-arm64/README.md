@@ -86,6 +86,8 @@ one with an extra FEX external (gate S1). The ship-base steps (ship-base spec §
 | `fonts-tls` | Gate S2: Tahoma's metrics and dialog base units (win32u's FreeType), DirectWrite's font families, schannel credentials and a PFX import (gnutls) |
 | `steam-bridge` | Gate S7: the arm64 Steam bridge, below |
 
+`lanes` (`make lanes-check`), run by name and not in the full run, measures rather than gates: `x64-sync` and `arm64-xcall` as ARM64, ARM64EC and x64 (FEX) programs in mode 1, passing when each program passes and prints its 16 time rows; `tools/lanes_report.py` turns three runs' `lanes.log` into the table of `docs/testing/acceptance-arm64-release.md` (batch Task 2's baseline).
+
 The DXMT steps, after `steam-bridge`:
 
 | Step | What |
