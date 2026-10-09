@@ -50,7 +50,7 @@ struct SetupView: View {
         .disabled(model.busy != nil)
         .onAppear {
             Task { await model.refresh() }
-            raiseWindows()  // a menu-bar app isn't active on its own, so the window would open behind everything
+            raiseWindow("setup")  // a menu-bar app isn't active on its own, so the window would open behind everything
         }
     }
 

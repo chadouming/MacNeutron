@@ -39,7 +39,7 @@ struct MenuContent: View {
         }
         Button("Show logs") { NSWorkspace.shared.open(LauncherLog.standard.directory) }
         Divider()
-        SettingsLink { Text("Settings…") }
+        Button("Settings…") { show("settings", with: openWindow) }
         Button("Quit MacNeutron") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
     }
