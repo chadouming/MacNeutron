@@ -81,7 +81,7 @@ one with an extra FEX external (gate S1). The ship-base steps (ship-base spec §
 | Step | What |
 |---|---|
 | `wxflip-x64` | Gate S4: `x64-smc` under FEX rewrites and runs code in RWX memory and its own `.text`, with 0 `trace:wxflip` lines |
-| `msync` | Gate S3: `x64-sync` under FEX with `WINEMSYNC=1`, then `0`, each against a server the step starts; 14 gated rows, both mismatch directions, and the timing rows (M1) |
+| `msync` | Gate S3: `x64-sync` under FEX with `WINEMSYNC=1`, then `0`, each against a server the step starts; 19 gated rows, both mismatch directions, and the timing rows (M1) |
 | `x18` | Gate S5: 16 threads checking x18 (T1), every path to unix code and back in both lanes (T2), a double enable that must reach the toggle's trap, which exits 133 in self-test mode without a crash report (T3), a suspend stress (T4), and where `ntdll.so` names x18 |
 | `fonts-tls` | Gate S2: Tahoma's metrics and dialog base units (win32u's FreeType), DirectWrite's font families, schannel credentials and a PFX import (gnutls) |
 | `steam-bridge` | Gate S7: the arm64 Steam bridge, below |
@@ -251,6 +251,11 @@ re-clone; that is why they wait for the rebase.
   - 0029 (`dlls/libxess`: refused Executes missing a texture Init's flags ask for, NOT_IMPLEMENTED for the calls
     MetalFX has nothing for, native AA at an odd output size, the logging callback's ERROR level, the pipeline
     build status after Init) is ours and stays local.
+  - 0031 (msync's wait-all: every object type wakes all its waiters, as CrossOver 26.3 does, so a wait-all leg that
+    only looks at an object can't take a single waiter's wake; the rollback puts back only what it took, a mutex taken
+    abandoned as abandoned, and wakes its waiters; a repeated object answers `STATUS_INVALID_PARAMETER`; an abandoned
+    mutex no longer spins; the shm reply port's receive right is released; the abandon store is SEQ_CST) is ours and
+    stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into

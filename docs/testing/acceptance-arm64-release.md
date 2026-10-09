@@ -817,3 +817,66 @@ accepted judging there), the dev runtime of each step, Steam bridge on, practice
   sampler's process pattern didn't match Wine's command line.
 - **Upscale cost:** 0.93-1.01 ms at 1728x1117 output and 1.76 ms at ~2560x1440 (Tasks 3, 3c): under the spec's 5 ms.
 
+## msync wait-all fixes (batch Task 1)
+
+2026-10-09. Wine patch 0031 (`msync: Fix wait-all wakeups, rollback and duplicate objects.`); DXMT, FEX unchanged.
+`x64-sync` has 19 gated rows (5 new) and 7 time rows (3 new); `check.sh msync` also gates mode 1's duplicate answers
+(`MSYNC_MODES` picks the modes; default `1 0`). Every new row failed first in mode 1 and passed in mode 0 on the 0030
+runtime (`build/batch-msync/red10k-*.log`, `red-mode0-1.log`):
+- **`wait-all-single-waiter`** (B1): `FAIL … auto-event round 0 (A first): the single waiter still asleep 100 ms after
+  the signal` in 6 of 6 mode-1 runs; `ok` after.
+- **`wait-all-rollback-wake`** (B2): `stalls 19`, `3`, `1` (2,000 releases: `0`, `2`, `6`, so `RELEASES` is 10,000);
+  `stalls 0`, no timeouts after.
+- **`wait-all-owned-mutex`** (B3): `probe-hits` 110672168, 125748292, 136435857 and `1 owner releases failed` (one
+  rollback freed the owner's mutex for good); `probe-hits 0` after.
+- **`wait-all-duplicate`** (B4): mode 1 `auto-event spun semaphore success mutex success` → `invalid-parameter` for
+  all three; mode 0 `success` for all three, before and after (the wineserver has no duplicate check).
+- **`wait-all-abandoned-mutex`** (B7): `still running after 1 s` → `ok` (`WAIT_ABANDONED_0`, the mutex released).
+- B6 (a mutex taken abandoned goes back abandoned) has no deterministic trigger; it is read in the diff. R5 and R9,
+  static: `_mach_port_mod_refs` in `ntdll.so`'s imports 0 → 1; `_msync_abandon_mutexes`: `stlr` 0 → 1, the merged
+  `str d8, [x21]` 1 → 0.
+
+**B1 shipped as option (a), wake-all for every type on both sides** (as CrossOver 26.3). Option (b), the Ruling R11
+default (non-alertable wait-all legs parked through the pump), passed every row but failed the bar: mode 1's
+`wait-all-wake` 10566-11288 ns against mode 0's 9139-9222 in the same three runs (`green-b-*.log`). Under (a) every
+waiter parked on an object's word wakes at each signal and races for the object, so a wait-all leg that only looks at
+it can no longer take the one wake a single waiter needed: who gets an auto-reset event or a mutex is settled by the
+take, not by the kernel's choice of one sleeper, at the price of waking them all: `auto-handoff-8`, 8 threads on one
+auto-reset event, 692 (681–713) ns per handoff against (b)'s wake-one 626 (617–633) in the same machine state.
+
+| Row (ns), median (min–max) of 3 | mode 1 before | mode 1 after | mode 0 after |
+|---|---|---|---|
+| `wait-all-wake` | 4804 (3383–4918) | 5822 (5494–5845) | 9278 (9224–9386) |
+| `wait-all-poll` | 113 (89–121) | 118 (118–118) | 8768 (8730–8850) |
+| `auto-handoff-8` | 634 (631–657) | 692 (681–713) | 7632 (7550–7722) |
+
+Option (b), same three-run format: mode 1 `wait-all-wake` 11274 (10566–11288), `wait-all-poll` 98 (96–101),
+`auto-handoff-8` 626 (617–633); mode 0 9196 (9139–9222), 8644 (8618–8766), 7552 (7520–7624).
+
+All on AC power, lid open, idle, each run under `caffeinate -i`, back to back ("before": the 10,000-release harness on
+the 0030 runtime; "after": the dev build of 0031). The 2,000-release "before" runs measured `wait-all-wake` 3420
+(3358–3430), `wait-all-poll` 86 (86–90), `auto-handoff-8` 614 (602–702); against them `wait-all-poll` after lies
+wholly above. The machine moved between the sets: the control rows this patch doesn't touch read `uncontended-wait` /
+`uncontended-signal` 62-65 / 44-46 in 2,000-release runs 1-2 and 10,000-release run 1, 114-125 / 77-91 in the other
+three before runs, and 136-143 / 99-100 in every run after (the sync report's band: 102-143 / 77-101). The poll path
+does strictly less work after (one index compare instead of a `single_waiters` increment and decrement), and (a) and
+(b) run the same poll code yet measured 118 and 96-101: a build or machine effect, not the path's work.
+
+`w1-wins` / `w2-wins` per run (10,000 releases):
+
+| Run | rollback-wake | owned-mutex |
+|---|---|---|
+| before 1-3 (mode 1) | 1102/8899, 919/9082, 1042/8959 | 1023/8978, 938/9063, 1124/8877 |
+| after (a) 1-3, mode 1 | 991/9010, 1006/8995, 913/9088 | 3346/6655, 3467/6534, 3600/6401 |
+| after (a) 1-3, mode 0 | 4831/5170, 4850/5151, 4784/5217 | 5001/5000 ×3 |
+| (b) 1-3, mode 1 | 1536/8465, 1483/8518, 1389/8612 | 7173/2828, 7366/2635, 7227/2774 |
+
+(2,000 releases, before: rollback-wake 221/1780, 228/1773, 224/1777; owned-mutex 216/1785, 233/1768, 214/1787. The
+wins add up to one more than the releases: the shutdown releases X once more.) The msync step, both modes, stays far
+under its 300 s cap (a whole `check.sh msync` run, with `boot` and `fex`: 77-78 s).
+
+`make wine-arm64-check` (dev build of 0031): every step `PASS`, then `PASS orphans` (2134 s), its `msync` step with
+the 19 rows in both modes and mode 1's duplicate line; `make test` 251 tests, `make smoke` 15 PASS, `make bridge-check`
+15 ok and `PASS probe redaction`; `make media-check` as before (`FAIL media-mf: FAIL arm64-media-mf: stage=video-type
+hr=0xc00d5212; FAIL x64-media-mf: stage=video-type hr=0xc00d5212`). Wine 31 of 31 apply from the pin to the build
+tree's exact tree.

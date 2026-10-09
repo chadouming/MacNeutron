@@ -293,13 +293,16 @@ wxflip_x64_cmd() {
 msync_cmd() {
   S="$TOOL/Contents/Resources/bin/wineserver"
   WINEPREFIX="$PFX" "$S" -k || true  # exits 1 when no server was running
-  for m in 1 0; do
+  for m in ${MSYNC_MODES:-1 0}; do  # MSYNC_MODES=1 (or 0) runs one mode: the red runs
     o=$((1 - m)) slog="$WORK/msync-server-$m.log"
     WINEMSYNC=$m WINEPREFIX="$PFX" "$S" -p 2> "$slog" || { echo "FAIL msync: wineserver -p, WINEMSYNC=$m: exit $?"; return 1; }
     out=$(WINEMSYNC=$m exe_cmd x64-sync) && rc=0 || rc=$?
     echo "$out" | sed -E "s/^(time|info) /info msync $m /"
     cp "$WORK/x64-sync.err" "$WORK/x64-sync-$m.err"
     [ "$rc" = 0 ] || { echo "FAIL msync: WINEMSYNC=$m: $(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 '^FAIL' || echo "$out" | tail -n 1)"; return 1; }
+    dup='info wait-all-duplicate auto-event invalid-parameter semaphore invalid-parameter mutex invalid-parameter'
+    [ "$m" = 0 ] || echo "$out" | LC_ALL=C /usr/bin/grep -qx "$dup" \
+      || { echo "FAIL msync: WINEMSYNC=1: a duplicate in a wait-all isn't ERROR_INVALID_PARAMETER"; return 1; }
     # The server has answered x64-sync, so it is past msync's start: the line is there in mode 1, absent in mode 0.
     n=$(LC_ALL=C /usr/bin/grep -c '^msync: up and running\.$' "$slog" || true)
     [ "$n" = "$m" ] || { echo "FAIL msync: WINEMSYNC=$m: 'msync: up and running.' $n times in ${slog#"$ROOT"/}"; return 1; }

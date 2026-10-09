@@ -2,6 +2,10 @@
 // serves them; check.sh's msync step runs it under FEX in both modes. One line per gated row, `ok <row>` or
 // `FAIL <row>: <why>`; then the reported rows: `info pulse-event` (PulseEvent can miss a waiter under msync) and
 // `time <row> <ns>` (the median of the batches, per operation); then `PASS x64-sync` when every gated row passed.
+// The wait-all rows (Wine patch 0031) print their own `info` lines before their verdict: `info wait-all-duplicate`, each
+// duplicate's answer (check.sh gates mode 1's), and the two races' counts. A time row whose wait times out prints
+// `FAIL <row>: stuck` instead of its time and fails the run. Blocking waits in those rows run on worker threads with
+// finite timeouts, so a wait that spins can't hang the program.
 // The cross-process rows start this program again as `x64-sync.exe child <role> <args...>`: a child prints nothing (it
 // shares the parent's stdout) and answers through its exit code, 0 for success.
 #include <windows.h>
@@ -15,7 +19,8 @@
 
 static char self[MAX_PATH], why[256];
 static double ns_per_tick;
-static double t_wait, t_signal, t_wake, t_churn;  // the time rows, 0 when not measured
+static double t_wait, t_signal, t_wake, t_churn, t_all_wake, t_all_poll, t_handoff;  // the time rows, 0: not measured
+static int failed;  // a gated row or a time row failed
 
 // Sets the row's failure reason; returns 0, so a row can `return bad(...)`.
 static int bad(const char *fmt, ...) {
@@ -499,6 +504,374 @@ static void uncontended(void) {
   CloseHandle(s);
 }
 
+// The wait-all rows (Wine patch 0031). `stop` ends a row's threads.
+static volatile LONG stop;
+
+// wait-all-single-waiter (B1): A waits for all of {O, S}, B for O alone; O is signalled once. A wakes, finds S unset
+// and parks again; the wake must still reach B. O: an auto-reset event, a mutex main owns, an auto-reset timer (the
+// server signals it). 10 rounds each, A started first in the even ones.
+enum { AUTO_EVENT, MUTEX, TIMER };
+static const char *const kinds[] = {"auto-event", "mutex", "timer"};
+struct pair { HANDLE h[2]; int kind; };
+static DWORD WINAPI pair_all(void *p) {
+  struct pair *a = p;
+  DWORD r = WaitForMultipleObjects(2, a->h, TRUE, 5000);
+  if (r == WAIT_OBJECT_0 && a->kind == MUTEX) ReleaseMutex(a->h[0]);
+  return r;
+}
+static DWORD WINAPI pair_one(void *p) {
+  struct pair *a = p;
+  DWORD r = WaitForSingleObject(a->h[0], 2000);
+  if (r == WAIT_OBJECT_0 && a->kind == MUTEX) ReleaseMutex(a->h[0]);
+  return r;
+}
+static void signal_kind(HANDLE o, int kind) {
+  LARGE_INTEGER due = {.QuadPart = -10000};  // 1 ms
+  if (kind == AUTO_EVENT) SetEvent(o);
+  else if (kind == MUTEX) ReleaseMutex(o);
+  else SetWaitableTimer(o, &due, 0, NULL, NULL, FALSE);
+}
+static int wait_all_single_waiter(void) {
+  for (int kind = AUTO_EVENT; kind <= TIMER; kind++) {
+    for (int r = 0; r < 10; r++) {
+      struct pair p = {{kind == AUTO_EVENT ? CreateEventA(NULL, FALSE, FALSE, NULL)
+                        : kind == MUTEX    ? CreateMutexA(NULL, TRUE, NULL)
+                                           : CreateWaitableTimerA(NULL, FALSE, NULL),
+                        CreateSemaphoreA(NULL, 0, 1, NULL)},
+                       kind};
+      EXPECT(p.h[0] && p.h[1], "creating the objects: error %lu", GetLastError());
+      HANDLE t1 = start(r % 2 ? pair_one : pair_all, &p);
+      Sleep(50);
+      HANDLE t2 = start(r % 2 ? pair_all : pair_one, &p);
+      HANDLE a = r % 2 ? t2 : t1, b = r % 2 ? t1 : t2;
+      Sleep(100);
+      signal_kind(p.h[0], kind);
+      int ok = WaitForSingleObject(b, kind == TIMER ? 101 : 100) == WAIT_OBJECT_0;
+      ReleaseSemaphore(p.h[1], 1, NULL);  // cleanup, both outcomes: A can finish, then B
+      if (kind != MUTEX) signal_kind(p.h[0], kind);
+      DWORD ra = join(a);
+      if (kind != MUTEX) signal_kind(p.h[0], kind);
+      DWORD rb = join(b);
+      CloseHandle(p.h[0]);
+      CloseHandle(p.h[1]);
+      EXPECT(ok && rb == WAIT_OBJECT_0, "%s round %d (%s first): the single waiter still asleep 100 ms after the signal",
+             kinds[kind], r, r % 2 ? "B" : "A");
+      EXPECT(ra == WAIT_OBJECT_0, "%s round %d: the wait-all returned %#lx", kinds[kind], r, ra);
+    }
+  }
+  return 1;
+}
+
+// wait-all-rollback-wake (B2) and wait-all-owned-mutex (B3): W1 waits for all of {first, S[0..61], X}, W2 for all of
+// {X, Z}, and main releases X RELEASES times. When W2 takes X inside W1's grab, W1 puts back what it took; the 62
+// semaphores between `first` and X widen that window. Event row: `first` is an auto-reset event P keeps taking and
+// setting; a rollback that puts it back without a wake leaves P asleep with it set, which main's sampler counts. Mutex
+// row: W1 owns `first` throughout; a rollback that lets go of it lets P's probe take it.
+#define RELEASES 10000
+#define MIN_WINS (RELEASES / 100)
+#define STALL_SAMPLES 3
+static HANDLE race_first, race_s[62], race_x, race_z, race_ready;
+static int race_mutex, w1_wins, w2_wins, p_timeouts, probe_hits, owner_release_failed;
+static volatile LONG p_done, p_seq, p_waiting;
+static DWORD WINAPI race_w1(void *unused) {
+  HANDLE h[64];
+  if (race_mutex) race_first = CreateMutexA(NULL, TRUE, NULL);
+  h[0] = race_first;
+  memcpy(h + 1, race_s, sizeof race_s);
+  h[63] = race_x;
+  SetEvent(race_ready);
+  while (!stop) {
+    if (WaitForMultipleObjects(64, h, TRUE, 100) != WAIT_OBJECT_0) continue;
+    w1_wins++;
+    if (!race_mutex) SetEvent(race_first);
+    else if (!ReleaseMutex(race_first)) owner_release_failed++;
+  }
+  if (race_mutex) {  // after P is gone: the creation's ownership, released once, exactly
+    while (!p_done) Sleep(1);
+    if (!ReleaseMutex(race_first)) owner_release_failed++;
+    if (ReleaseMutex(race_first) || GetLastError() != ERROR_NOT_OWNER) owner_release_failed++;
+  }
+  return 0;
+}
+static DWORD WINAPI race_w2(void *unused) {
+  HANDLE h[2] = {race_x, race_z};
+  while (!stop)
+    if (WaitForMultipleObjects(2, h, TRUE, 100) == WAIT_OBJECT_0) w2_wins++;
+  return 0;
+}
+static DWORD WINAPI race_p(void *unused) {
+  while (!stop) {
+    DWORD r;
+    if (race_mutex) {
+      r = WaitForSingleObject(race_first, 0);
+      if (r == WAIT_OBJECT_0 || r == WAIT_ABANDONED) {
+        probe_hits++;
+        ReleaseMutex(race_first);
+      }
+      continue;
+    }
+    p_seq++;
+    p_waiting = 1;
+    r = WaitForSingleObject(race_first, 1000);
+    p_waiting = 0;
+    if (r == WAIT_OBJECT_0) SetEvent(race_first);
+    else p_timeouts++;
+  }
+  return 0;
+}
+static int wait_all_race(int owned_mutex) {
+  LONG(WINAPI * query_event)(HANDLE, int, void *, ULONG, ULONG *);  // NTSTATUS NtQueryEvent
+  struct { LONG type, state; } info;
+  LONG stall_seq[16], stall_len[16], run_seq = 0;
+  int stalls = 0, run = 0;
+  HANDLE w1, w2, p;
+  stop = p_done = p_seq = p_waiting = 0;
+  w1_wins = w2_wins = p_timeouts = probe_hits = owner_release_failed = 0;
+  race_mutex = owned_mutex;
+  query_event = (void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryEvent");
+  race_first = owned_mutex ? NULL : CreateEventA(NULL, FALSE, TRUE, NULL);
+  for (int i = 0; i < 62; i++)
+    EXPECT((race_s[i] = CreateSemaphoreA(NULL, 0x100000, 0x100000, NULL)), "semaphore %d: error %lu", i, GetLastError());
+  race_x = CreateSemaphoreA(NULL, 0, 1, NULL);
+  race_z = CreateEventA(NULL, TRUE, TRUE, NULL);
+  race_ready = CreateEventA(NULL, TRUE, FALSE, NULL);
+  EXPECT(query_event && race_x && race_z && race_ready && (owned_mutex || race_first), "setup: error %lu",
+         GetLastError());
+  w1 = start(race_w1, NULL);
+  if (WaitForSingleObject(race_ready, 10000) != WAIT_OBJECT_0 || !race_first) {
+    stop = 1;
+    join(w1);
+    return bad("W1 didn't start: error %lu", GetLastError());
+  }
+  w2 = start(race_w2, NULL);
+  p = start(race_p, NULL);
+  for (int i = 0; i < RELEASES; i++) {
+    ReleaseSemaphore(race_x, 1, NULL);
+    Sleep(1);
+    if (owned_mutex) continue;
+    // P asleep in one wait (same p_seq) with the event set, STALL_SAMPLES samples running: a stall.
+    LONG seq = p_seq;
+    int asleep = p_waiting && !query_event(race_first, 0 /* EventBasicInformation */, &info, sizeof info, NULL)
+                 && info.state == 1 && p_waiting && p_seq == seq;
+    if (!asleep) {
+      run = 0;
+      continue;
+    }
+    if (run && seq == run_seq) {
+      run++;
+    } else {
+      run = 1;
+      run_seq = seq;
+    }
+    if (run == STALL_SAMPLES && stalls < 16) stall_seq[stalls] = seq;
+    if (run == STALL_SAMPLES) stalls++;
+    if (run >= STALL_SAMPLES && stalls <= 16) stall_len[stalls - 1] = run;
+  }
+  stop = 1;
+  join(p);
+  p_done = 1;
+  ReleaseSemaphore(race_x, 1, NULL);
+  join(w1);
+  join(w2);
+  if (owned_mutex) {
+    printf("info wait-all-owned-mutex releases %d w1-wins %d w2-wins %d probe-hits %d\n", RELEASES, w1_wins, w2_wins,
+           probe_hits);
+  } else {
+    printf("info wait-all-rollback-wake releases %d w1-wins %d w2-wins %d stalls %d\n", RELEASES, w1_wins, w2_wins,
+           stalls);
+    for (int i = 0; i < stalls && i < 16; i++)
+      printf("info wait-all-rollback-wake stall p-seq %ld state 1 for %ld samples\n", stall_seq[i], stall_len[i]);
+  }
+  CloseHandle(race_first);
+  for (int i = 0; i < 62; i++) CloseHandle(race_s[i]);
+  CloseHandle(race_x);
+  CloseHandle(race_z);
+  CloseHandle(race_ready);
+  EXPECT(w2_wins >= MIN_WINS, "the race didn't run: W2 won %d of %d", w2_wins, RELEASES);
+  if (!owned_mutex)
+    EXPECT(stalls == 0 && p_timeouts == 0, "%d stalls, %d timeouts: the single waiter slept with the event set", stalls,
+           p_timeouts);
+  else
+    EXPECT(probe_hits == 0 && owner_release_failed == 0,
+           "another thread took the owner's mutex %d times; %d owner releases failed", probe_hits,
+           owner_release_failed);
+  return 1;
+}
+static int wait_all_rollback_wake(void) { return wait_all_race(0); }
+static int wait_all_owned_mutex(void) { return wait_all_race(1); }
+
+// wait-all-duplicate (B4): one object twice in a wait-all, {h, h}. Windows answers ERROR_INVALID_PARAMETER; the
+// wineserver has no duplicate check, so check.sh gates mode 1's answers and this program only {E, E}'s spin.
+struct dup { HANDLE h[2]; int mutex; DWORD r, err; };
+static DWORD WINAPI dup_waiter(void *p) {
+  struct dup *d = p;
+  d->r = WaitForMultipleObjects(2, d->h, TRUE, 0);
+  d->err = GetLastError();
+  if (d->r == WAIT_OBJECT_0 && d->mutex) {
+    ReleaseMutex(d->h[0]);
+    ReleaseMutex(d->h[0]);
+  }
+  return 0;
+}
+// Writes the worker's answer to w; returns whether it ended within 1 s. A spinning worker is rescued: main takes h
+// until the worker's wait finds it unsignalled and times out, or, after 5 s, ends it.
+static int dup_case(HANDLE h, int mutex, char *w, size_t n) {
+  static struct dup d;  // static: a terminated worker leaves no write to a gone stack frame
+  d = (struct dup){{h, h}, mutex, 0xdeadbeef, 0};
+  HANDLE t = start(dup_waiter, &d);
+  int ended = WaitForSingleObject(t, 1000) == WAIT_OBJECT_0;
+  for (LONGLONG t0 = ticks(); !ended && WaitForSingleObject(t, 0) == WAIT_TIMEOUT && ms_since(t0) < 5000;)
+    WaitForSingleObject(h, 0);
+  if (WaitForSingleObject(t, 0) == WAIT_TIMEOUT) TerminateThread(t, 0);
+  WaitForSingleObject(t, 1000);
+  CloseHandle(t);
+  if (!ended) snprintf(w, n, "spun");
+  else if (d.r == WAIT_OBJECT_0) snprintf(w, n, "success");
+  else if (d.r == WAIT_FAILED && d.err == ERROR_INVALID_PARAMETER) snprintf(w, n, "invalid-parameter");
+  else snprintf(w, n, "%#lx/%lu", d.r, d.err);
+  return ended;
+}
+static int wait_all_duplicate(void) {
+  HANDLE e = CreateEventA(NULL, FALSE, TRUE, NULL), m = CreateMutexA(NULL, FALSE, NULL);
+  HANDLE s = CreateSemaphoreA(NULL, 2, 2, NULL);  // never count 1: {S(1), S(1)} aborts the mode-0 wineserver
+  char we[32], ws[32], wm[32];
+  EXPECT(e && s && m, "creating the objects: error %lu", GetLastError());
+  int ended = dup_case(e, 0, we, sizeof we);
+  dup_case(s, 0, ws, sizeof ws);
+  dup_case(m, 1, wm, sizeof wm);
+  printf("info wait-all-duplicate auto-event %s semaphore %s mutex %s\n", we, ws, wm);
+  CloseHandle(e);
+  CloseHandle(s);
+  CloseHandle(m);
+  EXPECT(ended, "{E, E}: the wait-all spun past 1 s");
+  return 1;
+}
+
+// wait-all-abandoned-mutex (B7): a wait-all on {an abandoned mutex, a set manual event} takes the mutex and returns
+// WAIT_ABANDONED_0. A spinning worker is rescued: main takes the mutex, so the worker's spent wait times out.
+struct abandoned { HANDLE h[2]; DWORD r; BOOL released; };
+static DWORD WINAPI abandoned_waiter(void *p) {
+  struct abandoned *a = p;
+  a->r = WaitForMultipleObjects(2, a->h, TRUE, 500);
+  if (a->r == WAIT_ABANDONED_0) a->released = ReleaseMutex(a->h[0]);
+  return 0;
+}
+static int wait_all_abandoned_mutex(void) {
+  static struct abandoned a;  // static: the worker may outlive a failed rescue
+  HANDLE m = CreateMutexA(NULL, FALSE, NULL), z = CreateEventA(NULL, TRUE, TRUE, NULL), t;
+  held = CreateEventA(NULL, FALSE, FALSE, NULL);
+  EXPECT(m && z && held, "creating the objects: error %lu", GetLastError());
+  t = start(take_and_quit, m);
+  EXPECT(WaitForSingleObject(held, 10000) == WAIT_OBJECT_0, "the thread didn't take the mutex");
+  EXPECT(join(t) == WAIT_OBJECT_0, "the abandoning thread's wait failed");
+  a = (struct abandoned){{m, z}, 0xdeadbeef, FALSE};
+  t = start(abandoned_waiter, &a);
+  int ended = WaitForSingleObject(t, 1000) == WAIT_OBJECT_0;
+  if (ended) {
+    CloseHandle(t);
+  } else {
+    WaitForSingleObject(m, 0);  // WAIT_ABANDONED: main owns it now
+    join(t);
+    ReleaseMutex(m);
+  }
+  CloseHandle(m);
+  CloseHandle(z);
+  CloseHandle(held);
+  EXPECT(ended, "a wait-all with an abandoned mutex: still running after 1 s");
+  EXPECT(a.r == WAIT_ABANDONED_0 && a.released, "a wait-all with an abandoned mutex returned %#lx", a.r);
+  return 1;
+}
+
+// Time rows of the wait-all fixes, each the median of BATCHES batches. A wait that times out prints `FAIL <row>:
+// stuck`, fails the run and leaves the row unmeasured.
+static void stuck(const char *row) {
+  printf("FAIL %s: stuck\n", row);
+  failed = 1;
+}
+
+// wait-all-wake: half a round trip between two threads, each blocked in a wait-all on {its own auto-reset event, Z}.
+static HANDLE wake_ev[2], wake_z;
+static DWORD WINAPI wake_partner(void *unused) {
+  HANDLE h[2] = {wake_ev[1], wake_z};
+  while (!stop)
+    if (WaitForMultipleObjects(2, h, TRUE, 1000) == WAIT_OBJECT_0 && !stop) SetEvent(wake_ev[0]);
+  return 0;
+}
+static void wait_all_wake(void) {
+  double v[BATCHES];
+  HANDLE h[2], t;
+  stop = 0;
+  wake_ev[0] = CreateEventA(NULL, FALSE, FALSE, NULL);
+  wake_ev[1] = CreateEventA(NULL, FALSE, FALSE, NULL);
+  wake_z = CreateEventA(NULL, TRUE, TRUE, NULL);
+  h[0] = wake_ev[0];
+  h[1] = wake_z;
+  t = start(wake_partner, NULL);
+  for (int b = 0; b < BATCHES && !stop; b++) {
+    LONGLONG t0 = ticks();
+    for (int j = 0; j < 100 && !stop; j++) {
+      SetEvent(wake_ev[1]);
+      if (WaitForMultipleObjects(2, h, TRUE, 1000) != WAIT_OBJECT_0) stop = 1;
+    }
+    v[b] = (ticks() - t0) * ns_per_tick / 100 / 2;
+  }
+  if (stop) stuck("wait-all-wake");
+  else t_all_wake = median(v, BATCHES);
+  stop = 1;
+  SetEvent(wake_ev[1]);  // the partner sees stop now, not after its timeout
+  join(t);
+  CloseHandle(wake_ev[0]);
+  CloseHandle(wake_ev[1]);
+  CloseHandle(wake_z);
+}
+
+// wait-all-poll: a 0 ms wait-all on {an unset auto-reset event, a set manual event}, per call.
+static void wait_all_poll(void) {
+  HANDLE h[2] = {CreateEventA(NULL, FALSE, FALSE, NULL), CreateEventA(NULL, TRUE, TRUE, NULL)};
+  double v[BATCHES];
+  for (int b = 0; b < BATCHES; b++) {
+    LONGLONG t0 = ticks();
+    for (int j = 0; j < 2000; j++) WaitForMultipleObjects(2, h, TRUE, 0);
+    v[b] = (ticks() - t0) * ns_per_tick / 2000;
+  }
+  t_all_poll = median(v, BATCHES);
+  CloseHandle(h[0]);
+  CloseHandle(h[1]);
+}
+
+// auto-handoff-8: 8 threads pass one auto-reset event, 2,000 handoffs a batch, per handoff.
+static HANDLE handoff_ev, handoff_done;
+static volatile LONG handoffs;
+static DWORD WINAPI handoff(void *unused) {
+  while (!stop) {
+    if (WaitForSingleObject(handoff_ev, 100) != WAIT_OBJECT_0) continue;
+    if (InterlockedIncrement(&handoffs) == 2000) SetEvent(handoff_done);
+    else SetEvent(handoff_ev);
+  }
+  return 0;
+}
+static void auto_handoff_8(void) {
+  HANDLE t[8];
+  double v[BATCHES];
+  stop = 0;
+  handoff_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+  handoff_done = CreateEventA(NULL, FALSE, FALSE, NULL);
+  for (int i = 0; i < 8; i++) t[i] = start(handoff, NULL);
+  for (int b = 0; b < BATCHES && !stop; b++) {
+    handoffs = 0;
+    LONGLONG t0 = ticks();
+    SetEvent(handoff_ev);
+    if (WaitForSingleObject(handoff_done, 10000) != WAIT_OBJECT_0) stop = 1;
+    v[b] = (ticks() - t0) * ns_per_tick / 2000;
+  }
+  if (stop) stuck("auto-handoff-8");
+  else t_handoff = median(v, BATCHES);
+  stop = 1;
+  for (int i = 0; i < 8; i++) join(t[i]);
+  CloseHandle(handoff_ev);
+  CloseHandle(handoff_done);
+}
+
 // The child roles; each returns 0 on success, else the step that failed.
 static int child(int argc, char **argv) {
   DWORD ppid = argc > 1 ? strtoul(argv[1], NULL, 10) : 0;
@@ -561,9 +934,13 @@ int main(int argc, char **argv) {
       {"duplicate-handle", duplicate_handle},
       {"many-events-cross-process", many_events_cross_process},
       {"create-close-churn", create_close_churn},
+      {"wait-all-single-waiter", wait_all_single_waiter},
+      {"wait-all-rollback-wake", wait_all_rollback_wake},
+      {"wait-all-owned-mutex", wait_all_owned_mutex},
+      {"wait-all-duplicate", wait_all_duplicate},
+      {"wait-all-abandoned-mutex", wait_all_abandoned_mutex},
   };
   LARGE_INTEGER f;
-  int failed = 0;
   GetModuleFileNameA(NULL, self, sizeof self);
   if (argc >= 3 && !strcmp(argv[1], "child")) return child(argc - 2, argv + 2);
   setvbuf(stdout, NULL, _IONBF, 0);  // a crash or a timeout keeps what was printed before it
@@ -580,9 +957,15 @@ int main(int argc, char **argv) {
   }
   pulse_event();
   uncontended();
+  wait_all_wake();
+  wait_all_poll();
+  auto_handoff_8();
   printf("time uncontended-wait %.0f\ntime uncontended-signal %.0f\n", t_wait, t_signal);
   if (t_wake > 0) printf("time cross-process-wake %.0f\n", t_wake);
   if (t_churn > 0) printf("time create-close %.0f\n", t_churn);
+  if (t_all_wake > 0) printf("time wait-all-wake %.0f\n", t_all_wake);
+  printf("time wait-all-poll %.0f\n", t_all_poll);
+  if (t_handoff > 0) printf("time auto-handoff-8 %.0f\n", t_handoff);
   if (failed) {
     printf("FAIL x64-sync\n");
     return 1;
