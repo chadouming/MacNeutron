@@ -503,7 +503,29 @@ fex_vmd_cmd() {
     tr -d '\r' < "$WORK/fex-vmd-listed.err" | LC_ALL=C /usr/bin/grep -qE "volatile metadata: x64-litmus\.exe at [0-9A-F]+: $k instructions, 1 ranges, $size bytes\$" \
       || fails="$fails${fails:+; }FEX logged no coverage line for x64-litmus.exe ($k instructions, 1 range, $size bytes)"
   fi
-  # 3. x64-bench's two scalar-memory kernels, each range running to the next symbol: with their ranges, at most
+  # 3. The same range with only MP's flag accesses listed, worker's store and run's load: MSVC's shape, where listed
+  # accesses order their unlisted neighbours. MP stays at 0.
+  # shellcheck disable=SC2046  # one address per line
+  set -- $("$T/llvm-objdump" -d --no-show-raw-insn --disassemble-symbols=run,worker "$TESTS/x64-litmus.exe" | awk '
+    / <(run|worker)>:$/ { fn = $2 }
+    /<flag>$/ && (fn == "<worker>:" && /\(%rip\)[[:space:]]+#/ || fn == "<run>:" && /\(%rip\), %/) {
+      sub(/:.*/, ""); sub(/^[[:space:]]*/, ""); print }')
+  if [ $# != 2 ]; then
+    fails="$fails${fails:+; }x64-litmus.exe's worker and run don't hold one flag store and one flag load ($# accesses)"
+  else
+    flags=$(printf '0x%x,0x%x' $((0x$1 - base)) $((0x$2 - base)))
+    # shellcheck disable=SC2046  # unfex prints a list of options
+    out=$(env $(unfex) FEX_SILENTLOG=0 FEX_EXTENDEDVOLATILEMETADATA="x64-litmus.exe;0x0-$(printf 0x%x "$size");$flags" \
+      WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-litmus.exe" 10000000 2> "$WORK/fex-vmd-flags.err" \
+      | tr -d '\r') || true
+    echo "$out"
+    f=$(echo "$out" | sed -n 's/^litmus MP forbidden=\([0-9]*\) runs=10000000$/\1/p')
+    echo "info fex-vmd x64-litmus flags $flags MP forbidden=$f"
+    [ "${f:-none}" = 0 ] || fails="$fails${fails:+; }x64-litmus with only its flag store and load listed: MP forbidden=${f:-none}: a listed access didn't order its neighbours"
+    tr -d '\r' < "$WORK/fex-vmd-flags.err" | LC_ALL=C /usr/bin/grep -qE "volatile metadata: x64-litmus\.exe at [0-9A-F]+: 2 instructions, 1 ranges, $size bytes\$" \
+      || fails="$fails${fails:+; }FEX logged no coverage line for x64-litmus.exe (2 instructions, 1 range, $size bytes)"
+  fi
+  # 4. x64-bench's two scalar-memory kernels, each range running to the next symbol: with their ranges, at most
   # VMD_RATIO of their default time.
   base=$("$T/llvm-readobj" --file-headers "$TESTS/x64-bench.exe" | awk '/ImageBase:/ { print $2; exit }')
   # shellcheck disable=SC2046  # each kernel's start and the next symbol's

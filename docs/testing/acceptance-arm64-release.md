@@ -1190,7 +1190,8 @@ What moved outside the band:
 ## FEX volatile metadata (batch Task 4)
 
 2026-10-09. **SMITE 2 A/B (Step 8) pending; FEX 0006 not exported yet.** The FEX change is committed in the build
-tree (`macneutron` acba840, on 4adb8a1 = 0005) and runs as a development build. The game runs with and without its
+tree (`macneutron` aba3995, on 4adb8a1 = 0005; acba840 before the review's fix round, below) and runs as a
+development build. The game runs with and without its
 metadata (Step 8), the export with its 6/6 fresh-fetch proof and the README lines follow when the maintainer is ready
 (Ruling R26).
 
@@ -1200,7 +1201,14 @@ R15):
   metadata marks safe kept TSO, and EVMD's documented range and module forms (`Config.json.in:582-597`) did nothing:
   they list no instruction. Now every block inside a valid range runs without TSO, except for its listed accesses and
   the accesses MonoHacks flags with `FLAG_FORCE_TSO` (Unity's SPSC ring buffer), which keep it. A block that straddles
-  a range's edge keeps the default, TSO on.
+  a range's edge keeps the default, TSO on. Listed GPR accesses keep TSO; vector accesses follow VectorTSOEnabled
+  (off by default: the JIT's vector TSO loads and stores add their barriers only under it, `MemoryOps.cpp:848`).
+- **Ranges stay inside their image.** The PE tables' ranges and EVMD's are clamped to the mapping and empty ones
+  dropped; PE-listed instructions outside the image are dropped. The image's unmap removes the ForceTSO ranges and
+  instructions over its whole view (`HandleImageUnmap` → `RemoveForceTSOInformation`), so nothing it added outlives
+  it, and the coverage line never counts more than SizeOfImage.
+- **Only a bare module name** (`mod`) disables TSO for the whole module. `mod;` and `mod;;<instructions>` list no range
+  (before, both fell back to the whole module, and the second dropped its instructions).
 - **`FEX_VOLATILEMETADATA=0`** skips an image's PE tables again; EVMD, an explicit setting, still applies. No binary
   in the repository carries PE metadata, so the PE side of the switch was checked by reading it. A litmus run with
   `FEX_VOLATILEMETADATA=0` and the whole-module EVMD still logged its coverage line and showed MP reordering (3,642 of
@@ -1214,12 +1222,14 @@ both ways before 0006 is exported.
 
 **The step.** `check.sh fex-vmd` is the first of the batch's gated steps (`BATCH`), run after the rest. It runs
 x64-litmus with EVMD over the whole module, then the same range with every instruction of the litmus kernels `run` and
-`worker` listed (262). It then runs x64-bench three times with FEX's defaults and three times with ranges over its two
-scalar-memory kernels, alternating: `x64-bench.exe;0x38e0-0x3950,0x3950-0x39b0`. `mem_seq_read` and `mem_seq_write`
-are now `NOINLINE`, so each has a symbol of its own. Every check runs, and the last line names each failure.
-`VMD_CALIBRATE=1` adds three runs with `FEX_TSOENABLED=0`, reported and not gated. TSO off everywhere breaks
-x64-bench's own SPSC ring (`mt_spsc_ring: item … read out of order`, after the mem_seq rows), so those runs' missing
-rows are an `info` line, not a failure.
+`worker` listed (262), then the same range with only MP's flag accesses listed: worker's store and run's load
+(`0x1680,0x18b2`), MSVC's shape, where listed accesses order their unlisted neighbours. It then runs x64-bench three
+times with FEX's defaults and three times with ranges over its two scalar-memory kernels, alternating:
+`x64-bench.exe;0x38e0-0x3950,0x3950-0x39b0`. `mem_seq_read` and `mem_seq_write` are now `NOINLINE`, so each has a symbol
+of its own. Every check runs, and the last line names each failure. `VMD_CALIBRATE=1` adds three runs with
+`FEX_TSOENABLED=0`, reported and not gated. TSO off everywhere breaks x64-bench's own SPSC ring
+(`mt_spsc_ring: item … read out of order`, after the mem_seq rows), so those runs' missing rows are an `info` line,
+not a failure.
 
 **RED** (`VMD_CALIBRATE=1 sh wine-arm64/check.sh fex-vmd`, before 0006) failed on exactly the five expected checks: the
 whole-module litmus count (MP forbidden=0), the two missing coverage lines and both `mem_seq_*` ratios. The listed
@@ -1364,7 +1374,7 @@ too.
 `get-last-error` − x64 `get-current-thread-id` is 1.0 ns (25.6 − 24.6), and x64 `get-current-thread-id` − x64
 `istream-addref` is −2.6 ns (24.6 − 27.2).
 
-**Gates**, on the development build (FEX acba840 committed, not exported), with Steam running:
+**Gates**, on the development build (FEX acba840 committed, not exported, before the fix round), with Steam running:
 - `make wine-arm64-check` passed every step in 2473 s, `fex-vmd` last, then `PASS orphans`. Its `fex-vmd` saw MP
   forbidden=1,347 with the whole-module range and 0 with `run` and `worker` listed. The ratios were 0.49 (0.447 of
   0.906 s) and 0.38 (0.383 of 1.013 s). `g2-litmus`'s default run was at 0 on all four patterns, and its control at
@@ -1382,5 +1392,31 @@ too.
 - `make bridge-check`: 15 `ok`.
 - `make media-check`: unchanged,
   `FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf: stage=video-type hr=0xc00d5212`.
+
+**The review's fix round** (FEX acba840 amended to aba3995; Ruling R29 kept `VMD_CALIBRATE`'s tso-off runs ungated).
+x64-litmus runs of 10⁷ under each EVMD, on acba840 and then on aba3995 (MP forbidden, then FEX's coverage line):
+
+| EVMD for x64-litmus.exe | acba840 | aba3995 |
+|---|---|---|
+| `;0x0-0x18000;0x1680,0x18b2` (the flag store and load) | 0; 2 instructions, 1 ranges, 98304 bytes | 0; the same |
+| `;0x0-0x18000;0x18b2` (the store only) | 37,565 | 137,251 |
+| `;0x0-0x18000;0x1680` (the load only) | 3 | 0 |
+| `;0x0-0x18000` (none listed) | 65,466 | 41,218 |
+| `;` | 25,717; 0 instructions, 1 ranges, 98304 bytes | 0; no line |
+| `;;0x1680,0x18b2` | 17,800; 0 instructions, 1 ranges, 98304 bytes | 0; 2 instructions, 0 ranges, 0 bytes |
+| `;0x0-0x100000` | 30,523; 0 instructions, 1 ranges, 1048576 bytes | 33,371; 0 instructions, 1 ranges, 98304 bytes |
+| (bare `x64-litmus.exe`) | | 45,782; 0 instructions, 1 ranges, 98304 bytes |
+
+- `fex-vmd` gains the flag-accesses run (`info fex-vmd x64-litmus flags <offsets> MP forbidden=<n>`, which has to be
+  0, and a coverage line of 2 instructions). It passed on acba840 and passes on aba3995. A temporary `check.sh` that
+  listed only the store failed it: `MP forbidden=26057: a listed access didn't order its neighbours`, with the
+  coverage-count check. Unlisting the load is caught every time. Unlisting the store showed 3 and 0 reorderings: a
+  writer's lost release is rarely visible on this Mac.
+- FEX's `ExtendedVolatileMetadata` APITest gains three cases: `hl2_linux;`, `hl2_linux;;0x1,0x2` and a range clamped
+  by `ApplyFEXExtendedVolatileMetadata`. Built with llvm-mingw as a static ARM64 exe and run under this Wine, they
+  fail 3 of 12 on acba840's parser and pass 12 of 12 (65 assertions) on aba3995's.
+- `sh wine-arm64/check.sh fex-vmd g2-litmus` on aba3995: `PASS g2-litmus` (0 on all four; control MP 27,138),
+  `PASS fex-vmd` (whole module 36,807, listed 0, flags 0), `PASS orphans`. The ratios, 0.50 (0.460 of 0.921 s) and
+  0.39 (0.391 of 1.005 s), are provisional: the Mac was on battery (R19). `make test`: 251 passed.
 
 **Step 8, SMITE 2 with and without its metadata:** pending, with the maintainer. 0006 isn't exported until it has run.
