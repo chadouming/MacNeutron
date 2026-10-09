@@ -1189,20 +1189,22 @@ What moved outside the band:
 
 ## FEX volatile metadata (batch Task 4)
 
-2026-10-09. **SMITE 2 A/B (Step 8) pending; FEX 0006 not exported yet.** The FEX change is committed in the build
-tree (`macneutron` aba3995, on 4adb8a1 = 0005; acba840 before the review's fix round, below) and runs as a
-development build. The game runs with and without its
-metadata (Step 8), the export with its 6/6 fresh-fetch proof and the README lines follow when the maintainer is ready
-(Ruling R26).
+2026-10-09. **Step 8 waived by the maintainer (2026-10-09, release 0.3.0); escape hatch FEX_VOLATILEMETADATA=0.** Ruling
+R33 keeps every FEX change for 0.3.0 without the SMITE 2 A/B. FEX 0006 is exported from `macneutron` f59f44c, on
+4adb8a1 (0005). It was acba840 before the review's fix round (below), then aba3995; f59f44c corrects only aba3995's
+message. The final gate ran on a bundle built from the applied trees.
 
 FEX patch 0006 (`Core: Run every block a volatile-metadata range covers without TSO.`), ours and local only (Ruling
 R15):
 - **The block rule.** FEX ran a block without TSO only when the block held a listed volatile access. So a block the
   metadata marks safe kept TSO, and EVMD's documented range and module forms (`Config.json.in:582-597`) did nothing:
   they list no instruction. Now every block inside a valid range runs without TSO, except for its listed accesses and
-  the accesses MonoHacks flags with `FLAG_FORCE_TSO` (Unity's SPSC ring buffer), which keep it. A block that straddles
-  a range's edge keeps the default, TSO on. Listed GPR accesses keep TSO; vector accesses follow VectorTSOEnabled
-  (off by default: the JIT's vector TSO loads and stores add their barriers only under it, `MemoryOps.cpp:848`).
+  the accesses MonoHacks flags with `FLAG_FORCE_TSO` (Unity's SPSC ring buffer), which keep it. A block that straddles a
+  range's edge keeps the default, TSO on. Listed GPR accesses keep TSO; vector accesses follow VectorTSOEnabled; x87
+  FIST/FISTP stores follow VectorTSOEnabled; REP MOVS/STOS follow MemcpySetTSOEnabled. VectorTSOEnabled is off by
+  default: the JIT's vector TSO loads and stores add their barriers only under it (`MemoryOps.cpp:848`), and FIST/FISTP
+  stores are non-TSO without it (`X87.cpp:182`). REP MOVS/STOS take their ordering from MemcpySetTSOEnabled alone
+  (`MemoryOps.cpp:1854, 2089`).
 - **Ranges stay inside their image.** The PE tables' ranges and EVMD's are clamped to the mapping and empty ones
   dropped; PE-listed instructions outside the image are dropped. The image's unmap removes the ForceTSO ranges and
   instructions over its whole view (`HandleImageUnmap` → `RemoveForceTSOInformation`), so nothing it added outlives
@@ -1217,26 +1219,26 @@ R15):
   `I 284 volatile metadata: x64-litmus.exe at 140000000: 0 instructions, 1 ranges, 98304 bytes`.
 
 **SMITE 2's metadata** (Step 1, the controller, read-only): `Hemingway-Win64-Shipping.exe` has
-`VolatileMetadataPointer: 0x14AC6715C`. That is non-zero, so its MSVC tables now take effect, and Step 8 runs the game
-both ways before 0006 is exported.
+`VolatileMetadataPointer: 0x14AC6715C`. That is non-zero, so its MSVC tables now take effect. Step 8, running the game
+both ways, was waived (below).
 
 **The step.** `check.sh fex-vmd` is the first of the batch's gated steps (`BATCH`), run after the rest. It runs
 x64-litmus with EVMD over the whole module, then the same range with every instruction of the litmus kernels `run` and
-`worker` listed (262), then the same range with only MP's flag accesses listed: worker's store and run's load
-(`0x1680,0x18b2`), MSVC's shape, where listed accesses order their unlisted neighbours. It then runs x64-bench three
-times with FEX's defaults and three times with ranges over its two scalar-memory kernels, alternating:
+`worker` listed (262), then the same range with only MP's flag accesses listed, in address order run's load and worker's
+store (`0x1680,0x18b2`), MSVC's shape, where listed accesses order their unlisted neighbours. It then runs x64-bench
+three times with FEX's defaults and three times with ranges over its two scalar-memory kernels, alternating:
 `x64-bench.exe;0x38e0-0x3950,0x3950-0x39b0`. `mem_seq_read` and `mem_seq_write` are now `NOINLINE`, so each has a symbol
 of its own. Every check runs, and the last line names each failure. `VMD_CALIBRATE=1` adds three runs with
 `FEX_TSOENABLED=0`, reported and not gated. TSO off everywhere breaks x64-bench's own SPSC ring
 (`mt_spsc_ring: item … read out of order`, after the mem_seq rows), so those runs' missing rows are an `info` line,
 not a failure.
 
-**RED** (`VMD_CALIBRATE=1 sh wine-arm64/check.sh fex-vmd`, before 0006) failed on exactly the five expected checks: the
-whole-module litmus count (MP forbidden=0), the two missing coverage lines and both `mem_seq_*` ratios. The listed
-control passed at 0. FEX's old line was a `DFmt` that does print (`MSG_LEVEL` is INFO, above DEBUG), but it read
-`Loaded volatile metadata for 140000000: 0 entries`. **Calibration:** with TSO off everywhere, the kernels take 0.50
-(`mem_seq_read`) and 0.39 (`mem_seq_write`) of their default time, so the bar `VMD_RATIO=0.75` can pass. An earlier
-RED run, before the tso-off gating fix, gave 0.50 and 0.40.
+**RED** (`VMD_CALIBRATE=1 sh wine-arm64/check.sh fex-vmd`, before 0006 and before the fix round) failed on exactly the
+five expected checks: the whole-module litmus count (MP forbidden=0), the two missing coverage lines and both
+`mem_seq_*` ratios. The listed control passed at 0. FEX's old line was a `DFmt` that does print (`MSG_LEVEL` is INFO,
+above DEBUG), but it read `Loaded volatile metadata for 140000000: 0 entries`. **Calibration:** with TSO off everywhere,
+the kernels take 0.50 (`mem_seq_read`) and 0.39 (`mem_seq_write`) of their default time, so the bar `VMD_RATIO=0.75` can
+pass. An earlier RED run, before the tso-off gating fix, gave 0.50 and 0.40.
 
 **GREEN** (`sh wine-arm64/check.sh fex-vmd g2-litmus`, 0006 in a development build): `PASS g2-litmus` (the default
 run's MP, LB, 2+2W and IRIW at 0 of 10⁷; the control at MP 22,990), `PASS fex-vmd`, `PASS orphans`. With their ranges,
@@ -1393,12 +1395,13 @@ too.
 - `make media-check`: unchanged,
   `FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf: stage=video-type hr=0xc00d5212`.
 
-**The review's fix round** (FEX acba840 amended to aba3995; Ruling R29 kept `VMD_CALIBRATE`'s tso-off runs ungated).
-x64-litmus runs of 10⁷ under each EVMD, on acba840 and then on aba3995 (MP forbidden, then FEX's coverage line):
+**The review's fix round** (FEX acba840 amended to aba3995, whose message f59f44c corrects; Ruling R29 kept
+`VMD_CALIBRATE`'s tso-off runs ungated). x64-litmus runs of 10⁷ under each EVMD, on acba840 and then on aba3995 (MP
+forbidden, then FEX's coverage line):
 
 | EVMD for x64-litmus.exe | acba840 | aba3995 |
 |---|---|---|
-| `;0x0-0x18000;0x1680,0x18b2` (the flag store and load) | 0; 2 instructions, 1 ranges, 98304 bytes | 0; the same |
+| `;0x0-0x18000;0x1680,0x18b2` (run's flag load, worker's flag store) | 0; 2 instructions, 1 ranges, 98304 bytes | 0; the same |
 | `;0x0-0x18000;0x18b2` (the store only) | 37,565 | 137,251 |
 | `;0x0-0x18000;0x1680` (the load only) | 3 | 0 |
 | `;0x0-0x18000` (none listed) | 65,466 | 41,218 |
@@ -1419,4 +1422,27 @@ x64-litmus runs of 10⁷ under each EVMD, on acba840 and then on aba3995 (MP for
   `PASS fex-vmd` (whole module 36,807, listed 0, flags 0), `PASS orphans`. The ratios, 0.50 (0.460 of 0.921 s) and
   0.39 (0.391 of 1.005 s), are provisional: the Mac was on battery (R19). `make test`: 251 passed.
 
-**Step 8, SMITE 2 with and without its metadata:** pending, with the maintainer. 0006 isn't exported until it has run.
+**Step 8, SMITE 2 with and without its metadata:** waived by the maintainer (Ruling R33, 2026-10-09, release 0.3.0).
+SMITE 2's MSVC tables take effect by default; `FEX_VOLATILEMETADATA=0` in its launch line
+(`/usr/bin/env FEX_VOLATILEMETADATA=0 %command%`) turns them off, its escape hatch.
+
+**Export (Step 9).** `make wine-arm64-export` wrote
+`wine-arm64/patches/fex/0006-Core-Run-every-block-a-volatile-metadata-range-cover.patch`, the only new file under
+`wine-arm64/patches`. A fresh fetch of `FEX_COMMIT` with the six patches applied by `git am` gave `applied 6/6` and a
+`HEAD^{tree}` equal to the build tree's (`57f89ad6…`). `make wine-arm64` on the applied trees took 39 s, with no
+"development build" line: `fex.applied` is f59f44c, and `build/wine-arm64/version` is `da4150186a9f…`.
+
+**Final gate (Step 10)**, on the applied build (FEX f59f44c = 0006 exported), with Steam running:
+- `make wine-arm64-check` passed every step in 3397 s, `fex-vmd` last, then `PASS orphans`.
+  - `fex-vmd`: MP forbidden=2,845 over the whole module, 0 with `run` and `worker` listed, 0 with only the flag load
+    and store listed.
+  - The ratios were 0.48 (0.455 of 0.955 s) and 0.39 (0.405 of 1.042 s). They are provisional: the Mac was on battery
+    (R19), as for the fix round's 0.50 and 0.39. The AC figures are Step 5's 0.48 and 0.39 (acba840) and the first
+    gate's 0.49 and 0.38.
+  - `g2-litmus`'s default run was 0 on all four patterns; its control saw MP 100,857.
+  - Both D3D11 lanes recorded 8.3 ms, one 120 Hz refresh, as in Task 3's gate.
+  - G4 (measured, not gated): `mem_seq_read` 2.31 and `mem_seq_write` 2.05 against Rosetta with FEX's defaults;
+    `call_chain64` 1.056, `call_virtual` 1.077, `call_std_function` 1.334.
+- `make test`: 252 tests passed (`main` gained 83908fa's app test meanwhile).
+- `make smoke`: 15/15.
+- `make bridge-check`: 15 `ok`.
