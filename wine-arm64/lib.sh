@@ -167,3 +167,27 @@ translator_key() {  # translator_key <dxmt-tree> <buildtype>
     xcrun -sdk macosx metal --version | head -1  # the rest names the toolchain's mount point
   } | shasum -a 256 | cut -d ' ' -f 1
 }
+
+# The PE side's instruction set (Apple M1, build.sh's PE_MARCH), checked on what Wine's make built: ARM64EC's
+# ReadAcquire/WriteRelease are acquire loads and release stores (include/winnt.h's guard; ntdll's sync.o, since
+# ntdll.dll's EC range already holds an acquire load elsewhere), and ntdll.dll's ARM64 and ARM64EC code (its CHPE
+# CodeMap's ranges) use LSE atomics, not LL/SC loops alone. The caller has llvm-mingw's tools on PATH.
+pe_baseline_check() {  # pe_baseline_check <wine-build dir>
+  _pb_o="$1/dlls/ntdll/arm64ec-windows/sync.o" _pb_f="$1/dlls/ntdll/aarch64-windows/ntdll.dll"
+  _pb_lse='\s(cas|casp|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp)(a|l|al)?[bh]?\s'
+  for _pb in "$_pb_o" "$_pb_f"; do [ -f "$_pb" ] || die "no $_pb: run pe_baseline_check after make"; done
+  _pb_a=$(llvm-objdump -d "$_pb_o" | LC_ALL=C /usr/bin/grep -cE '\s(ldar|ldapr|ldapur)[bh]?\s' || true)
+  _pb_r=$(llvm-objdump -d "$_pb_o" | LC_ALL=C /usr/bin/grep -cE '\s(stlr|stlur)[bh]?\s' || true)
+  [ "$_pb_a" -gt 0 ] && [ "$_pb_r" -gt 0 ] \
+    || die "ntdll's arm64ec sync.o: $_pb_a acquire loads, $_pb_r release stores (include/winnt.h's ARM64EC guard)"
+  _pb_base=$(llvm-readobj --file-headers "$_pb_f" | awk '/ImageBase:/ { print $2; exit }')
+  for _pb_k in ARM64 ARM64EC; do
+    # shellcheck disable=SC2046  # the range's two ends
+    set -- $(llvm-readobj --coff-load-config "$_pb_f" \
+      | awk -v k="$_pb_k" '/CodeMap \[/ { m = 1; next } m && /\]/ { exit } m && $4 == k { print $1, $3 }')
+    [ $# = 2 ] || die "ntdll.dll's CodeMap has no $_pb_k range"
+    _pb_n=$(llvm-objdump -d --start-address=$((_pb_base + $1)) --stop-address=$((_pb_base + $2)) "$_pb_f" \
+      | LC_ALL=C /usr/bin/grep -cE "$_pb_lse" || true)
+    [ "$_pb_n" -gt 0 ] || die "ntdll.dll's $_pb_k code: 0 LSE atomics (the PE side isn't on the M1 baseline)"
+  done
+}

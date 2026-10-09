@@ -981,3 +981,208 @@ mode 0 12958 (12943–12961). Mode 0's number leaves out the wineserver's CPU, b
 
 `make test` passed 251 tests. `check.sh msync` printed `PASS msync` and `PASS orphans` in all four runs, both modes,
 with all 19 gated rows and the 16 time rows.
+
+## PE M1 baseline (batch Task 3)
+
+2026-10-09. Two changes, both on the arm64 Windows (PE) side:
+- **Wine patch 0032** (`include: Use acquire/release for ReadAcquire and WriteRelease on ARM64EC.`). ARM64EC code
+  defines `__x86_64__`, so `winnt.h`'s x86 branch made ReadAcquire, WriteRelease and their 64-bit and pointer forms
+  plain loads and stores in ARM64EC code. The guard is now `(defined(__x86_64__) && !defined(__arm64ec__)) ||
+  defined(__i386__)`, the idiom of `InterlockedCompareExchange128`.
+- **The instruction set.** Every PE build targets Apple M1's, `-march=armv8.5-a+fp16fml+aes+sha3`, so atomics are
+  LSE instructions instead of LL/SC loops. Tuning stays generic: Apple tuning crashes llvm-mingw's SEH unwind emitter.
+  - Wine (and lsteamclient, one of its DLLs) gets it as `aarch64_CFLAGS` and `arm64ec_CFLAGS` (Ruling R25), not in
+    `CROSSCFLAGS`. `--enable-archs=arm64ec` brings in an x86_64 extra arch for ARM64EC modules' x64 sources (9 compiles
+    of 5 sources, such as `ntdll/signal_x86_64.c`). `CROSSCFLAGS` reaches that x86 compiler too, which rejects an ARM
+    `-march`.
+  - FEX gets it as `-DCMAKE_C_FLAGS`/`-DCMAKE_CXX_FLAGS`, keeping `-DTUNE_CPU=none`.
+  - DXMT gets it from its ARM64X cross file (DXMT patch 0038, `build: Target the Apple M1 instruction set in the ARM64X
+    cross file.`). `build.sh` now hashes that cross file into DXMT's setup inputs.
+  - `steam.exe`, its test helper and the ARM64EC DXMT test programs get it from the `Makefile`'s `PE_MARCH`.
+  - The `wine-arm64/tests` programs (the lanes) keep their flags, so before/after measures the runtime.
+
+`build.sh` now runs `pe_baseline_check` (`lib.sh`) on what Wine's `make` built. It fails the build unless:
+- ntdll's ARM64EC `sync.o` holds acquire loads and release stores (0032);
+- ntdll.dll's ARM64 and ARM64EC code (the ranges in its CHPE CodeMap) both hold LSE atomics.
+
+It failed first on the 0031 build with `ntdll's arm64ec sync.o: 0 acquire loads, 0 release stores (include/winnt.h's
+ARM64EC guard)`. With 0032 alone, it failed with `ntdll.dll's ARM64 code: 0 LSE atomics (the PE side isn't on the M1
+baseline)`. It passes on the full rebuild.
+
+**Codegen**, instruction counts from `llvm-objdump -d` (patterns as in `pe_baseline_check`; LL/SC = `ldaxr`/`stlxr`):
+
+| Binary | LSE | LL/SC | acquire | release |
+|---|---|---|---|---|
+| `ntdll.dll`, ARM64 range | 0 → 124 | 236 → 0 | 19 → 19 | 4 → 4 |
+| `ntdll.dll`, ARM64EC range | 0 → 124 | 236 → 0 | 1 → 20 | 0 → 4 |
+| ntdll's ARM64EC `sync.o` | 0 → 62 | 114 → 0 | 0 → 14 | 0 → 3 |
+| `libarm64ecfex.dll` | 0 → 317 | 1304 → 749 | 360 → 372 | 98 → 98 |
+| DXMT's `aarch64-windows/d3d11.dll` (ARM64X) | 0 → 840 | 2750 → 1374 | 610 → 630 | 74 → 74 |
+
+The ranges come from ntdll.dll's CHPE CodeMap. Before, they were `0x1000-0x72930` and `0x73000-0xE0028`; after,
+`0x1000-0x72EA8` and `0x73000-0xE05A0`. "Before" was measured on the 0031 build, and its ntdll rows equal the plan's
+bb65ef0 figures.
+The LL/SC left in FEX and DXMT is most likely code the flag doesn't compile (not traced instruction by instruction):
+- Both link llvm-mingw's prebuilt libc++ statically (neither imports a C++ DLL), and its
+  `aarch64-w64-mingw32/lib/libc++.a` holds 1438 LL/SC and 0 LSE.
+- FEX also has 47 `wfe` exclusive-monitor waits.
+
+Other checks:
+- `build.ninja` carries the flag on 108 of DXMT's lines and 231 of FEX's.
+- `make -n -B` of the ARM64EC `present_loop`/`d3d12_api` and `bridge` prints it 4 times.
+- `make -n -B` of the lanes' ARM64 and ARM64EC programs prints it 0 times.
+- No Apple tuning appears in any build file, and the build logs have no SEH unwind or backend error.
+
+**Licence re-scan** (native REPORT §5 item 8). The flag can't change what links: `ff_crc32_aarch64`'s references
+follow `av_crc`, not the flag, and Wine's zlib is built `-DZ_SOLO`. `llvm-nm` over every file of the bundle's
+`lib/wine/aarch64-windows` found no `ff_crc32_aarch64`. It scanned 1003 files; the positive control, `colorcnv.dll`,
+has 15029 symbols.
+
+**Gates**, on the development build (both trees committed, not yet exported; `DXMT/version`
+`1fba8d25b5e29ab49012d633676a6b0d4b3b96c5+dev`), with Steam running:
+- `make wine-arm64-check` passed every step. It rebuilt the ARM64EC DXMT test programs with `PE_MARCH`. Also passed:
+  `translator_key_test`, `mode_test`, `profile_test` and both `licences_test` runs.
+  - Both lanes recorded a D3D11 frame time of 8.3 ms, against 4.4-4.7 ms in Task 1's gate. That is not graded, and it
+    is not this change. 8.3 ms is one 120 Hz refresh. Earlier gates on builds without the flag recorded 8.3-8.9 ms too
+    (the video plan's `t1-wine-arm64-check-dxmt-x64-run1.log`, `t1r1-check-steps-after-dxmt-present.log`).
+- `make test`: 251 tests passed.
+- `make smoke`: 15/15.
+- `make bridge-check`: 15 `ok`. `steam.exe` is now built with `PE_MARCH`.
+- `make media-check`: unchanged,
+  `FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf: stage=video-type hr=0xc00d5212`.
+
+**Export.** Wine is 32/32 and DXMT 38/38 from a fresh fetch, each with a `HEAD^{tree}` equal to the build tree's. The
+applied build's `DXMT/version` is `1fba8d25b5e29ab49012d633676a6b0d4b3b96c5+8f881ce0db2b`.
+
+**The lanes, before and after.** "Before" is Task 2's baseline (Wine 0031, no flag). "After" is three runs of
+`caffeinate -i sh wine-arm64/check.sh lanes` on the applied build above, back to back (13:00-13:08). Each run was on AC
+at its start and end, with the lid open. Before each, `pgrep -lx wineserver` and `pgrep -lf wine-arm64/check.sh`
+printed nothing. The one-minute load average was 3.7-5.2, against the baseline's 4.2-4.6. The test programs are Task
+2's: their sources and flags didn't change, and the exes differ from the baseline's only in the PE timestamp. The logs
+are in `build/lanes/m1/run{1,2,3}.log`. The table is
+`python3 wine-arm64/tools/lanes_report.py build/lanes/baseline build/lanes/m1`, in ns:
+
+| row | lane | before | after | Δ % | outside the band |
+|---|---|---|---|---|---|
+| sync uncontended-wait | arm64 | 83.0 (77.0–84.0) | 88.0 (76.0–88.0) | +6.0 | no |
+| sync uncontended-wait | arm64ec | 76.0 (73.0–78.0) | 76.0 (66.0–80.0) | +0.0 | no |
+| sync uncontended-wait | x64 | 127 (110–142) | 142 (128–143) | +11.8 | no |
+| sync uncontended-signal | arm64 | 38.0 (37.0–38.0) | 43.0 (37.0–43.0) | +13.2 | no |
+| sync uncontended-signal | arm64ec | 42.0 (36.0–43.0) | 42.0 (37.0–42.0) | +0.0 | no |
+| sync uncontended-signal | x64 | 90.0 (84.0–99.0) | 99.0 (94.0–99.0) | +10.0 | no |
+| sync cross-process-wake | arm64 | 4252 (553–4907) | 4208 (3544–4294) | -1.0 | no |
+| sync cross-process-wake | arm64ec | 4245 (4140–4351) | 4138 (4132–4176) | -2.5 | no |
+| sync cross-process-wake | x64 | 4366 (4246–4462) | 4290 (3670–4549) | -1.7 | no |
+| sync create-close | arm64 | 28048 (28030–28077) | 28144 (25459–28163) | +0.3 | no |
+| sync create-close | arm64ec | 28292 (28232–28319) | 28247 (28200–28427) | -0.2 | no |
+| sync create-close | x64 | 28710 (28653–28807) | 28947 (25790–29106) | +0.8 | no |
+| sync wait-all-wake | arm64 | 5903 (5820–6190) | 5888 (5877–6110) | -0.3 | no |
+| sync wait-all-wake | arm64ec | 6148 (5854–6161) | 5844 (3290–6130) | -4.9 | no |
+| sync wait-all-wake | x64 | 5953 (5640–6051) | 5764 (5315–5966) | -3.2 | no |
+| sync wait-all-poll | arm64 | 85.0 (77.0–85.0) | 86.0 (85.0–87.0) | +1.2 | no |
+| sync wait-all-poll | arm64ec | 89.0 (88.0–89.0) | 87.0 (58.0–88.0) | -2.2 | no |
+| sync wait-all-poll | x64 | 122 (120–130) | 116 (116–131) | -4.9 | no |
+| sync auto-handoff-8 | arm64 | 642 (617–644) | 627 (619–692) | -2.3 | no |
+| sync auto-handoff-8 | arm64ec | 724 (638–740) | 627 (536–666) | -13.4 | no |
+| sync auto-handoff-8 | x64 | 703 (681–725) | 686 (664–702) | -2.4 | no |
+| sync cs-uncontended | arm64 | 12.0 (12.0–13.0) | 6.0 (3.0–6.0) | -50.0 | yes |
+| sync cs-uncontended | arm64ec | 13.0 (10.0–14.0) | 7.0 (4.0–7.0) | -46.2 | yes |
+| sync cs-uncontended | x64 | 85.0 (77.0–87.0) | 81.0 (80.0–81.0) | -4.7 | no |
+| sync srw-uncontended | arm64 | 31.0 (28.0–32.0) | 13.0 (8.0–13.0) | -58.1 | yes |
+| sync srw-uncontended | arm64ec | 33.0 (26.0–34.0) | 14.0 (8.0–14.0) | -57.6 | yes |
+| sync srw-uncontended | x64 | 108 (100–112) | 92.0 (92.0–92.0) | -14.8 | yes |
+| sync cs-contended-4 | arm64 | 30.0 (28.0–30.0) | 104 (100–107) | +246.7 | yes |
+| sync cs-contended-4 | arm64ec | 31.0 (28.0–31.0) | 98.0 (84.0–99.0) | +216.1 | yes |
+| sync cs-contended-4 | x64 | 200 (197–201) | 198 (197–200) | -1.0 | no |
+| sync srw-contended-4 | arm64 | 96.0 (84.0–100) | 101 (101–104) | +5.2 | yes |
+| sync srw-contended-4 | arm64ec | 97.0 (95.0–102) | 87.0 (74.0–90.0) | -10.3 | yes |
+| sync srw-contended-4 | x64 | 192 (190–194) | 201 (200–202) | +4.7 | yes |
+| sync waitonaddress-uncontended | arm64 | 18.0 (17.0–18.0) | 11.0 (11.0–11.0) | -38.9 | yes |
+| sync waitonaddress-uncontended | arm64ec | 17.0 (15.0–18.0) | 14.0 (13.0–14.0) | -17.6 | yes |
+| sync waitonaddress-uncontended | x64 | 63.0 (63.0–64.0) | 56.0 (55.0–56.0) | -11.1 | yes |
+| sync waitonaddress-contended-4 | arm64 | 4652 (4630–4862) | 4628 (4612–4667) | -0.5 | no |
+| sync waitonaddress-contended-4 | arm64ec | 4616 (4598–4659) | 4563 (4546–4669) | -1.1 | no |
+| sync waitonaddress-contended-4 | x64 | 4617 (4593–4716) | 4711 (4682–4741) | +2.0 | no |
+| sync wait-any-wake | arm64 | 7899 (7652–8284) | 7848 (7584–8224) | -0.6 | no |
+| sync wait-any-wake | arm64ec | 7676 (7484–7940) | 7656 (7470–8046) | -0.3 | no |
+| sync wait-any-wake | x64 | 7729 (7668–7774) | 7772 (7754–7890) | +0.6 | no |
+| sync alertable-wake | arm64 | 7817 (7308–8016) | 7786 (7635–8096) | -0.4 | no |
+| sync alertable-wake | arm64ec | 7810 (7600–7888) | 7778 (7759–7853) | -0.4 | no |
+| sync alertable-wake | x64 | 7856 (7756–8014) | 8014 (7639–8134) | +2.0 | no |
+| sync auto-pool-8 | arm64 | 50943 (50940–50953) | 50970 (50952–51942) | +0.1 | no |
+| sync auto-pool-8 | arm64ec | 48953 (47954–49872) | 49948 (47967–49956) | +2.0 | no |
+| sync auto-pool-8 | x64 | 50954 (50946–50962) | 50957 (50950–51940) | +0.0 | no |
+| xcall get-current-thread-id | arm64 | 0.7 (0.7–0.7) | 0.7 (0.7–0.7) | +0.0 | no |
+| xcall get-current-thread-id | arm64ec | 1.7 (1.7–1.8) | 1.7 (1.7–1.7) | +0.0 | no |
+| xcall get-current-thread-id | x64 | 24.6 (24.3–24.8) | 24.2 (24.2–24.4) | -1.6 | no |
+| xcall get-last-error | arm64 | 0.9 (0.9–0.9) | 0.9 (0.9–0.9) | +0.0 | no |
+| xcall get-last-error | arm64ec | 2.8 (2.4–2.8) | 2.4 (2.4–2.8) | -14.3 | no |
+| xcall get-last-error | x64 | 25.6 (25.6–25.7) | 25.8 (25.6–25.9) | +0.8 | no |
+| xcall tls-get-value | arm64 | 0.9 (0.9–0.9) | 0.9 (0.9–0.9) | +0.0 | no |
+| xcall tls-get-value | arm64ec | 2.5 (2.2–2.5) | 2.5 (2.4–2.5) | +0.0 | no |
+| xcall tls-get-value | x64 | 25.2 (24.6–26.1) | 24.6 (24.4–25.1) | -2.4 | no |
+| xcall get-tick-count | arm64 | 0.7 (0.7–0.7) | 0.7 (0.7–0.7) | +0.0 | no |
+| xcall get-tick-count | arm64ec | 1.8 (1.7–1.8) | 1.8 (1.8–1.9) | +0.0 | no |
+| xcall get-tick-count | x64 | 24.5 (24.4–24.8) | 24.5 (24.3–24.7) | +0.0 | no |
+| xcall qpc | arm64 | 15.4 (15.4–15.4) | 15.4 (15.4–16.7) | +0.0 | no |
+| xcall qpc | arm64ec | 16.8 (16.8–16.9) | 16.9 (16.9–17.2) | +0.6 | no |
+| xcall qpc | x64 | 43.3 (43.0–43.4) | 43.4 (43.2–43.5) | +0.2 | no |
+| xcall istream-addref | arm64 | 3.5 (3.5–3.5) | 1.5 (1.5–1.6) | -57.1 | yes |
+| xcall istream-addref | arm64ec | 3.5 (3.5–3.5) | 1.5 (1.5–1.6) | -57.1 | yes |
+| xcall istream-addref | x64 | 27.2 (27.1–27.2) | 24.8 (24.8–24.8) | -8.8 | yes |
+| xcall memcpy-16 | arm64 | 2.0 (1.9–2.2) | 2.1 (1.8–2.2) | +5.0 | no |
+| xcall memcpy-16 | arm64ec | 3.0 (2.6–3.0) | 2.8 (2.6–3.0) | -6.7 | no |
+| xcall memcpy-16 | x64 | 25.9 (25.7–25.9) | 25.6 (25.5–25.9) | -1.2 | no |
+| xcall memcpy-16-offset | arm64 | 2.8 (2.8–3.3) | 3.0 (2.8–3.3) | +7.1 | no |
+| xcall memcpy-16-offset | arm64ec | 3.6 (3.5–4.1) | 4.1 (3.4–4.2) | +13.9 | no |
+| xcall memcpy-16-offset | x64 | 27.1 (26.9–27.4) | 27.1 (27.1–27.3) | +0.0 | no |
+| xcall memcpy-256 | arm64 | 3.9 (3.7–4.3) | 3.5 (3.5–3.8) | -10.3 | no |
+| xcall memcpy-256 | arm64ec | 4.6 (4.3–5.0) | 5.0 (4.1–5.2) | +8.7 | no |
+| xcall memcpy-256 | x64 | 28.0 (27.8–28.1) | 27.8 (27.6–27.9) | -0.7 | no |
+| xcall memcpy-256-offset | arm64 | 5.5 (5.0–7.8) | 5.2 (4.6–6.0) | -5.5 | no |
+| xcall memcpy-256-offset | arm64ec | 6.2 (6.2–6.3) | 6.5 (5.8–6.7) | +4.8 | no |
+| xcall memcpy-256-offset | x64 | 29.5 (29.3–29.7) | 29.2 (29.1–29.3) | -1.0 | no |
+| xcall memcpy-4k | arm64 | 43.6 (43.5–43.9) | 44.3 (43.9–45.2) | +1.6 | no |
+| xcall memcpy-4k | arm64ec | 45.2 (45.1–47.7) | 45.2 (45.0–45.2) | +0.0 | no |
+| xcall memcpy-4k | x64 | 57.8 (57.8–58.0) | 57.6 (57.3–61.3) | -0.3 | no |
+| xcall memcpy-4k-offset | arm64 | 45.7 (45.4–47.7) | 47.9 (45.6–48.8) | +4.8 | no |
+| xcall memcpy-4k-offset | arm64ec | 40.1 (40.0–46.5) | 41.1 (40.5–41.3) | +2.5 | no |
+| xcall memcpy-4k-offset | x64 | 74.0 (73.9–74.3) | 74.5 (74.2–89.9) | +0.7 | no |
+| xcall memcpy-1m | arm64 | 15670 (15480–15710) | 15510 (15480–16780) | -1.0 | no |
+| xcall memcpy-1m | arm64ec | 15340 (15250–15700) | 15090 (13770–16770) | -1.6 | no |
+| xcall memcpy-1m | x64 | 15300 (15290–15320) | 15260 (15260–15350) | -0.3 | no |
+| xcall memcpy-1m-offset | arm64 | 15140 (14220–15320) | 15330 (14850–15390) | +1.3 | no |
+| xcall memcpy-1m-offset | arm64ec | 15760 (15620–15770) | 15500 (14130–15760) | -1.6 | no |
+| xcall memcpy-1m-offset | x64 | 16300 (16090–16350) | 16360 (16280–16520) | +0.4 | no |
+| xcall strlen-1k | arm64 | 235 (235–236) | 234 (233–234) | -0.4 | yes |
+| xcall strlen-1k | arm64ec | 237 (237–237) | 236 (236–244) | -0.3 | no |
+| xcall strlen-1k | x64 | 262 (262–271) | 262 (262–262) | -0.1 | no |
+| xcall qsort-4k | arm64 | 104860 (104720–106830) | 107980 (105460–109690) | +3.0 | no |
+| xcall qsort-4k | arm64ec | 164640 (163050–168000) | 164470 (162830–164850) | -0.1 | no |
+| xcall qsort-4k | x64 | 3552710 (3547900–3558450) | 3371800 (3361860–3371990) | -5.1 | yes |
+
+What moved outside the band:
+- **Uncontended locks got faster** in the native lanes, x64 less so:
+  - `cs-uncontended`: 12 → 6 ns (ARM64) and 13 → 7 (ARM64EC); x64 isn't outside the band.
+  - `srw-uncontended`: 31 → 13, 33 → 14 and 108 → 92 (x64).
+  - `waitonaddress-uncontended`: 18 → 11, 17 → 14 and 63 → 56.
+- **`cs-contended-4` got slower in both native lanes**: 30 → 104 ns (ARM64, +247 %) and 31 → 98 (ARM64EC, +216 %).
+  The x64 lane's 200 → 198 didn't move.
+  - The ARM64 lane changed only in its instruction set: 0032 touches ARM64EC code alone. So the ARM64 lane's
+    regression comes from the flag.
+  - The row is 4 threads doing 10,000 lock/increment/unlock cycles each, timed as throughput.
+    `InitializeCriticalSection` is `RtlInitializeCriticalSection`, which sets spin count 0. So
+    `RtlEnterCriticalSection` takes the lock with an `InterlockedIncrement` of `LockCount`. In the ARM64 `sync.o`
+    that is now one `ldaddal`.
+  - A likely reading, not verified: under LL/SC, the releasing thread mostly took the lock again before a woken
+    waiter ran. With LSE the lock changes hands more often.
+- **`srw-contended-4`** moved a little, in mixed directions: +5 % (ARM64), −10 % (ARM64EC), +5 % (x64).
+- **`waitonaddress-contended-4`** didn't move outside the band in any lane.
+- **xcall:**
+  - `istream-addref`, an `InterlockedIncrement` that is now one LSE add: 3.5 → 1.5 ns in both native lanes, and
+    27.2 → 24.8 under FEX.
+  - x64 `qsort-4k`: −5.1 %.
+  - ARM64 `strlen-1k`: −0.4 %, a 1 ns step between tight ranges.
+  - No other xcall row moved outside the band.
+- `auto-handoff-8` (ARM64EC 724 → 627) and the sleeping wakes (`wait-all-wake`, `wait-any-wake`, `alertable-wake`,
+  `cross-process-wake`) stayed inside the band.

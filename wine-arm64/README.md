@@ -31,6 +31,11 @@ every game on it. A build needs the Developer ID setup below; there is no ad-hoc
 - Windows-side code is built with the pinned llvm-mingw, which `dxmt/toolchain.sh` fetches once (again when
   `dxmt/pins` names another one). Objects already built keep the old compiler's output: after a toolchain pin bump,
   remove `build/wine-arm64-src` (or its `wine-build`, `fex-ec`, `fex-unixlib` and `dxmt-build` folders) for a clean build.
+  The arm64 Windows side targets the Apple M1 instruction set, `-march=armv8.5-a+fp16fml+aes+sha3` (`build.sh`'s and
+  the `Makefile`'s `PE_MARCH`, DXMT's cross file), with generic tuning: Apple tuning (`-mcpu=apple-m1`,
+  `-mtune=apple-*`, `-falign-loops`) crashes llvm-mingw's SEH unwind emitter, so never add it. Wine takes it as
+  `aarch64_CFLAGS` and `arm64ec_CFLAGS`, not in `CROSSCFLAGS`: arm64ec brings in an x86_64 extra arch (ARM64EC
+  modules' x64 sources), whose compiler `CROSSCFLAGS` reaches too.
 - The first build downloads the five tarballs of `deps.pins` (27 MB, checked by SHA-256) and a sparse checkout of
   Proton's `lsteamclient/` folder from GitHub (18 MB of source, about 10 s here); later builds reuse them.
 - **A Developer ID with the "Cross-architecture Compatibility Framework" capability** (`com.apple.developer.cross-architecture-support`)
@@ -258,6 +263,8 @@ re-clone; that is why they wait for the rebase.
     abandoned as abandoned, and wakes its waiters; a repeated object answers `STATUS_INVALID_PARAMETER`; an abandoned
     mutex no longer spins; the shm reply port's receive right is released; the abandon store is SEQ_CST) is ours and
     stays local.
+  - 0032 (`include/winnt.h`: ReadAcquire and WriteRelease are acquire loads and release stores in ARM64EC code too, not
+    x86's plain loads and stores) is ours and stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
@@ -285,5 +292,5 @@ re-clone; that is why they wait for the rebase.
     the date before importing another. This is not legal advice.
 - Each patch taken or derived from another tree names its source in its message (0006's is given above, since its message
   doesn't). Patch files keep their original authors.
-- **DXMT** is LGPL-2.1+; our patches to it are too. 0001-0037 are ours.
+- **DXMT** is LGPL-2.1+; our patches to it are too. 0001-0038 are ours.
 - Upstream FEX and DXMT refuse AI-authored contributions: no patches go upstream (issue reports only).

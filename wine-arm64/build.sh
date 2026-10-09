@@ -44,6 +44,11 @@ check_signing  # before anything is fetched or built
 PATH="$(sh "$ROOT/dxmt/toolchain.sh"):$PATH"
 export PATH
 export MACOSX_DEPLOYMENT_TARGET=27.0
+# The Windows (PE) side's instruction set, Apple M1's, which every macOS 27 Mac has: LSE atomics instead of LL/SC
+# loops. Wine's and FEX's PE code take it here, DXMT's from its cross file (patch 0038), the Makefile's programs from
+# its own PE_MARCH. Tuning stays generic: Apple tuning (-mcpu=apple-m1, -mtune=apple-*, -falign-loops) crashes
+# llvm-mingw's SEH unwind emitter ("Failed to evaluate function length in SEH unwind info"). One token, for FEX's cmake.
+PE_MARCH=-march=armv8.5-a+fp16fml+aes+sha3
 
 # 2. Fetch and patch, once per series. A tree with work in it is never touched; a clean one follows the patches.
 # patch_tree <tmp-tree> <repo> <patch-dir> <series> <base>: git am the series on branch macneutron, record it, and
@@ -318,6 +323,9 @@ fi
 #    both are recorded in wine-build/.configure-inputs.
 #    Both compilers (Apple clang for the unix side, llvm-mingw for the PE side) map $SRC/ away, so __FILE__ and the
 #    debug info name wine/dlls/..., not the build folder (arm64 release Ruling 20); otherwise Wine's default -g -O2.
+#    $PE_MARCH goes to the aarch64 and arm64ec PE compilers only, as their own CFLAGS (configure copies them to
+#    CXXFLAGS), not in CROSSCFLAGS: arm64ec brings in an x86_64 extra arch, for ARM64EC modules' x64 sources, and
+#    CROSSCFLAGS reaches its compiler too.
 set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --without-x --without-wayland \
   --without-oss --without-alsa --without-pulse --without-sane --without-usb --without-v4l2 --without-pcap \
   --without-capi --without-opencl --without-cups --with-freetype --with-gnutls --with-ffmpeg --without-gstreamer \
@@ -325,7 +333,8 @@ set -- --enable-archs=arm64ec,aarch64 --with-mingw=llvm-mingw --disable-tests --
   PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" FREETYPE_CFLAGS="-I$DEPS/include/freetype2" \
   FREETYPE_LIBS="-L$DEPS/lib -lfreetype -Wl,-rpath,$DEPS/lib" GNUTLS_CFLAGS="-I$DEPS/include" \
   GNUTLS_LIBS="-L$DEPS/lib -lgnutls" CFLAGS="-g -O2 -ffile-prefix-map=$SRC/=" \
-  CROSSCFLAGS="-g -O2 -ffile-prefix-map=$SRC/="
+  CROSSCFLAGS="-g -O2 -ffile-prefix-map=$SRC/=" aarch64_CFLAGS="-g -O2 -ffile-prefix-map=$SRC/= $PE_MARCH" \
+  arm64ec_CFLAGS="-g -O2 -ffile-prefix-map=$SRC/= $PE_MARCH"
 inputs=$(printf '%s\n' "$@"; cat "$DEPS/.complete")
 if [ -f "$SRC/wine-build/Makefile" ] && [ "$(cat "$SRC/wine-build/.configure-inputs" 2> /dev/null)" = "$inputs" ]; then
   echo "wine-arm64: Wine's configure is up to date" >&2
@@ -353,10 +362,12 @@ out=$(sed -n 's/^#define \(SONAME_[A-Z0-9_]*\) .*/\1/p' "$SRC/wine-build/include
 # 5. Make.
 echo "wine-arm64: building (log: $SRC/make.log)" >&2
 make -C "$SRC/wine-build" -j"$(sysctl -n hw.ncpu)" > "$SRC/make.log" 2>&1 || die "make failed; see $SRC/make.log"
+pe_baseline_check "$SRC/wine-build"  # what this make built is on the M1 baseline (lib.sh)
 
 # 6. FEX: the ARM64EC DLL with llvm-mingw's toolchain file (absolute path; TUNE_CPU=none, since the default reads
-#    /proc/cpuinfo), the unixlib with Apple clang. Each build folder is configured again, from scratch, when its cmake
-#    arguments change (<folder>/.setup-inputs, as DXMT's); fetch_fex removes both.
+#    /proc/cpuinfo; $PE_MARCH as its C and C++ flags, which FEX appends to), the unixlib with Apple clang. Each build
+#    folder is configured again, from scratch, when its cmake arguments change (<folder>/.setup-inputs, as DXMT's);
+#    fetch_fex removes both.
 echo "wine-arm64: building FEX (log: $SRC/fex.log)" >&2
 : > "$SRC/fex.log"
 fex_setup() {  # fex_setup <what> <build folder> <cmake arguments...>
@@ -370,7 +381,8 @@ fex_setup() {  # fex_setup <what> <build folder> <cmake arguments...>
   fi
 }
 fex_setup FEX "$SRC/fex-ec" -S "$F" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$F/Data/CMake/toolchain_mingw.cmake" \
-  -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DENABLE_LTO=False \
+  -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DCMAKE_BUILD_TYPE=Release -DTUNE_CPU=none -DCMAKE_C_FLAGS=$PE_MARCH \
+  -DCMAKE_CXX_FLAGS=$PE_MARCH -DENABLE_LTO=False \
   -DBUILD_TESTING=False -DBUILD_FEXCONFIG=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DENABLE_CCACHE=False
 ninja -C "$SRC/fex-ec" arm64ecfex >> "$SRC/fex.log" 2>&1 || die "building libarm64ecfex.dll failed; see $SRC/fex.log"
 fex_setup "FEX's unixlib" "$SRC/fex-unixlib" -S "$F/Source/Windows/UnixLib" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -389,10 +401,11 @@ fi
 # 7. DXMT (arm64 DXMT spec §4): ARM64X front ends and winemetal.dll from DXMT's own cross file, linked against this
 #    Wine's build tree, and an aarch64 winemetal.so against an arm64 LLVM 15 (dxmt/llvm.sh, built once). Its .metal
 #    files compile through tools/xcrun-metal.sh (a second cross file names it as xcrun), so the AIR modules embedded in
-#    winemetal.so name no build path. Set up again in a new build folder when the options or the wrapper change
-#    (dxmt-build/.setup-inputs); fetch_dxmt removes it too. dxmt-install is redone every build. The translator's key
-#    (lib.sh's translator_key, arm64 release Ruling 46) keys DXMT's shader cache: DXMT reads it from dxmt-translator-key
-#    (patch 0003), rewritten only when it changes, which makes meson regenerate rather than set up again.
+#    winemetal.so name no build path. Set up again in a new build folder when the options, a cross file or the wrapper
+#    change (dxmt-build/.setup-inputs); fetch_dxmt removes it too. dxmt-install is redone every build. The translator's
+#    key (lib.sh's translator_key, arm64 release Ruling 46) keys DXMT's shader cache: DXMT reads it from
+#    dxmt-translator-key (patch 0003), rewritten only when it changes, which makes meson regenerate rather than set up
+#    again.
 build_llvm arm64 "$SRC/llvm-arm64" "$B/dxmt-src/llvm-project"
 echo "wine-arm64: building DXMT (log: $SRC/dxmt.log)" >&2
 : > "$SRC/dxmt.log"
@@ -409,7 +422,7 @@ set -- "$SRC/dxmt-build" "$D" --cross-file "$D/build-arm64ec.txt" --cross-file "
   --buildtype "$dxmt_buildtype" --strip --prefix "$SRC/dxmt-install" -Dwine_builtin_dll=false -Denable_d3d12=true \
   -Dnative_llvm_path="$SRC/llvm-arm64" -Dwine_build_path="$SRC/wine-build" \
   -Dtranslator_key_file="$SRC/dxmt-translator-key"
-inputs=$(printf '%s\n' "$@"; cat "$SRC/dxmt-xcrun.txt" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
+inputs=$(printf '%s\n' "$@"; cat "$D/build-arm64ec.txt" "$SRC/dxmt-xcrun.txt" "$ROOT/wine-arm64/tools/xcrun-metal.sh")
 if [ ! -f "$SRC/dxmt-build/build.ninja" ] || [ "$(cat "$SRC/dxmt-build/.setup-inputs" 2> /dev/null)" != "$inputs" ]; then
   rm -rf "$SRC/dxmt-build"
   meson setup "$@" >> "$SRC/dxmt.log" 2>&1 \

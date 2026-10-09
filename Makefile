@@ -3,9 +3,11 @@
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
 MINGW_BIN = $(shell sh dxmt/toolchain.sh)
+# The arm64 Windows side's instruction set, Apple M1's (wine-arm64/build.sh's PE_MARCH: generic tuning, never Apple's).
+PE_MARCH = -march=armv8.5-a+fp16fml+aes+sha3
 MINGW = $(MINGW_BIN)/x86_64-w64-mingw32-clang -O2 -static -s
 MINGWXX = $(MINGW_BIN)/x86_64-w64-mingw32-clang++ -O2 -static -s
-MINGW_A64 = $(MINGW_BIN)/aarch64-w64-mingw32-clang -O2 -static -s
+MINGW_A64 = $(MINGW_BIN)/aarch64-w64-mingw32-clang -O2 -static -s $(PE_MARCH)
 BRIDGE = build/bridge
 PRESENTER = build/presenter
 
@@ -54,8 +56,8 @@ build/dxmt-tests/%.exe: dxmt/tests/%.cpp dxmt/tests/d3d12_common.hpp
 	$(MINGWXX) -std=c++17 -o $@ $< -ld3d12 -ld3d11 -ld3dcompiler -ldxgi -luser32 -lpsapi
 
 # The same programs and present_loop for ARM64EC, for the arm64 runtime (arm64 DXMT spec §7), built in parallel.
-MINGW_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang -O2 -static -s
-MINGWXX_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang++ -O2 -static -s
+MINGW_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang -O2 -static -s $(PE_MARCH)
+MINGWXX_EC = $(MINGW_BIN)/arm64ec-w64-mingw32-clang++ -O2 -static -s $(PE_MARCH)
 DXMT_TESTS_EC = $(patsubst dxmt/tests/%.cpp,build/dxmt-tests-arm64ec/%.exe,$(wildcard dxmt/tests/d3d1[12]_*.cpp)) \
 	build/dxmt-tests-arm64ec/present_loop.exe
 dxmt-tests-arm64ec:
