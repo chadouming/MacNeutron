@@ -55,6 +55,9 @@ NEEDS_FEX="$NEEDS_FEX $MEDIA"
 LANES="lanes"
 NEEDS_PREFIX="$NEEDS_PREFIX $LANES"
 NEEDS_FEX="$NEEDS_FEX $LANES"
+# The batch's gated steps (batch Tasks 4-7): each needs the prefix with FEX; they run after the rest.
+BATCH="fex-vmd"
+STEPS="$STEPS $BATCH" NEEDS_PREFIX="$NEEDS_PREFIX $BATCH" NEEDS_FEX="$NEEDS_FEX $BATCH"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
 # knows the executable. The Rosetta tool folders' (the launcher, Wine and its server): g4-bench's, and the reference's
@@ -460,6 +463,82 @@ g5_jit_cmd() {
   [ "$n" = 0 ] || { echo "FAIL g5-jit: $n flips"; return 1; }
 }
 
+# FEX patch 0006 (batch Task 4): EVMD ranges turn TSO off in every block inside them, as FEX documents
+# (Config.json.in:582-597), and listed instructions keep it. Every check runs; the last line names each failure.
+# VMD_CALIBRATE=1 adds three x64-bench runs with TSO off everywhere (reported, not gated).
+VMD_RATIO=0.75
+fex_vmd_cmd() {
+  T="$(sh "$ROOT/dxmt/toolchain.sh")"
+  fails=
+  # The crash dialog off: a crash ends the run.
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f > /dev/null || return 1
+  # 1. x64-litmus with the whole module as its range: MP reordering shows, and FEX logs the module's coverage.
+  size=$("$T/llvm-readobj" --file-headers "$TESTS/x64-litmus.exe" | awk '/SizeOfImage:/ { print $2; exit }')
+  # shellcheck disable=SC2046  # unfex prints a list of options
+  out=$(env $(unfex) FEX_SILENTLOG=0 FEX_EXTENDEDVOLATILEMETADATA=x64-litmus.exe WINEPREFIX="$PFX" \
+    "$TOOL/Contents/MacOS/wine" "$TESTS/x64-litmus.exe" 10000000 2> "$WORK/fex-vmd-module.err" | tr -d '\r') || true
+  echo "$out"
+  f=$(echo "$out" | sed -n 's/^litmus MP forbidden=\([0-9]*\) runs=10000000$/\1/p')
+  echo "info fex-vmd x64-litmus MP forbidden=$f"
+  [ "${f:-0}" -ge 1 ] || fails="$fails${fails:+; }x64-litmus with EVMD over the whole module: MP forbidden=${f:-none}: the range didn't turn TSO off"
+  tr -d '\r' < "$WORK/fex-vmd-module.err" | LC_ALL=C /usr/bin/grep -qE "volatile metadata: x64-litmus\.exe at [0-9A-F]+: 0 instructions, 1 ranges, $size bytes\$" \
+    || fails="$fails${fails:+; }FEX logged no coverage line for x64-litmus.exe (0 instructions, 1 range, $size bytes)"
+  # 2. The same range with every instruction of the litmus kernels run and worker listed: they keep TSO.
+  base=$("$T/llvm-readobj" --file-headers "$TESTS/x64-litmus.exe" | awk '/ImageBase:/ { print $2; exit }')
+  listed=$("$T/llvm-objdump" -d --no-show-raw-insn --disassemble-symbols=run,worker "$TESTS/x64-litmus.exe" | awk -v b=$((base)) '
+    function hex(s,  i, v) { for (i = 1; i <= length(s); i++) v = v * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1; return v }
+    /^[[:space:]]*[0-9a-f]+:/ { sub(/:.*/, ""); sub(/^[[:space:]]*/, ""); printf "%s0x%x", k++ ? "," : "", hex($0) - b }')
+  k=$(echo "$listed" | tr ',' '\n' | LC_ALL=C /usr/bin/grep -c . || true)
+  if [ "$k" = 0 ]; then
+    fails="$fails${fails:+; }x64-litmus.exe has no run and worker of its own"
+  else
+    # shellcheck disable=SC2046  # unfex prints a list of options
+    out=$(env $(unfex) FEX_SILENTLOG=0 FEX_EXTENDEDVOLATILEMETADATA="x64-litmus.exe;0x0-$(printf 0x%x "$size");$listed" \
+      WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-litmus.exe" 10000000 2> "$WORK/fex-vmd-listed.err" \
+      | tr -d '\r') || true
+    echo "$out"
+    f=$(echo "$out" | sed -n 's/^litmus MP forbidden=\([0-9]*\) runs=10000000$/\1/p')
+    echo "info fex-vmd x64-litmus listed MP forbidden=$f"
+    [ "${f:-none}" = 0 ] || fails="$fails${fails:+; }x64-litmus with run and worker listed: MP forbidden=${f:-none}: a listed access lost TSO"
+    tr -d '\r' < "$WORK/fex-vmd-listed.err" | LC_ALL=C /usr/bin/grep -qE "volatile metadata: x64-litmus\.exe at [0-9A-F]+: $k instructions, 1 ranges, $size bytes\$" \
+      || fails="$fails${fails:+; }FEX logged no coverage line for x64-litmus.exe ($k instructions, 1 range, $size bytes)"
+  fi
+  # 3. x64-bench's two scalar-memory kernels, each range running to the next symbol: with their ranges, at most
+  # VMD_RATIO of their default time.
+  base=$("$T/llvm-readobj" --file-headers "$TESTS/x64-bench.exe" | awk '/ImageBase:/ { print $2; exit }')
+  # shellcheck disable=SC2046  # each kernel's start and the next symbol's
+  set -- $("$T/llvm-nm" -n "$TESTS/x64-bench.exe" | awk 'p { print a, $1; p = 0 } $3 ~ /mem_seq_(read|write)v$/ { a = $1; p = 1 }')
+  if [ $# = 4 ]; then
+    evmd=$(printf 'x64-bench.exe;0x%x-0x%x,0x%x-0x%x' $((0x$1 - base)) $((0x$2 - base)) $((0x$3 - base)) $((0x$4 - base)))
+    echo "info fex-vmd ranges $evmd"
+    kinds="default ranges" w="$WORK/vmd"
+    [ "${VMD_CALIBRATE:-0}" != 1 ] || kinds="$kinds tso-off"
+    for i in 1 2 3; do
+      for kind in $kinds; do
+        case $kind in default) e= ;; ranges) e="FEX_EXTENDEDVOLATILEMETADATA=$evmd" ;; tso-off) e=FEX_TSOENABLED=0 ;; esac
+        mkdir -p "$w/$kind"
+        # shellcheck disable=SC2046,SC2086  # unfex prints a list of options; e is one assignment or none
+        env $(unfex) $e WINEDEBUG=-all WINEPREFIX="$PFX" "$TOOL/Contents/MacOS/wine" "$TESTS/x64-bench.exe" \
+          2> "$w/$kind/run$i.err" | tr -d '\r' > "$w/$kind/run$i.txt" || true
+        msg=$(bench_rows "$w/$kind/run$i.txt") && continue
+        # TSO off everywhere breaks x64-bench's own SPSC ring (mt_spsc_ring, after the mem_seq rows): reported only.
+        if [ "$kind" = tso-off ]; then echo "info fex-vmd tso-off: $msg"; else fails="$fails${fails:+; }$msg"; fi
+      done
+    done
+    med() { cat "$w/$1"/run*.txt | sed -n "s/^row $r \([0-9.]*\)\$/\1/p" | sort -n | sed -n 2p; }  # med <kind>: row $r's
+    for r in mem_seq_read mem_seq_write; do
+      d=$(med default) v=$(med ranges) o=
+      [ "${VMD_CALIBRATE:-0}" != 1 ] || o=$(med tso-off)
+      echo "info fex-vmd $r default $d ranges $v${o:+ tso-off $o}"
+      { [ -n "$d" ] && [ -n "$v" ] && awk -v v="$v" -v d="$d" -v m="$VMD_RATIO" 'BEGIN { exit !(v <= m * d) }'; } \
+        || fails="$fails${fails:+; }$r took ${v:-no} s with its range, ${d:-no} s without: the range didn't turn TSO off"
+    done
+  else
+    fails="$fails${fails:+; }x64-bench.exe has no mem_seq_read and mem_seq_write of their own"
+  fi
+  [ -z "$fails" ] || { echo "FAIL fex-vmd: $fails"; return 1; }
+}
+
 # Gate G4 (spec §8), measured, not gated: x64-bench, five processes per side, the sides alternating so drift falls on
 # both alike. FEX: this stack, with FEX's defaults. Rosetta: the frozen reference's own launcher, in a clone of it (the
 # pinned runtime-v4.7.3), with dxmt/check.sh's environment; that launcher adds ROSETTA_ADVERTISE_AVX=1 and
@@ -676,6 +755,7 @@ run_step() {
     g4-bench) step g4-bench 3600 g4_bench_cmd; grep '^info ' "$WORK/g4-bench.log"; cat "$WORK/bench/report.txt" ;;
     media-mf) step media-mf 120 media_mf_cmd ;;
     lanes) step lanes 900 lanes_cmd; grep '^info ' "$WORK/lanes.log" ;;
+    fex-vmd) step fex-vmd 900 fex_vmd_cmd; grep '^info ' "$WORK/fex-vmd.log" ;;
     *) die "no runner for $1" ;;
   esac
 }

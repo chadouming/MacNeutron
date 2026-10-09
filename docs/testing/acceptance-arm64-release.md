@@ -1186,3 +1186,201 @@ What moved outside the band:
   - No other xcall row moved outside the band.
 - `auto-handoff-8` (ARM64EC 724 → 627) and the sleeping wakes (`wait-all-wake`, `wait-any-wake`, `alertable-wake`,
   `cross-process-wake`) stayed inside the band.
+
+## FEX volatile metadata (batch Task 4)
+
+2026-10-09. **SMITE 2 A/B (Step 8) pending; FEX 0006 not exported yet.** The FEX change is committed in the build
+tree (`macneutron` acba840, on 4adb8a1 = 0005) and runs as a development build. The game runs with and without its
+metadata (Step 8), the export with its 6/6 fresh-fetch proof and the README lines follow when the maintainer is ready
+(Ruling R26).
+
+FEX patch 0006 (`Core: Run every block a volatile-metadata range covers without TSO.`), ours and local only (Ruling
+R15):
+- **The block rule.** FEX ran a block without TSO only when the block held a listed volatile access. So a block the
+  metadata marks safe kept TSO, and EVMD's documented range and module forms (`Config.json.in:582-597`) did nothing:
+  they list no instruction. Now every block inside a valid range runs without TSO, except for its listed accesses and
+  the accesses MonoHacks flags with `FLAG_FORCE_TSO` (Unity's SPSC ring buffer), which keep it. A block that straddles
+  a range's edge keeps the default, TSO on.
+- **`FEX_VOLATILEMETADATA=0`** skips an image's PE tables again; EVMD, an explicit setting, still applies. No binary
+  in the repository carries PE metadata, so the PE side of the switch was checked by reading it. A litmus run with
+  `FEX_VOLATILEMETADATA=0` and the whole-module EVMD still logged its coverage line and showed MP reordering (3,642 of
+  10⁶).
+- **The coverage line.** With `FEX_SILENTLOG=0`, FEX prints one line per image with metadata or EVMD, for example
+  `I 284 volatile metadata: x64-litmus.exe at 140000000: 0 instructions, 1 ranges, 98304 bytes`.
+
+**SMITE 2's metadata** (Step 1, the controller, read-only): `Hemingway-Win64-Shipping.exe` has
+`VolatileMetadataPointer: 0x14AC6715C`. That is non-zero, so its MSVC tables now take effect, and Step 8 runs the game
+both ways before 0006 is exported.
+
+**The step.** `check.sh fex-vmd` is the first of the batch's gated steps (`BATCH`), run after the rest. It runs
+x64-litmus with EVMD over the whole module, then the same range with every instruction of the litmus kernels `run` and
+`worker` listed (262). It then runs x64-bench three times with FEX's defaults and three times with ranges over its two
+scalar-memory kernels, alternating: `x64-bench.exe;0x38e0-0x3950,0x3950-0x39b0`. `mem_seq_read` and `mem_seq_write`
+are now `NOINLINE`, so each has a symbol of its own. Every check runs, and the last line names each failure.
+`VMD_CALIBRATE=1` adds three runs with `FEX_TSOENABLED=0`, reported and not gated. TSO off everywhere breaks
+x64-bench's own SPSC ring (`mt_spsc_ring: item … read out of order`, after the mem_seq rows), so those runs' missing
+rows are an `info` line, not a failure.
+
+**RED** (`VMD_CALIBRATE=1 sh wine-arm64/check.sh fex-vmd`, before 0006) failed on exactly the five expected checks: the
+whole-module litmus count (MP forbidden=0), the two missing coverage lines and both `mem_seq_*` ratios. The listed
+control passed at 0. FEX's old line was a `DFmt` that does print (`MSG_LEVEL` is INFO, above DEBUG), but it read
+`Loaded volatile metadata for 140000000: 0 entries`. **Calibration:** with TSO off everywhere, the kernels take 0.50
+(`mem_seq_read`) and 0.39 (`mem_seq_write`) of their default time, so the bar `VMD_RATIO=0.75` can pass. An earlier
+RED run, before the tso-off gating fix, gave 0.50 and 0.40.
+
+**GREEN** (`sh wine-arm64/check.sh fex-vmd g2-litmus`, 0006 in a development build): `PASS g2-litmus` (the default
+run's MP, LB, 2+2W and IRIW at 0 of 10⁷; the control at MP 22,990), `PASS fex-vmd`, `PASS orphans`. With their ranges,
+both kernels ran at the speed TSO off gave them in RED (0.460 against 0.461 s, 0.395 against 0.389 s).
+
+| Row (s, median of 3) | before 0006: default | before 0006: with its range | before 0006: `FEX_TSOENABLED=0` | 0006: default | 0006: with its range | ratio |
+|---|---|---|---|---|---|---|
+| x64-bench `mem_seq_read` | 0.917 | 0.925 | 0.461 | 0.950 | 0.460 | 0.48 |
+| x64-bench `mem_seq_write` | 1.003 | 1.003 | 0.389 | 1.025 | 0.395 | 0.39 |
+
+| x64-litmus, MP forbidden of 10⁷ | before 0006 (Step 3) | 0006 (Step 5) |
+|---|---|---|
+| no EVMD (G2's default run) | 0 | 0 |
+| EVMD over the whole module | 0 | 19,170 |
+| the same, `run` and `worker` listed | 0 | 0 |
+
+**The lanes, before and after.** "Before" is Task 3's after-runs (`build/lanes/m1/`), "after" three runs of
+`caffeinate -i sh wine-arm64/check.sh lanes` on the 0006 development build, back to back (13:54-14:03). Each run was
+on AC at its start and end, with the lid open. Before each, `pgrep -lx wineserver` and `pgrep -lf wine-arm64/check.sh`
+printed nothing. The one-minute load average was 2.95-4.89, against Task 3's 3.7-5.2. The test programs are Task 2's
+(not rebuilt; x64-bench isn't a lane). The logs are in `build/lanes/t4/run{1,2,3}.log`. The table is
+`python3 wine-arm64/tools/lanes_report.py build/lanes/m1 build/lanes/t4`, in ns:
+
+| row | lane | before | after | Δ % | outside the band |
+|---|---|---|---|---|---|
+| sync uncontended-wait | arm64 | 88.0 (76.0–88.0) | 68.0 (67.0–80.0) | -22.7 | no |
+| sync uncontended-wait | arm64ec | 76.0 (66.0–80.0) | 76.0 (68.0–81.0) | +0.0 | no |
+| sync uncontended-wait | x64 | 142 (128–143) | 128 (126–143) | -9.9 | no |
+| sync uncontended-signal | arm64 | 43.0 (37.0–43.0) | 33.0 (33.0–38.0) | -23.3 | no |
+| sync uncontended-signal | arm64ec | 42.0 (37.0–42.0) | 42.0 (38.0–42.0) | +0.0 | no |
+| sync uncontended-signal | x64 | 99.0 (94.0–99.0) | 88.0 (88.0–99.0) | -11.1 | no |
+| sync cross-process-wake | arm64 | 4208 (3544–4294) | 4158 (4141–4256) | -1.2 | no |
+| sync cross-process-wake | arm64ec | 4138 (4132–4176) | 4124 (4121–4267) | -0.3 | no |
+| sync cross-process-wake | x64 | 4290 (3670–4549) | 4285 (4264–4357) | -0.1 | no |
+| sync create-close | arm64 | 28144 (25459–28163) | 27613 (27401–27858) | -1.9 | no |
+| sync create-close | arm64ec | 28247 (28200–28427) | 28074 (27739–28574) | -0.6 | no |
+| sync create-close | x64 | 28947 (25790–29106) | 28798 (28569–28878) | -0.5 | no |
+| sync wait-all-wake | arm64 | 5888 (5877–6110) | 5538 (1142–5759) | -5.9 | yes |
+| sync wait-all-wake | arm64ec | 5844 (3290–6130) | 5991 (5910–6150) | +2.5 | no |
+| sync wait-all-wake | x64 | 5764 (5315–5966) | 5226 (5141–5633) | -9.3 | no |
+| sync wait-all-poll | arm64 | 86.0 (85.0–87.0) | 86.0 (78.0–97.0) | +0.0 | no |
+| sync wait-all-poll | arm64ec | 87.0 (58.0–88.0) | 88.0 (86.0–89.0) | +1.1 | no |
+| sync wait-all-poll | x64 | 116 (116–131) | 111 (111–117) | -4.3 | no |
+| sync auto-handoff-8 | arm64 | 627 (619–692) | 620 (612–643) | -1.1 | no |
+| sync auto-handoff-8 | arm64ec | 627 (536–666) | 618 (602–690) | -1.4 | no |
+| sync auto-handoff-8 | x64 | 686 (664–702) | 664 (655–718) | -3.2 | no |
+| sync cs-uncontended | arm64 | 6.0 (3.0–6.0) | 6.0 (6.0–6.0) | +0.0 | no |
+| sync cs-uncontended | arm64ec | 7.0 (4.0–7.0) | 6.0 (6.0–7.0) | -14.3 | no |
+| sync cs-uncontended | x64 | 81.0 (80.0–81.0) | 81.0 (81.0–82.0) | +0.0 | no |
+| sync srw-uncontended | arm64 | 13.0 (8.0–13.0) | 14.0 (13.0–14.0) | +7.7 | no |
+| sync srw-uncontended | arm64ec | 14.0 (8.0–14.0) | 12.0 (12.0–14.0) | -14.3 | no |
+| sync srw-uncontended | x64 | 92.0 (92.0–92.0) | 92.0 (91.0–93.0) | +0.0 | no |
+| sync cs-contended-4 | arm64 | 104 (100–107) | 105 (102–108) | +1.0 | no |
+| sync cs-contended-4 | arm64ec | 98.0 (84.0–99.0) | 100 (97.0–102) | +2.0 | no |
+| sync cs-contended-4 | x64 | 198 (197–200) | 198 (192–200) | +0.0 | no |
+| sync srw-contended-4 | arm64 | 101 (101–104) | 103 (100–105) | +2.0 | no |
+| sync srw-contended-4 | arm64ec | 87.0 (74.0–90.0) | 86.0 (85.0–89.0) | -1.1 | no |
+| sync srw-contended-4 | x64 | 201 (200–202) | 200 (198–201) | -0.5 | no |
+| sync waitonaddress-uncontended | arm64 | 11.0 (11.0–11.0) | 11.0 (11.0–12.0) | +0.0 | no |
+| sync waitonaddress-uncontended | arm64ec | 14.0 (13.0–14.0) | 15.0 (15.0–15.0) | +7.1 | yes |
+| sync waitonaddress-uncontended | x64 | 56.0 (55.0–56.0) | 59.0 (55.0–60.0) | +5.4 | no |
+| sync waitonaddress-contended-4 | arm64 | 4628 (4612–4667) | 4645 (4602–4706) | +0.4 | no |
+| sync waitonaddress-contended-4 | arm64ec | 4563 (4546–4669) | 4678 (4610–4707) | +2.5 | no |
+| sync waitonaddress-contended-4 | x64 | 4711 (4682–4741) | 4765 (4756–4771) | +1.1 | yes |
+| sync wait-any-wake | arm64 | 7848 (7584–8224) | 7759 (7562–8204) | -1.1 | no |
+| sync wait-any-wake | arm64ec | 7656 (7470–8046) | 7924 (7658–7959) | +3.5 | no |
+| sync wait-any-wake | x64 | 7772 (7754–7890) | 7889 (7812–7966) | +1.5 | no |
+| sync alertable-wake | arm64 | 7786 (7635–8096) | 7930 (7585–8178) | +1.8 | no |
+| sync alertable-wake | arm64ec | 7778 (7759–7853) | 7552 (7501–8087) | -2.9 | no |
+| sync alertable-wake | x64 | 8014 (7639–8134) | 8021 (7886–8027) | +0.1 | no |
+| sync auto-pool-8 | arm64 | 50970 (50952–51942) | 50947 (50945–50949) | -0.0 | yes |
+| sync auto-pool-8 | arm64ec | 49948 (47967–49956) | 49946 (49943–49948) | -0.0 | no |
+| sync auto-pool-8 | x64 | 50957 (50950–51940) | 51940 (51923–51943) | +1.9 | no |
+| xcall get-current-thread-id | arm64 | 0.7 (0.7–0.7) | 0.7 (0.7–0.7) | +0.0 | no |
+| xcall get-current-thread-id | arm64ec | 1.7 (1.7–1.7) | 1.7 (1.7–1.7) | +0.0 | no |
+| xcall get-current-thread-id | x64 | 24.2 (24.2–24.4) | 24.3 (24.2–24.4) | +0.4 | no |
+| xcall get-last-error | arm64 | 0.9 (0.9–0.9) | 0.9 (0.9–0.9) | +0.0 | no |
+| xcall get-last-error | arm64ec | 2.4 (2.4–2.8) | 2.4 (2.4–3.0) | +0.0 | no |
+| xcall get-last-error | x64 | 25.8 (25.6–25.9) | 25.6 (25.6–25.9) | -0.8 | no |
+| xcall tls-get-value | arm64 | 0.9 (0.9–0.9) | 0.9 (0.9–0.9) | +0.0 | no |
+| xcall tls-get-value | arm64ec | 2.5 (2.4–2.5) | 2.5 (2.4–2.6) | +0.0 | no |
+| xcall tls-get-value | x64 | 24.6 (24.4–25.1) | 24.6 (24.4–25.1) | +0.0 | no |
+| xcall get-tick-count | arm64 | 0.7 (0.7–0.7) | 0.7 (0.7–0.7) | +0.0 | no |
+| xcall get-tick-count | arm64ec | 1.8 (1.8–1.9) | 1.7 (1.7–1.8) | -5.6 | no |
+| xcall get-tick-count | x64 | 24.5 (24.3–24.7) | 24.0 (23.9–24.0) | -2.0 | yes |
+| xcall qpc | arm64 | 15.4 (15.4–16.7) | 15.4 (15.4–15.8) | +0.0 | no |
+| xcall qpc | arm64ec | 16.9 (16.9–17.2) | 16.9 (16.9–17.9) | +0.0 | no |
+| xcall qpc | x64 | 43.4 (43.2–43.5) | 43.4 (43.2–43.9) | +0.0 | no |
+| xcall istream-addref | arm64 | 1.5 (1.5–1.6) | 1.5 (1.5–1.6) | +0.0 | no |
+| xcall istream-addref | arm64ec | 1.5 (1.5–1.6) | 1.5 (1.5–1.7) | +0.0 | no |
+| xcall istream-addref | x64 | 24.8 (24.8–24.8) | 24.8 (24.8–24.8) | +0.0 | no |
+| xcall memcpy-16 | arm64 | 2.1 (1.8–2.2) | 2.0 (2.0–2.3) | -4.8 | no |
+| xcall memcpy-16 | arm64ec | 2.8 (2.6–3.0) | 3.0 (3.0–3.3) | +7.1 | no |
+| xcall memcpy-16 | x64 | 25.6 (25.5–25.9) | 26.1 (25.8–26.3) | +2.0 | no |
+| xcall memcpy-16-offset | arm64 | 3.0 (2.8–3.3) | 3.0 (3.0–3.2) | +0.0 | no |
+| xcall memcpy-16-offset | arm64ec | 4.1 (3.4–4.2) | 3.5 (3.3–4.3) | -14.6 | no |
+| xcall memcpy-16-offset | x64 | 27.1 (27.1–27.3) | 27.3 (27.2–27.3) | +0.7 | no |
+| xcall memcpy-256 | arm64 | 3.5 (3.5–3.8) | 3.5 (3.5–4.1) | +0.0 | no |
+| xcall memcpy-256 | arm64ec | 5.0 (4.1–5.2) | 4.9 (4.8–5.3) | -2.0 | no |
+| xcall memcpy-256 | x64 | 27.8 (27.6–27.9) | 27.8 (27.8–27.9) | +0.0 | no |
+| xcall memcpy-256-offset | arm64 | 5.2 (4.6–6.0) | 5.4 (5.1–5.4) | +3.8 | no |
+| xcall memcpy-256-offset | arm64ec | 6.5 (5.8–6.7) | 6.2 (5.7–6.4) | -4.6 | no |
+| xcall memcpy-256-offset | x64 | 29.2 (29.1–29.3) | 29.6 (29.5–30.2) | +1.4 | yes |
+| xcall memcpy-4k | arm64 | 44.3 (43.9–45.2) | 44.1 (44.0–44.2) | -0.5 | no |
+| xcall memcpy-4k | arm64ec | 45.2 (45.0–45.2) | 47.8 (45.3–48.1) | +5.8 | yes |
+| xcall memcpy-4k | x64 | 57.6 (57.3–61.3) | 58.0 (58.0–59.5) | +0.7 | no |
+| xcall memcpy-4k-offset | arm64 | 47.9 (45.6–48.8) | 45.6 (45.6–45.7) | -4.8 | no |
+| xcall memcpy-4k-offset | arm64ec | 41.1 (40.5–41.3) | 40.2 (39.9–40.3) | -2.2 | yes |
+| xcall memcpy-4k-offset | x64 | 74.5 (74.2–89.9) | 74.4 (73.6–79.2) | -0.1 | no |
+| xcall memcpy-1m | arm64 | 15510 (15480–16780) | 15530 (15330–15780) | +0.1 | no |
+| xcall memcpy-1m | arm64ec | 15090 (13770–16770) | 15380 (15230–15380) | +1.9 | no |
+| xcall memcpy-1m | x64 | 15260 (15260–15350) | 15300 (15160–15310) | +0.3 | no |
+| xcall memcpy-1m-offset | arm64 | 15330 (14850–15390) | 15390 (15360–16000) | +0.4 | no |
+| xcall memcpy-1m-offset | arm64ec | 15500 (14130–15760) | 15710 (14490–15760) | +1.4 | no |
+| xcall memcpy-1m-offset | x64 | 16360 (16280–16520) | 16330 (16320–16360) | -0.2 | no |
+| xcall strlen-1k | arm64 | 234 (233–234) | 236 (236–239) | +0.9 | yes |
+| xcall strlen-1k | arm64ec | 236 (236–244) | 238 (238–238) | +0.7 | no |
+| xcall strlen-1k | x64 | 262 (262–262) | 265 (263–273) | +1.0 | yes |
+| xcall qsort-4k | arm64 | 107980 (105460–109690) | 110760 (105000–110970) | +2.6 | no |
+| xcall qsort-4k | arm64ec | 164470 (162830–164850) | 164450 (163980–166180) | -0.0 | no |
+| xcall qsort-4k | x64 | 3371800 (3361860–3371990) | 3389330 (3379690–3394150) | +0.5 | yes |
+
+What moved outside the band: 11 rows, each within ±7 %:
+- ARM64: `wait-all-wake` −5.9 % (one run at 1142 ns), `auto-pool-8` −0.0 % (its 10 ms-tick quantisation),
+  `strlen-1k` +0.9 %.
+- ARM64EC: `waitonaddress-uncontended` +7.1 % (14 → 15 ns), `memcpy-4k` +5.8 %, `memcpy-4k-offset` −2.2 %.
+- x64: `waitonaddress-contended-4` +1.1 %, `get-tick-count` −2.0 %, `memcpy-256-offset` +1.4 %, `strlen-1k` +1.0 %,
+  `qsort-4k` +0.5 %.
+
+The lane programs are mingw builds with no volatile metadata, and no lane run sets EVMD. So 0006's only path in them is
+the range lookup per block, which finds no range. The ARM64 lane doesn't load FEX at all, and three of its rows moved
+too.
+
+**R6.** Both differences from Task 2's baseline table are below R6's 5 ns threshold (native REPORT §3 R6): x64
+`get-last-error` − x64 `get-current-thread-id` is 1.0 ns (25.6 − 24.6), and x64 `get-current-thread-id` − x64
+`istream-addref` is −2.6 ns (24.6 − 27.2).
+
+**Gates**, on the development build (FEX acba840 committed, not exported), with Steam running:
+- `make wine-arm64-check` passed every step in 2473 s, `fex-vmd` last, then `PASS orphans`. Its `fex-vmd` saw MP
+  forbidden=1,347 with the whole-module range and 0 with `run` and `worker` listed. The ratios were 0.49 (0.447 of
+  0.906 s) and 0.38 (0.383 of 1.013 s). `g2-litmus`'s default run was at 0 on all four patterns, and its control at
+  MP 22,348. Both D3D11 lanes recorded 4.5-4.6 ms frame times.
+  - G4 (measured, not gated) still has `mem_seq_read` and `mem_seq_write` as FEX's worst rows against Rosetta: 2.22
+    and 2.01, with FEX's defaults. `fex-vmd`'s runs with ranges in the same gate took 0.447 and 0.383 s; Rosetta's
+    were 0.409 and 0.497 s there.
+  - G4's `call_*` rows moved with x64-bench's new layout, as `docs/testing/acceptance-arm64-wine.md` warns. From
+    Task 3's gate to this one: `call_chain64` 1.072 → 1.027, `call_virtual` 1.177 → 0.946, `call_std_function`
+    1.392 → 1.324.
+  - The gate started on AC and ended on battery: the power went off during it. It grades no timing except
+    `fex-vmd`'s ratio, which passed with room.
+- `make test`: 251 tests passed.
+- `make smoke`: 15/15.
+- `make bridge-check`: 15 `ok`.
+- `make media-check`: unchanged,
+  `FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf: stage=video-type hr=0xc00d5212`.
+
+**Step 8, SMITE 2 with and without its metadata:** pending, with the maintainer. 0006 isn't exported until it has run.

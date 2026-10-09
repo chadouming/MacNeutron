@@ -6,6 +6,7 @@
 // The 29 single-threaded rows carry the names of neo773's fex-vs-rosetta gist (its source isn't published, so the
 // kernels are ours); mt_* rows are multithreaded, call_* rows call-heavy. Built -O2: opaque() hides a value from the
 // optimizer (an empty asm that "changes" it), so no row is folded, hoisted, vectorized or turned into a library call.
+// mem_seq_read and mem_seq_write stay out of line: check.sh's fex-vmd names their ranges.
 #include <windows.h>
 #include <cpuid.h>
 #include <immintrin.h>
@@ -308,7 +309,7 @@ __attribute__((target("avx2,fma"))) static u64 fma256_ps() {  // eight independe
 
 static char *buf_a, *buf_b;  // 64 MB each
 
-static u64 mem_seq_read() {  // 8-byte loads over 64 MB, 400 passes
+NOINLINE static u64 mem_seq_read() {  // 8-byte loads over 64 MB, 400 passes
   const u64 *p = (const u64 *)buf_a;
   u64 s0 = 0, s1 = 0, s2 = 0, s3 = 0;
   for (int pass = 0; pass < 400; pass++) {
@@ -320,7 +321,7 @@ static u64 mem_seq_read() {  // 8-byte loads over 64 MB, 400 passes
   return s0 ^ s1 ^ s2 ^ s3;
 }
 
-static u64 mem_seq_write() {  // 8-byte stores over 64 MB, 400 passes
+NOINLINE static u64 mem_seq_write() {  // 8-byte stores over 64 MB, 400 passes
   u64 *p = (u64 *)buf_b, v = 1;
   for (int pass = 0; pass < 400; pass++) {
     for (u64 i = 0; i < 64 * MB / 8; i += 4) {
