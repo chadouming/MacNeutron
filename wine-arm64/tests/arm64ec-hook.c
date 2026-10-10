@@ -1,8 +1,8 @@
 // The ARM64EC auxiliary IAT (Wine patch 0034): the loader fills an ARM64EC program's import entries with their EC
 // targets, and puts an entry back on its check stub when a page it was resolved through is made writable, so a hook
 // applied after load (on the export, or on the regular IAT entry) still runs for ARM64EC callers. An unloaded DLL's
-// entries are dropped: a later allocation at its old range isn't written. One line per row, `ok <row>` or
-// `FAIL <row>: <why>`, then PASS or FAIL arm64ec-hook.
+// entries are dropped: a later allocation at its old range isn't written. A thread suspended inside a fill doesn't hold
+// up a hooker's VirtualProtect. One line per row, `ok <row>` or `FAIL <row>: <why>`, then PASS or FAIL arm64ec-hook.
 //
 // In ARM64EC naming (lld) `__imp_X` is the auxiliary IAT entry and `__imp_aux_X` the regular one. The targets are
 // chosen so that no hook row's page carries another row's entry: in the built kernel32.dll's x64 view GetTickCount is
@@ -177,6 +177,75 @@ static void row_unload(void) {
   end();
 }
 
+// A hooker that freezes threads (MinHook: SuspendThread, then GetThreadContext, then VirtualProtect) while another
+// thread loads and frees version.dll: a thread suspended inside the loader's fill must not hold up the hooker's
+// VirtualProtect of a page an entry was resolved through (kernel32's GetTickCount FFS page).
+static volatile LONG stop_loads, loads;
+
+static DWORD WINAPI load_loop(void *arg) {
+  (void)arg;
+  while (!stop_loads) {
+    HMODULE mod = LoadLibraryA("version.dll");
+    if (mod) FreeLibrary(mod);
+    InterlockedIncrement(&loads);
+  }
+  return 0;
+}
+
+static HANDLE loader;
+static volatile LONG rounds;
+
+static DWORD WINAPI hook_loop(void *arg) {
+  BYTE *page = arg;
+  ULONGLONG end = GetTickCount64() + 3000;
+  CONTEXT context;
+  DWORD old;
+
+  while (GetTickCount64() < end) {
+    SuspendThread(loader);
+    context.ContextFlags = CONTEXT_CONTROL;
+    GetThreadContext(loader, &context);  // the suspension is complete
+    VirtualProtect(page, 16, PAGE_EXECUTE_READWRITE, &old);
+    VirtualProtect(page, 16, old, &old);
+    ResumeThread(loader);
+    InterlockedIncrement(&rounds);
+  }
+  return 0;
+}
+
+static void row_suspend(void) {
+  HANDLE hooker;
+  DWORD wait;
+
+  begin("suspend");
+  loader = CreateThread(NULL, 0, load_loop, NULL, 0, NULL);
+  hooker = CreateThread(NULL, 0, hook_loop, __imp_aux_GetTickCount, 0, NULL);
+  if (!loader || !hooker) {
+    fail("can't create the threads (error %lu)", GetLastError());
+    end();
+    return;
+  }
+  wait = WaitForSingleObject(hooker, 15000);
+  if (wait == WAIT_TIMEOUT) {
+    DWORD count;
+    do count = ResumeThread(loader);  // let the loading thread finish its fill, then the hooker can go on
+    while (count != (DWORD)-1 && count > 1);
+    fail("the hooker's VirtualProtect waited 15 s with the loading thread suspended (%ld rounds, %ld loads): a fill "
+         "holds aux_lock where a suspend stops it",
+         rounds, loads);
+    WaitForSingleObject(hooker, 15000);
+  }
+  stop_loads = 1;
+  WaitForSingleObject(loader, 15000);
+  if (wait != WAIT_TIMEOUT)
+    EXPECT(rounds > 100 && loads > 100, "only %ld rounds and %ld loads in 3 s: the row can't have met a fill", rounds,
+           loads);
+  printf("info suspend: %ld rounds, %ld loads\n", rounds, loads);
+  CloseHandle(hooker);
+  CloseHandle(loader);
+  end();
+}
+
 int main(void) {
   BYTE *exe = (BYTE *)GetModuleHandleA(NULL);
 
@@ -194,10 +263,11 @@ int main(void) {
   row_per_entry();
   row_iat_hook();
   row_unload();
+  row_suspend();
   if (!rows_failed) {
     printf("PASS arm64ec-hook\n");
     return 0;
   }
-  printf("FAIL arm64ec-hook: %d of 5 rows failed (first: %s)\n", rows_failed, first_failed);
+  printf("FAIL arm64ec-hook: %d of 6 rows failed (first: %s)\n", rows_failed, first_failed);
   return 1;
 }

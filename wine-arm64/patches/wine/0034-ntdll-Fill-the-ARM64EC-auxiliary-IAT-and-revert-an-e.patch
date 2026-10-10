@@ -15,21 +15,27 @@ for anything resolved through a page that is writable. Relay and snoop runs keep
 
 Each filled entry records what its resolution read: the importer's IAT entry, then each code address and ff 25 slot.
 A protect that makes one of those pages writable, in this process (the NtProtectVirtualMemory wrapper, after the
-protect, so before the hooker writes) or from another (a writable post-protect, a flush or a write on the
+protect, so before the hooker writes, and after FEX's post-notify, so no FEX lock is held while it waits) or from another (a writable post-protect, a flush or a write on the
 cross-process work list; an overflowed list reverts everything), puts that entry back to its AuxiliaryIATCopy stub.
 Entries resolved through other pages stay filled. A 65,536-bit page hash keeps a protect elsewhere free of any scan.
 LLVM dec0781 places the IAT on its own 4 KiB pages at the start of .rdata so that the OS can detect runtime patching
 and revert the auxiliary IAT to call checking; reverting per entry, and following the FFS and ff 25 pages, is ours.
 
-The fill sets the hash bits, then queries the pages, then resolves again, all under aux_lock, so a hooker on another
-thread either sees the bits and reverts after the fill, or came before the query and keeps the stub. The query is the
-raw syscall: the NtQueryVirtualMemory export is hybrid-patchable, and an x64 hook on it would run under aux_lock. The
-revert's lock-free test is the hash alone: an entry is counted only after its query.
+The fill queries each page once, after setting its hash bit, then resolves again, all under aux_lock, so a hooker on
+another thread either sees the bit and reverts after the fill, or came before the query and keeps the stub. The query
+is the raw syscall: the NtQueryVirtualMemory export is hybrid-patchable, and an x64 hook on it would run under
+aux_lock. The fill reads a page only once the query says it is committed and readable, so it can't fault under the
+loader lock and aux_lock. The revert's lock-free test is the hash alone: an entry is counted only after its query.
+
+The fill and the forget hold aux_lock as a syscall callback, so a suspend waits for the doorbell, as it does for FEX's
+own lock holders: a hooker that freezes every other thread and then protects a page (MinHook) would otherwise wait
+forever for a fill it froze.
 
 An unloaded module's entries are dropped before its view is unmapped.
 
-Gaps: a protect or write from another process takes effect here before FEX next processes the work list (on its next
-syscall), so calls in that window still skip the hook; delay-load IATs aren't filled; syscall stubs stay on the checker.
+Gaps: a protect or write from another process takes effect here before FEX next processes the work list (an x64
+syscall, a block compile or a context sync; an ARM64EC thread's own syscalls don't drain it), so calls in that window
+still skip the hook; delay-load IATs aren't filled; syscall stubs stay on the checker.
 
 Ours and stays local.
 
@@ -37,8 +43,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  dlls/ntdll/loader.c         |   6 +
  dlls/ntdll/ntdll_misc.h     |   2 +
- dlls/ntdll/signal_arm64ec.c | 275 +++++++++++++++++++++++++++++++++++-
- 3 files changed, 281 insertions(+), 2 deletions(-)
+ dlls/ntdll/signal_arm64ec.c | 304 +++++++++++++++++++++++++++++++++++-
+ 3 files changed, 310 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
 index b0b2392..a993008 100644
@@ -78,7 +84,7 @@ index 2bf3cfa..35efa4e 100644
  
  extern void *__os_arm64x_check_call;
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 923ba88..1f7affb 100644
+index 923ba88..d73c052 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -524,7 +524,7 @@ DEFINE_SYSCALL(NtQuerySystemTime, (LARGE_INTEGER *time))
@@ -90,7 +96,7 @@ index 923ba88..1f7affb 100644
  DEFINE_SYSCALL(NtQueryVolumeInformationFile, (HANDLE handle, IO_STATUS_BLOCK *io, void *buffer, ULONG length, FS_INFORMATION_CLASS info_class))
  DEFINE_SYSCALL(NtQueueApcThread, (HANDLE handle, PNTAPCFUNC func, ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3))
  DEFINE_SYSCALL(NtQueueApcThreadEx, (HANDLE handle, HANDLE reserve_handle, PNTAPCFUNC func, ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3))
-@@ -614,6 +614,260 @@ DEFINE_SYSCALL(NtWriteRequestData, (HANDLE handle, LPC_MESSAGE *request, ULONG i
+@@ -614,6 +614,287 @@ DEFINE_SYSCALL(NtWriteRequestData, (HANDLE handle, LPC_MESSAGE *request, ULONG i
  DEFINE_SYSCALL(NtWriteVirtualMemory, (HANDLE process, void *addr, const void *buffer, SIZE_T size, SIZE_T *bytes_written))
  DEFINE_SYSCALL(NtYieldExecution, (void))
  
@@ -104,7 +110,10 @@ index 923ba88..1f7affb 100644
 + */
 +
 +#define AUX_WRITABLE (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)
++#define AUX_READABLE (PAGE_READONLY | PAGE_EXECUTE_READ | AUX_WRITABLE)
 +#define AUX_FILL_PAGES 64
++#define AUX_PAGE_READABLE 1
++#define AUX_PAGE_WRITABLE 2
 +
 +struct aux_entry
 +{
@@ -113,10 +122,10 @@ index 923ba88..1f7affb 100644
 +    ULONG_PTR dep[4];  /* the importer's IAT entry, then each code address and ff 25 slot read; 0 if unused */
 +};
 +
-+struct aux_page
++struct aux_fill  /* the pages one fill has queried */
 +{
-+    ULONG_PTR page;
-+    BOOL      writable;
++    struct { ULONG_PTR page; UINT flags; } pages[AUX_FILL_PAGES];
++    unsigned int count;
 +};
 +
 +static struct aux_entry *aux_entries;
@@ -141,8 +150,47 @@ index 923ba88..1f7affb 100644
 +    return (const char *)p + len <= (const char *)mod->DllBase + mod->SizeOfImage;
 +}
 +
-+/* what arm64x_check_call would branch to, one ff 25 hop at most, reading only loaded images; NULL keeps the stub */
-+static void *aux_resolve( const BYTE *p, ULONG_PTR dep[4] )
++/* the page's AUX_PAGE_* flags, queried once per fill, and only after the page's hash bit is set: a protect the bit
++ * missed came before the query, which then sees it */
++static UINT aux_page_flags( ULONG_PTR addr, struct aux_fill *fill )
++{
++    MEMORY_BASIC_INFORMATION info;
++    ULONG_PTR page = addr & ~(ULONG_PTR)0xfff;
++    UINT64 bit, *word = aux_page_word( page, &bit );
++    UINT flags = AUX_PAGE_WRITABLE;  /* a failed query reads nothing and keeps the stub */
++    unsigned int i;
++
++    for (i = 0; i < fill->count; i++) if (fill->pages[i].page == page) return fill->pages[i].flags;
++    __atomic_fetch_or( word, bit, __ATOMIC_SEQ_CST );
++    /* not the export: an x64 hook on it would run under aux_lock */
++    if (!syscall_NtQueryVirtualMemory( NtCurrentProcess(), (void *)page, MemoryBasicInformation,
++                                       &info, sizeof(info), NULL ))
++    {
++        flags = 0;
++        if (info.State == MEM_COMMIT && (info.Protect & AUX_READABLE) && !(info.Protect & PAGE_GUARD))
++            flags |= AUX_PAGE_READABLE;
++        if (info.Protect & AUX_WRITABLE) flags |= AUX_PAGE_WRITABLE;
++    }
++    if (fill->count < AUX_FILL_PAGES)
++    {
++        fill->pages[fill->count].page = page;
++        fill->pages[fill->count++].flags = flags;
++    }
++    return flags;
++}
++
++/* the range can be read without a fault: the fill holds the loader lock and aux_lock */
++static BOOL aux_readable( const void *p, SIZE_T len, struct aux_fill *fill )
++{
++    ULONG_PTR addr = (ULONG_PTR)p & ~(ULONG_PTR)0xfff, end = (ULONG_PTR)p + len;
++
++    for (; addr < end; addr += 0x1000) if (!(aux_page_flags( addr, fill ) & AUX_PAGE_READABLE)) return FALSE;
++    return TRUE;
++}
++
++/* what arm64x_check_call would branch to, one ff 25 hop at most, reading only readable pages of loaded images; NULL
++ * keeps the stub */
++static void *aux_resolve( const BYTE *p, ULONG_PTR dep[4], struct aux_fill *fill )
 +{
 +    static const BYTE ffs[10] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x20, 0x55, 0x5d, 0xe9 };
 +    unsigned int n = 1;
@@ -150,7 +198,8 @@ index 923ba88..1f7affb 100644
 +    for (;;)
 +    {
 +        if (RtlIsEcCode( (ULONG_PTR)p )) return (void *)p;
-+        if (!aux_in_image( p, 14 )) return NULL;  /* allocate_stub's 0xdeadbeef, an unbound slot's RVA, ... */
++        /* allocate_stub's 0xdeadbeef, an unbound slot's RVA, ... */
++        if (!aux_in_image( p, 14 ) || !aux_readable( p, 14, fill )) return NULL;
 +        dep[n++] = (ULONG_PTR)p;
 +        if (!((ULONG_PTR)p & 15) && !memcmp( p, ffs, sizeof(ffs) ))
 +        {
@@ -159,29 +208,9 @@ index 923ba88..1f7affb 100644
 +        }
 +        if (n > 2 || p[0] != 0xff || p[1] != 0x25) return NULL;  /* syscall stubs and the rest keep the checker */
 +        dep[n] = (ULONG_PTR)(p + 6 + *(const INT32 *)(p + 2));
-+        if (!aux_in_image( (const void *)dep[n], 8 )) return NULL;
++        if (!aux_in_image( (const void *)dep[n], 8 ) || !aux_readable( (const void *)dep[n], 8, fill )) return NULL;
 +        p = *(const BYTE **)dep[n++];
 +    }
-+}
-+
-+/* the page is writable now; one query per page and fill */
-+static BOOL aux_writable( ULONG_PTR addr, struct aux_page *pages, unsigned int *count )
-+{
-+    MEMORY_BASIC_INFORMATION info;
-+    ULONG_PTR page = addr & ~(ULONG_PTR)0xfff;
-+    unsigned int i;
-+    BOOL ret;
-+
-+    for (i = 0; i < *count; i++) if (pages[i].page == page) return pages[i].writable;
-+    /* not the export: an x64 hook on it would run under aux_lock */
-+    ret = syscall_NtQueryVirtualMemory( NtCurrentProcess(), (void *)page, MemoryBasicInformation,
-+                                        &info, sizeof(info), NULL ) || (info.Protect & AUX_WRITABLE);
-+    if (*count < AUX_FILL_PAGES)
-+    {
-+        pages[*count].page = page;
-+        pages[(*count)++].writable = ret;
-+    }
-+    return ret;
 +}
 +
 +/*******************************************************************
@@ -196,8 +225,9 @@ index 923ba88..1f7affb 100644
 +    const IMAGE_IMPORT_DESCRIPTOR *imports;
 +    ULONG_PTR image = (ULONG_PTR)module, image_size = nt->OptionalHeader.SizeOfImage;
 +    struct aux_entry *entries = NULL;
-+    struct aux_page pages[AUX_FILL_PAGES];
-+    unsigned int count, capacity = 0, nb_pages = 0, k;
++    struct aux_fill fill;
++    unsigned int count, capacity = 0, k;
++    BOOL callback;
 +    void **iat, **aux, **copy, *base = NULL, *target;
 +    ULONG_PTR dep[4], again[4];
 +    SIZE_T nb_iat, i, j, size = 0;
@@ -223,7 +253,11 @@ index 923ba88..1f7affb 100644
 +        if (!(entries = RtlAllocateHeap( GetProcessHeap(), 0, capacity * sizeof(*entries) ))) return;
 +    }
 +
++    /* a suspend that arrives while aux_lock is held waits for the doorbell, as for FEX's own lock holders: a hooker
++     * that freezes this thread and then protects a page would otherwise wait for the lock forever */
++    callback = enter_syscall_callback();
 +    RtlAcquireSRWLockExclusive( &aux_lock );
++    fill.count = 0;
 +    if (entries)
 +    {
 +        struct aux_entry *old = aux_entries;
@@ -248,19 +282,15 @@ index 923ba88..1f7affb 100644
 +
 +            memset( dep, 0, sizeof(dep) );
 +            dep[0] = (ULONG_PTR)&iat[i];
-+            if (!(target = aux_resolve( iat[i], dep ))) continue;
-+            /* the bits first, then the query: a protect the bits missed came before the query, which sees it */
-+            for (k = 0; k < 4 && dep[k]; k++)
-+            {
-+                UINT64 bit, *word = aux_page_word( dep[k], &bit );
-+                __atomic_fetch_or( word, bit, __ATOMIC_SEQ_CST );
-+            }
-+            for (k = 0; k < 4 && dep[k]; k++) if (aux_writable( dep[k], pages, &nb_pages )) break;
++            if (!(target = aux_resolve( iat[i], dep, &fill ))) continue;
++            /* every page is queried after its bit is set (aux_page_flags), so a page made writable meanwhile either
++             * shows here or has its protect wait for aux_lock and revert after the fill */
++            for (k = 0; k < 4 && dep[k]; k++) if (aux_page_flags( dep[k], &fill ) & AUX_PAGE_WRITABLE) break;
 +            if (k < 4 && dep[k]) continue;
 +            /* a hooker that wrote and put the protection back before the query changed what this reads */
 +            memset( again, 0, sizeof(again) );
 +            again[0] = dep[0];
-+            if (aux_resolve( iat[i], again ) != target || memcmp( dep, again, sizeof(dep) )) continue;
++            if (aux_resolve( iat[i], again, &fill ) != target || memcmp( dep, again, sizeof(dep) )) continue;
 +
 +            if (!base)
 +            {
@@ -283,6 +313,7 @@ index 923ba88..1f7affb 100644
 +done:
 +    if (base) syscall_NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, old_prot, &old_prot );
 +    RtlReleaseSRWLockExclusive( &aux_lock );
++    if (callback) leave_syscall_callback();
 +    RtlFreeHeap( GetProcessHeap(), 0, entries );
 +}
 +
@@ -294,6 +325,7 @@ index 923ba88..1f7affb 100644
 + */
 +void arm64ec_forget_aux_iat( HMODULE module, SIZE_T size )
 +{
++    BOOL callback = enter_syscall_callback();  /* as in the fill */
 +    unsigned int i;
 +
 +    RtlAcquireSRWLockExclusive( &aux_lock );
@@ -304,6 +336,7 @@ index 923ba88..1f7affb 100644
 +        __atomic_store_n( &aux_count, aux_count - 1, __ATOMIC_SEQ_CST );
 +    }
 +    RtlReleaseSRWLockExclusive( &aux_lock );
++    if (callback) leave_syscall_callback();
 +}
 +
 +/* puts back on its stub every entry resolved through a page of the range; reads only the recorded dependencies,
@@ -351,7 +384,7 @@ index 923ba88..1f7affb 100644
  NTSTATUS SYSCALL_API NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR zero_bits,
                                                SIZE_T *size_ptr, ULONG type, ULONG protect )
  {
-@@ -779,13 +1033,19 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+@@ -779,7 +1060,11 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
      NTSTATUS status;
  
      if (!enter_syscall_callback())
@@ -364,15 +397,15 @@ index 923ba88..1f7affb 100644
  
      if (!is_current) send_cross_process_notification( process, CrossProcessPreVirtualProtect,
                                                        *addr_ptr, *size_ptr, 2, new_prot, 0 );
-     else if (pNotifyMemoryProtect) pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, FALSE, 0 );
- 
-     status = syscall_NtProtectVirtualMemory( process, addr_ptr, size_ptr, new_prot, old_prot );
-+    /* after the protect: the hooker writes once the call returns, so the entry is back before the write */
-+    if (!status && is_current && (new_prot & AUX_WRITABLE)) aux_revert( *addr_ptr, *size_ptr );
- 
-     if (!is_current) send_cross_process_notification( process, CrossProcessPostVirtualProtect,
+@@ -791,10 +1076,20 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
                                                        *addr_ptr, *size_ptr, 2, new_prot, status );
-@@ -795,6 +1055,12 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+     else if (pNotifyMemoryProtect) pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, TRUE, status );
+ 
++    /* after the protect, so the entry is back before the hooker writes (once this returns), and after FEX's
++     * post-notify, so a wait for aux_lock doesn't hold FEX's locks */
++    if (!status && is_current && (new_prot & AUX_WRITABLE)) aux_revert( *addr_ptr, *size_ptr );
++
+     leave_syscall_callback();
      return status;
  }
  
@@ -385,7 +418,7 @@ index 923ba88..1f7affb 100644
  NTSTATUS SYSCALL_API NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class, void *info, ULONG size, ULONG *ret_size )
  {
      NTSTATUS status = syscall_NtQuerySystemInformation( class, info, size, ret_size );
-@@ -971,6 +1237,7 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
+@@ -971,6 +1266,7 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
  
      if (flush)
      {
@@ -393,7 +426,7 @@ index 923ba88..1f7affb 100644
          if (pFlushInstructionCacheHeavy) pFlushInstructionCacheHeavy( NULL, 0 );
          while (entry)
          {
-@@ -983,6 +1250,10 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
+@@ -983,6 +1279,10 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
  
      while (entry)
      {

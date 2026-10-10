@@ -1794,7 +1794,7 @@ msync's abandoned mutex on TerminateThread (kernel32 `sync.c:416/:420`), and the
 ## ARM64EC auxiliary IAT (batch Task 5)
 
 2026-10-10. **Wine patch 0034 (`ntdll: Fill the ARM64EC auxiliary IAT and revert an entry when what it was resolved
-through is made writable.`, `macneutron` 6fe9c96 on 79874a0) fills an ARM64EC importer's auxiliary IAT at load and puts
+through is made writable.`, `macneutron` 7b65406 on 79874a0, after fix round 1; 6fe9c96 before it) fills an ARM64EC importer's auxiliary IAT at load and puts
 an entry back on its check stub when a page it was resolved through is made writable (Ruling R13, option B).** It is
 ours and local only. The arm64ec lane's import calls drop to, or toward, the arm64 lane's cost: get-current-thread-id,
 get-last-error and tls-get-value 1.7-2.5 → 0.7 ns, get-tick-count 1.7 → 1.1, memcpy-16 3.0 → 1.9.
@@ -1809,21 +1809,26 @@ What 0034 does (`dlls/ntdll/signal_arm64ec.c`, `loader.c`, `ntdll_misc.h`):
 - **What a filled entry records:** the importer's IAT entry, then each code address and `ff 25` slot read (`dep[4]`),
   and their pages in a 65,536-bit hash, so a protect anywhere else costs a few bit tests and no lock.
 - **The revert.** A protect to a writable protection in this process (the `NtProtectVirtualMemory` wrapper, both paths,
-  after the protect and so before the hooker writes) and, from another process, a writable post-protect, a flush or a
+  after the protect and so before the hooker writes, and after FEX's post-notify) and, from another process, a writable post-protect, a flush or a
   write on the cross-process work list put back to its stub every entry with a dependency in the range; an overflowed
   list puts back everything. Entries resolved through other pages stay filled.
-- **The order** (bits, then the page query, then a second resolve, under `aux_lock`): a hooker on another thread either
-  sees the bits and reverts after the fill, or protected before the query (which then sees the page writable), or wrote
-  and restored before it (the second resolve then reads the patched bytes).
+- **The order** (each page's bit, then its one query per fill, then a second resolve, under `aux_lock`): a hooker on
+  another thread either sees the bit and reverts after the fill, or protected before the query (which then sees the page
+  writable), or wrote and restored before it (the second resolve then reads the patched bytes). A page is read only once
+  its query says it is committed and readable, so the fill can't fault under the loader lock and `aux_lock`.
+- **Suspension.** The fill and the forget hold `aux_lock` as a syscall callback, so a suspend that arrives meanwhile
+  waits for the doorbell, as it does for FEX's own lock holders.
 - **The forget.** `free_modref` drops a module's entries before it unmaps the view, without writing them.
 
 **The `ec-hook` step** (`check.sh`, in `BATCH` after `winetests`; crash dialog off): `arm64ec-hook.exe` (ARM64EC) prints
-`ok`/`FAIL` for five rows: `filled` (GetTickCount, an FFS export, and GetLastError, kernel32's `ff 25` alias to
+`ok`/`FAIL` for six rows: `filled` (GetTickCount, an FFS export, and GetLastError, kernel32's `ff 25` alias to
 kernelbase, hold EC code outside the exe); `ffs-hook` (`mov eax, 0x5eed; ret` written over kernel32's GetTickCount FFS
 after a VirtualProtect: the ARM64EC call gets 0x5eed, and the real value once the bytes are back); `per-entry`
 (GetLastError's entry, on other pages, is still filled after that hook); `iat-hook` (the exe's regular IAT entry for
 TlsGetValue made writable and pointed at an EC function: the ARM64EC call runs it); `unload` (version.dll loaded and
-freed, its old range allocated, filled with 0x5a and protected writable: no byte changes).
+freed, its old range allocated, filled with 0x5a and protected writable: no byte changes); `suspend` (fix round 1: one
+thread loads and frees version.dll while another, for 3 s, does what MinHook does, SuspendThread, GetThreadContext,
+VirtualProtect of kernel32's GetTickCount FFS page to RWX and back, ResumeThread; the hooker must finish within 15 s).
 
 **RED → GREEN** (`check.sh ec-hook`, logs `t5-red.log`, `t5-green-step3.log`, `t5-green-step4.log`, `t5-green.log`):
 - On 0033: `FAIL filled` twice (the entries are the exe's stubs, 0x140002C20 and 0x140002BC0), `FAIL ffs-hook` and `FAIL
@@ -1888,11 +1893,43 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
 - The array is sized for all of the module's IAT entries, an upper bound on its candidates, rather than counted first.
 
 **Gaps.**
-- A protect or a write from another process takes effect here before FEX next processes the work list (on its next
-  syscall, FEX's `Source/Windows/ARM64EC/Module.cpp:520`), so calls in that window still skip the hook.
+- A protect or a write from another process takes effect here before FEX next processes the work list: an x64
+  syscall, a block compile or a context sync (`Source/Windows/ARM64EC/Module.cpp:520, 562, 568`). An ARM64EC thread's
+  own syscalls don't drain it, so in a process that never enters FEX the window has no bound. Calls in it skip the hook.
+- The cross-process revert is untested: every `ec-hook` row hooks from inside the process (review finding F3, not in
+  fix round 1).
 - Delay-load IATs are not filled; syscall stubs stay on the checker.
 - An entry resolved through a page that was writable at load keeps the checker for the process's lifetime (a fill is
   never retried).
 - A hooker that writes an auxiliary IAT entry itself (an ARM64EC-aware IAT hook) is not tracked: a later revert through
   another dependency's page puts the stub back over its value.
 - No Windows primary source says which entries Windows fills or how it detects patching; the per-entry revert is ours.
+
+**Fix round 1 (Ruling R46; 0034 amended and re-exported, R46a).** The review found two Important problems and one minor:
+- **F1.** A fill held `aux_lock` as plain EC code (neither InSyscallCallback nor InSimulation set), so a suspend stopped it
+  on the spot. A hooker that freezes every other thread and then VirtualProtects a hashed page (MinHook) waited for
+  `aux_lock` forever, inside FEX's ThreadCreationMutex, and the process hung. Fixed: `arm64ec_fill_aux_iat` and
+  `arm64ec_forget_aux_iat` hold the lock between `enter_syscall_callback` and `leave_syscall_callback`. Nothing under
+  the lock calls a wrapper: the object's calls there are `LdrFindEntryForAddress`, `memcpy` and the raw
+  `syscall_NtQueryVirtualMemory` / `syscall_NtProtectVirtualMemory`.
+- **F2.** The wrapper's second path reverted between FEX's pre- and post-protect notify, inside ThreadCreationMutex.
+  Fixed: the revert comes after the post-notify, before `leave_syscall_callback`.
+- **Minor.** The fill read target-code and slot pages without knowing they were readable. Now every page it reads is
+  queried first (committed, readable, not a guard page), through the same once-per-fill cache. Every query now sets the
+  page's hash bit just before it, so the order above holds for every page the fill queries.
+- **The `suspend` row, RED on 6fe9c96:** three runs out of three, `FAIL suspend: the hooker's VirtualProtect waited 15 s with
+  the loading thread suspended (24-27 rounds, 0 loads)`; on 0033 (control, 79874a0, no fill) `ok suspend` with 58,128 /
+  58,263 rounds and 2,262 / 2,500 loads. **GREEN on the fix:** three runs out of three, all six rows `ok`, 54,758-55,527 rounds and
+  2,000-2,504 loads (`t5-f1-*.log`).
+- `check.sh winetests ec-hook`: `PASS winetests` (only the six listed locations) and `PASS ec-hook`. `make test`: 252
+  passed.
+- A diagnostic counting each module's filled entries (arm64ec, version.dll loaded) prints the same counts on 6fe9c96 and
+  on the fix: the exe 38, kernel32 905, kernelbase 297, ucrtbase 160, version.dll 46, xtajit64 5.
+- Lanes, two idle runs on AC (load 1.75-2.20; `t5-f1-lanes-run{1,2}.log`): the arm64ec xcall rows get-current-thread-id,
+  get-last-error and tls-get-value read 0.7 ns as in t5, memcpy-16 1.9. get-tick-count reads 1.5 / 1.6 against t5's 1.1
+  and qpc 15.9 / 16.6, while the arm64 lane, which has no auxiliary IAT, moved too (qpc 15.4 → 16.5, memcpy-4k-offset
+  45.6 → 55.7 / 48.9). With the filled counts unchanged, read as session variance.
+- Re-export: `git status --short wine-arm64/patches` shows only ` M …/0034-ntdll-Fill-the-ARM64EC-auxiliary-IAT-and-revert-an-e.patch`;
+  the fresh-fetch proof prints `applied 34/34` and `tree-equal` (tree f7b61747…); an applied-mode rebuild stages the
+  tested ntdll (disassembly SHA-256 137d8999…).
+- The full gate was not re-run after the fix; the gates above are 6fe9c96's.
