@@ -2257,3 +2257,25 @@ whole-branch review asked for it before the next tag.
   numbers as indicative.
 - **Not covered:** a third-party hooking overlay (Discord, MinHook-style mods) loading during start-up, which is 0034's
   suspend case; an oversubscribed CPU; a long session.
+
+## Shader Model 6.7 by default (DXMT 0039)
+
+2026-10-10, for 0.4.0. **DXMT patch 0039 (`d3d12: Report the Shader Model 6 features by default.`, `macneutron`
+0593068 on 179738a)** turns `SM6Caps()` on unless `DXMT_D3D12_SM6=0` (`d3d12_dxil_dump.cpp:63`, `== "1"` →
+`!= "0"`); capture mode still forces it. Only `CheckFeatureSupport`'s answers change (its eight `SM6Caps()` reads in
+`d3d12_device.cpp`): Shader Model `min(requested, 6.7)`, feature level 12_1, binding tier 3, wave ops with 32 lanes,
+both 64-bit atomic bits. `src/d3d12` is outside `translator_key`, so translated shaders and recordings stay valid.
+6.7 is the highest `D3D_SHADER_MODEL` in the llvm-mingw headers the build uses; no 6.8 or 6.9 operation is translated.
+The translator has no shader model gate: an operation it lacks fails its own pipeline.
+
+- Export: only `0039-*` is new in `wine-arm64/patches/dxmt`; a fresh fetch of the pin applies 39/39, `tree-equal`.
+- Gate (`make dxmt-check`, both lanes, AC; `.superpowers/sdd/2026-10-10-sm6-default/dxmt-check.log`): `dxmt-check:
+  all passed` twice, 570 `ok`, 0 `FAIL`. `d3d12_clear` now asks for 6_7, and the default run reads `shader model 0x67
+  (hr 0x00000000)`, `resource binding tier 3` and `feature level 0xc100, wave ops 1, atomic64 1`. Capture mode with
+  `DXMT_D3D12_SM6=0` still reads 0x67. `DXMT_D3D12_SM6=0` outside capture mode reads 0x51, tier 2, `0xb100, wave ops 0,
+  atomic64 0`. The rows now also match the call's `hr` and start from an environment without `DXMT_D3D12_SM6` or
+  `DXMT_DXIL_DUMP`. Each pattern was checked against the run's own outputs in both lanes: 2 matches in its file, 0 in
+  the other two. `make test`: 252 passed.
+- Game: SMITE 2 has run on this code path since 2026-10-01 with `DXMT_D3D12_SM6=1`, most recently on Wine 0033-0035 (the
+  section above); 0039 makes that the default. No other Direct3D 12 game is on record with these answers.
+- Not covered: a Direct3D 12 game that took its Shader Model 5.1 path in 0.3 and now takes its Shader Model 6 one.

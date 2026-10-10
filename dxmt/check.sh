@@ -19,6 +19,8 @@ ATESTS="${MACNEUTRON_ARM64_TESTS:-$TESTS}" ALOOP="${MACNEUTRON_ARM64_LOOP:-$LOOP
 TOOLS="${MACNEUTRON_ARM64_TOOLS:-$ROOT/build/wine-arm64}"
 WORK="${DXMT_CHECK_WORK:-${TMPDIR:-/tmp}/macneutron dxmt}"
 fail=0
+# The D3D12 caps rows read DXMT's defaults: nothing from the caller's shell.
+unset DXMT_D3D12_SM6 DXMT_DXIL_DUMP
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fail=1; fi; }
 die() { echo "dxmt-check: $*" >&2; exit 1; }
 hazards() { grep '^hazard ' "$WORK/$1.txt" || echo "no hazard lines in $1"; }
@@ -433,7 +435,7 @@ exit $fail
 # Lane C: presenting, DXIL capture and behaviour, the triangles and the geometry shader's recording and replay.
 (
 LANE=C
-# 2. A D3D12 program presents through our d3d12.dll (D3DMetal would report shader model 6.x).
+# 2. A D3D12 program presents through our d3d12.dll (the capture dump below shows it is ours).
 run ours clear dxmt "$TESTS/d3d12_clear.exe" 300
 expect "d3d12_clear presents every frame" "$(grep -c 'presented 300/300 frames' "$WORK/clear.txt" || true)" 1
 expect "ResizeBuffers keeps the swapchain flags it's given (0: those it had)" \
@@ -446,8 +448,11 @@ run ours clear-dump dxmt "$TESTS/d3d12_clear.exe" 20
 unset DXMT_DXIL_DUMP DXMT_DUMP_FRAME DXMT_DUMP_FRAMES
 expect "DXMT_DUMP_FRAMES=3 dumps three frames in a row" \
   "$(grep '^# frame ' "$WORK/clear-dump/passes.txt" 2> /dev/null | tr '\n' ';')" "# frame 0 presented;# frame 1 presented;# frame 2 presented;"
-expect "the D3D12 device is our DXMT (shader model 5.1)" "$(grep -c '^shader model 0x51 ' "$WORK/clear.txt" || true)" 1
-expect "it reports its real limits" "$(grep -c '^feature level 0xb100, wave ops 0, atomic64 0$' "$WORK/clear.txt" || true)" 1
+# By default DXMT reports what Unreal Engine's SM6 check needs (DXMT 0039), shader model 6.7 included.
+expect "by default the D3D12 device reports shader model 6.7 and binding tier 3" \
+  "$(grep -cE '^(shader model 0x67 \(hr 0x00000000\)$|resource binding tier 3$)' "$WORK/clear.txt" || true)" 2
+expect "and feature level 12_1, wave ops and 64-bit atomics" \
+  "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear.txt" || true)" 1
 # 3. DXIL pipelines are created (an out-of-scope op fails only its own pipeline, named in the log), and DXMT_DXIL_DUMP
 #    captures each shader once, byte for byte. $WORK has a space in it, like the Application Support paths users pass.
 H="$ROOT/dxmt/tests/dxil/heap.dxil"
@@ -477,20 +482,25 @@ vs=$(ls "$D"/vs-*.dxil 2> /dev/null | head -1)
 [ -z "$vs" ] || echo keep > "$vs"
 dxil dxil-again
 expect "an existing capture is left alone" "$(cat "$vs" 2> /dev/null)" keep
-# Capture mode reports what Unreal Engine's SM6 check needs, so SM6-only games get as far as creating pipelines.
+# Capture mode reports what Unreal Engine's SM6 check needs, so SM6-only games get as far as creating pipelines,
+# even with DXMT_D3D12_SM6=0.
+export DXMT_D3D12_SM6=0
 run ours clear-capture dxmt "$TESTS/d3d12_clear.exe" 10
-expect "capture mode reports shader model 6.6 and binding tier 3" \
-  "$(grep -cE '^(shader model 0x66 |resource binding tier 3$)' "$WORK/clear-capture.txt" || true)" 2
+unset DXMT_D3D12_SM6
+expect "capture mode reports shader model 6.7 and binding tier 3" \
+  "$(grep -cE '^(shader model 0x67 \(hr 0x00000000\)$|resource binding tier 3$)' "$WORK/clear-capture.txt" || true)" 2
 expect "capture mode reports feature level 12_1, wave ops and 64-bit atomics" \
   "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-capture.txt" || true)" 1
-# DXMT_D3D12_SM6=1 reports the same without capture mode (shader pre-caching spec §3.1): Unreal 5 games play with it.
-export DXMT_D3D12_SM6=1
-run ours clear-sm6 dxmt "$TESTS/d3d12_clear.exe" 10
+# Outside capture mode, DXMT_D3D12_SM6=0 brings back shader model 5.1 and DXMT's real limits (for a game whose
+# Shader Model 6 path fails).
+unset DXMT_DXIL_DUMP
+export DXMT_D3D12_SM6=0
+run ours clear-sm5 dxmt "$TESTS/d3d12_clear.exe" 10
 unset DXMT_D3D12_SM6
-expect "DXMT_D3D12_SM6 reports shader model 6.6 and binding tier 3" \
-  "$(grep -cE '^(shader model 0x66 |resource binding tier 3$)' "$WORK/clear-sm6.txt" || true)" 2
-expect "DXMT_D3D12_SM6 reports feature level 12_1, wave ops and 64-bit atomics" \
-  "$(grep -c '^feature level 0xc100, wave ops 1, atomic64 1$' "$WORK/clear-sm6.txt" || true)" 1
+expect "DXMT_D3D12_SM6=0 reports shader model 5.1 and binding tier 2" \
+  "$(grep -cE '^(shader model 0x51 \(hr 0x00000000\)$|resource binding tier 2$)' "$WORK/clear-sm5.txt" || true)" 2
+expect "and feature level 11_1, no wave ops, no 64-bit atomics" \
+  "$(grep -c '^feature level 0xb100, wave ops 0, atomic64 0$' "$WORK/clear-sm5.txt" || true)" 1
 export DXMT_DXIL_DUMP="$WORK/dxil é"
 dxil dxil-unicode
 expect "a capture folder named outside ASCII works" "$(ls "$WORK/dxil é" 2> /dev/null | grep -c '\.dxil$')" 4

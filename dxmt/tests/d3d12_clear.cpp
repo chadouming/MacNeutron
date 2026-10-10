@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
     CHECK(factory->EnumAdapters1(0, &adapter));
     CHECK(adapter->GetDesc1(&ad));
     CHECK(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void **)&device));
-    D3D12_FEATURE_DATA_SHADER_MODEL sm = {D3D_SHADER_MODEL_6_6};
+    D3D12_FEATURE_DATA_SHADER_MODEL sm = {D3D_SHADER_MODEL_6_7};
     HRESULT smhr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof sm);
     D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
     device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof options);
