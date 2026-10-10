@@ -10,6 +10,8 @@ acquire/release in ARM64EC code, measured before and after.
 volatile metadata allows it, ARM64EC import calls skip the call checker until their target is hooked, the CRT's string
 routines become Arm's SIMD ones, and the redistributables' builtins are guarded against drift.
 
+**Goal, Task 8:** contended critical sections stop convoying under LSE atomics, and the uncontended gain stays. Wine's NT4/XP hand-off LockCount encoding becomes Windows 2003 SP1+'s (barging, one claim in flight). Wine's own conformance tests check it in all three lanes, the lanes measure it, and those lanes decide between C1 and C2-b1000 (Ruling R36).
+
 **Architecture:** Task 1 is one test-first Wine patch (0031) to msync's wait-all in `dlls/ntdll/unix/msync.c` and
 `server/msync.c`: non-alertable legs park through the pump, the rollback puts back only what it took and wakes its
 waiters, and duplicate objects and abandoned mutexes stop spinning. Task 2 builds `x64-sync.c` and a new
@@ -19,19 +21,27 @@ FEX, DXMT 0038, the Makefile's `MINGW_*`), guarded after the build, then re-meas
 
 **Architecture, Tasks 4-7:** Task 4 is FEX patch 0006: a block inside a volatile-metadata range runs without TSO except
 for its listed accesses (and MonoHacks' flagged ones), whether or not one falls in it (`Core.cpp:576-583`, `:667-676`);
-`VolatileMetadata` is read again, and FEX logs each image's coverage. Task 5 is Wine 0033: the loader fills an ARM64EC
+`VolatileMetadata` is read again, and FEX logs each image's coverage. Task 5 is Wine 0034: the loader fills an ARM64EC
 importer's auxiliary IAT once its imports are bound, reading only loaded images, and an entry goes back to its check
 stub once a page it was resolved through is made writable, in this process or from another (Ruling R13). Task 6 is
-Wine 0034: msvcrt's memmove, strlen, strnlen, strchr, strrchr, strcmp and memchr run Arm Optimized Routines v26.07
+Wine 0035: msvcrt's memmove, strlen, strnlen, strchr, strrchr, strcmp and memchr run Arm Optimized Routines v26.07
 (MIT) on both PE halves, with an ARM64EC register gate after the build. Task 7 is a bundle guard against prefer-native
 drift, and a redistributable forwarder only if the controller's log audit asks for one and the game runs with it
 (Ruling R14).
+
+**Architecture, Task 8:** Wine 0033 runs after Task 4 and before Tasks 5-7 (Ruling R37), and sits before Task 5 in this plan.
+- `dlls/ntdll/sync.c`'s Enter, TryEnter and Leave become design §3's protocol at C1 (`CS_SPIN_DEFAULT 0`): one `ldclral` to enter and one `ldsetal` to leave on ARM64 and ARM64EC, two out-of-line slow paths, and an explicit SpinCount that spins through one slot. The x86 branch (`lock btr`/`lock xadd`) is compiled and checked by codegen only, because no lane runs an x86 ntdll.
+- `dlls/ntdll/tests/rtl.c` loses two `todo_wine` and gains five tests.
+- Wine's conformance tests, which `wine-build` doesn't build, come from two test-only Wine trees (`wine-arm64/winetests.sh`) and run as the `winetests` step in `BATCH`.
+- `x64-sync` gains the long-hold row `cs-hold-10us-p999`.
+- A C2-b1000 build (`CS_SPIN_DEFAULT 1000`) is measured once on the same lanes, and R36 picks the constant. The variant that ships must also pass design §9's lanes confirmation.
 
 **Tech Stack:** C (Wine's unix and PE sides, the wineserver), Mach ulock/IPC, llvm-mingw 23.1.1 (aarch64, arm64ec and
 x86_64 triples), meson cross files, CMake (FEX), POSIX sh (`build.sh`, `lib.sh`, `check.sh`), make, Python 3
 (`lanes_report.py`).
 Tasks 4-7 add FEX's C++ (`Core.cpp`, `ImageTracker`), Wine's ARM64EC loader code (`signal_arm64ec.c`, `loader.c`) and
 Arm Optimized Routines' AArch64 assembly (MIT).
+Task 8 adds Wine's conformance-test framework (`include/wine/test.h`, makedep's test rules), built in test-only Wine trees configured with `--with-wine-tools`.
 
 **Spec:**
 - `.superpowers/brainstorm-sync/REPORT.md` §3.3 (B1-B6) and §4 (R1, R4, R5, R9, "R1 in detail", "R4 in detail");
@@ -44,6 +54,11 @@ Arm Optimized Routines' AArch64 assembly (MIT).
 - Tasks 4-7: `.superpowers/brainstorm-native/REPORT.md` §2.2, §2.5, §2.6, §3 (R3, R4, R5, R7), §4 and §5, with
   `fex-arm64ec.md` §2.2, `builtin-overrides.md` §5.2 and `inventory.md` §6.2-6.3 in the same folder; the maintainer's
   decision of 2026-10-09 ("Also do R4 and the additional levers") and Rulings R13-R15, `progress.md:67-71`.
+- Task 8 implements these:
+  - `.superpowers/sdd/2026-10-09-msync-waitall-and-pe-baseline/cs-design/design.md`: §2.1 (the encoding, `:98-121`), §2.2-2.3 (what stays, edge cases), §3 (`:173-379`) and §9 (the lanes confirmation, `:634-638`).
+  - `cs-design/analysis-result.json`, key `conclusion` (the patch, the expected lanes, the five tests).
+  - Rulings R36-R37 (`.superpowers/sdd/2026-10-09-msync-waitall-and-pe-baseline/progress.md:158-159`).
+  - The harness's C1, `cs-design/harness/cs-harness.c:392-630`: the same protocol, plus lines marked `harness`.
 
 All file:line references are at Wine tree HEAD 38640fe (patch 0030), DXMT tree HEAD 5ed2a79 (patch 0037) and repo HEAD
 bb65ef0.
@@ -54,6 +69,11 @@ line, so 38640fe's numbers hold), FEX tree HEAD 4adb8a1 (patch 0005), the built 
 (`4be260a5117480382690c6d8c300bc784e927d76`). Their edits to `check.sh`, `Makefile`, `lib.sh`, `build.sh`, `bundle.sh`,
 `README.md` and the acceptance doc land after Tasks 1-3's: line numbers there are bb65ef0's, and each edit also names
 the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
+
+Task 8 cites Wine tree HEAD 0771adf (patch 0032) and repo HEAD 012ff2c.
+- 0031 and 0032 touch only `dlls/ntdll/unix/msync.c`, `server/msync.c` and `include/winnt.h`, so `dlls/ntdll/sync.c` and `dlls/ntdll/tests/rtl.c` read as they did at 38640fe.
+- Task 8 touches no Wine file that Tasks 5-7 touch.
+- Its repo edits (`check.sh`, `Makefile`, `x64-sync.c`, `README.md`, the acceptance doc) land before theirs, and are anchored by text as theirs are.
 
 ## Global Constraints
 
@@ -66,9 +86,17 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
 - **Patch numbers:** this batch owns Wine 0031 (Task 1) and 0032 (Task 3), and DXMT 0038 (Task 3). The video plan
   (`docs/superpowers/plans/2026-10-08-macneutron-video-playback.md`) resumes after this batch with the next free
   numbers. Edits to `check.sh`, `Makefile` and `build.sh` sit on bb65ef0.
-- **Patch numbers, Tasks 4-7:** FEX 0006 (Task 4); Wine 0033 (Task 5) and 0034 (Task 6); Wine 0035 (Task 7's
+- **Patch numbers, Tasks 4-7:** FEX 0006 (Task 4); Wine 0034 (Task 5) and 0035 (Task 6); Wine 0036 (Task 7's
   `xaudio2_9redist` forwarder) only if Task 7's audit asks for it, and an `amd_ags_x64` module only after a ruling, on
   the next number. The video plan's numbers start after the last of these.
+- **Patch number and order, Task 8** (Ruling R37): Wine 0033, executed after Task 4 and before Tasks 5-7. Those take Wine 0034, 0035 and 0036.
+- **Tasks 5-7 after Task 8** (Ruling R37). These override Tasks 5-7's text, which this batch edits only where it states patch numbers:
+  - `BATCH` keeps `winetests` right after `fex-vmd`.
+    - Task 5 Step 1's `BATCH="fex-vmd ec-hook"` reads `BATCH="fex-vmd winetests ec-hook"`.
+    - Task 6 Step 1's `BATCH="fex-vmd ec-hook crt"` reads `BATCH="fex-vmd winetests ec-hook crt"`.
+    - Task 7's `redist`, if it comes, goes after those.
+  - Their README step rows go after `winetests`'s row (Task 5's "a row after `fex-vmd`'s" included).
+  - Task 5's lanes reference is `build/lanes/t8/`, wherever Task 5 names `t4`: its Interfaces ("Task 4's `build/lanes/t4/`"), Step 7's `lanes_report.py build/lanes/t4 build/lanes/t5`, and its table's `t4` columns. t4 has 16 sync rows, and `lanes_report.py` refuses t4 against t5 ("hold different rows", `lanes_report.py:114`). Task 4's "`build/lanes/t4/`, which Task 5 compares against" is superseded.
 - **No upstream submission, ever** (Wine, FEX, DXMT): every new patch is "ours and stays local".
 - **The PE flag** is exactly `-march=armv8.5-a+fp16fml+aes+sha3`. Never `-mcpu=apple-m1`, `-mtune=apple-*` or
   `-falign-loops=16` (Apple tuning crashes llvm-mingw's SEH unwind emitter). FEX keeps `-DTUNE_CPU=none` and gets the
@@ -79,6 +107,16 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
 - **Scope, Tasks 4-7** (maintainer, 2026-10-09): native R4, R3, R5 and R7 come in as Tasks 4-7, so the bullet above's
   "native R3-R7 are out of scope" holds for Tasks 1-3 only. Native R6 (a note at most, if Task 2's baseline shows more
   than ~5 ns per crossing), WFUSync and any upstream submission stay out; FEX 0006 is local only (Ruling R15).
+- **Scope, Task 8:**
+  - C1 or C2-b1000 only, with one compile-time knob (`CS_SPIN_DEFAULT`).
+  - Out of scope: the losing candidates' knobs (`CS_SPIN_ALL`, `CS_PARKED_RULE`, `CS_ADAPTIVE`), WFE/WFET, steal damping, SRW locks (design §10), an i386 lane and 32-bit ARM.
+  - Init, Delete, SetSpinCount, `wait_semaphore` and the `RtlpWaitForCriticalSection`/`RtlpUnWaitCriticalSection` exports keep their code.
+- **Wine's conformance tests, Task 8 on:**
+  - They are built only in `build/wine-arm64-src/wine-tests-*`; `wine-build` stays `--disable-tests`. They are never staged into `wine.app`.
+  - A test may fail only at the locations listed in `WINETESTS_FAILS` (`<lane>:<file>:<line>`): failures it had before 0033, never a critical-section line.
+  - After Task 8 Step 2's baseline, a location is added only by a ruling. A new failing location is reported with its file:line and message, and is never absorbed by listing it.
+  - A Wine rebase, or an edit to a listed test file, re-keys the moved locations and records old → new.
+- **Controller step, Task 8:** Step 0 is the controller's. It checks R37's G0 lines in the dispatch; the implementer runs no `bin-stop` binary.
 - **Controller steps and downloads, Tasks 4-7:** a step marked **STOP (controller)** is the controller's alone up to
   its hand-over (Task 4 Steps 1 and 8, Task 7 Steps 3 and 6); the implementer never reads a game install or a game log
   and never launches a game. Nothing is downloaded without the maintainer's OK: Task 6 Step 5 stops for it.
@@ -137,6 +175,33 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
    stops sending Microsoft DLLs to `LO_DEFAULT`** → `bundle.sh` stages nothing (Task 7 `prefer_native_check`;
    `prefer_native_test` items 2-3); and, if the forwarder ships, a game's own `xaudio2_9redist.dll` is replaced by it,
    with every export the game's copy has, and the game keeps its audio (Task 7 Steps 3-6).
+
+**Task 8:**
+
+1. **A thread suspended while it waits for a section, or while its claim is in flight** (Mono/Unity's GC, a debugger).
+   - Expected:
+     - fresh contenders keep entering (barging);
+     - other parked waiters wait for the claimed one, since no second claim is posted;
+     - the suspended waiter enters once resumed;
+     - the counter stays exact.
+   - Tests: `test_critsect_contention`'s suspended-claimed-waiter phase, `test_critsect_suspend`, and R37's G0 stop runs (a thread stopped before it registers).
+   - A thread stopped for good while parked or claimed isn't survivable, as before 0033 (design §2.3).
+2. **Recursion**: Enter and TryEnter on a section the thread owns, the matching Leaves, an over-leave.
+   - Expected: LockCount stays −2 until the last Leave makes it −1; RecursionCount is exact; an over-leave touches only RecursionCount.
+   - Tests: `test_critsect_recursion`, and the existing `rtl.c:3090-3105`.
+3. **TryEnter while a claim is in flight** (a Leave woke a waiter that hasn't run yet).
+   - Expected: TryEnter takes the section (−3 → −4), its Leave posts no second claim (back to −3), and the woken waiter enters after it.
+   - Tests: `test_critsect_contention`. The stress test also mixes TryEnter under contention.
+4. **An app or debugger that reads LockCount.**
+   - Expected: −1 if and only if free and idle (every static initialiser, Init, Delete and `heap.c:1548` are unchanged), −2 held with nobody waiting, −6 held with one parked, as on Windows since 2003 SP1. Code that reads LockCount ≥ 0 as "held" behaves as it does on Windows.
+   - Tests:
+     - `rtl.c:3079` and `:3109` without `todo_wine`, and `test_critsect_contention`;
+     - in the `winetests` step, atl `module.c:75`, atl100 `atl.c:157` and msvcirt `msvcirt.c:1201`, `:1207`, `:3078`;
+     - kernel32 `sync.c:3016`: after the 0xdeadbeef raise LockCount is −4 (it was 1). It is −4 under C2 too, because bit 30 is clear and nothing spins.
+5. **SpinCount 4000** (the Unreal Engine pattern, and Windows' heap figure).
+   - Expected: it spins at most 4 µs through the one slot, then parks; mutual exclusion and the counter hold.
+   - Tests: `test_critsect_stress` at SpinCount 4000, and G0's `-s 4000` runs.
+   - Masking flag bits such as `0x02000000` (`SpinCount & 0x00ffffff`) is checked by reading the diff. No test can see it, because an unmasked value is capped at 10 µs anyway.
 
 ---
 
@@ -889,7 +954,440 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   `git commit -m "FEX: volatile-metadata ranges run every covered block without TSO (FEX patch 0006), measured"` with
   the Co-Authored-By line.
 
-### Task 5: The ARM64EC auxiliary IAT, filled at load and reverted per entry (Wine patch 0033)
+### Task 8: Critical sections on the Windows 2003 SP1+ encoding (Wine patch 0033)
+
+Runs after Task 4 and before Tasks 5-7 (Ruling R37), so it sits before Task 5 in this plan.
+
+**Files:**
+- Modify (Wine tree): `dlls/ntdll/sync.c`. The protocol block (design.md §3's defines, arch branches, `cs_spin_budget`, `cs_enter_slow`, `cs_leave_slow`) goes between `RtlpUnWaitCriticalSection` (`:330-345`) and `RtlEnterCriticalSection`'s comment header (`:348`). The bodies of `RtlEnterCriticalSection` (`:351-386`), `RtlTryEnterCriticalSection` (`:392-408`) and `RtlLeaveCriticalSection` (`:433-450`) are replaced.
+  - Unchanged: `wait_semaphore` (`:170-188`), Init (`:200-253`), SetSpinCount (`:259-265`), Delete (`:271-292`), and the exports `RtlpWaitForCriticalSection`/`RtlpUnWaitCriticalSection` (`:298-345`).
+  - Also unchanged: `RtlIsCriticalSectionLocked`/`…ByThread` (`:411-427`). Design §3 says it "replaces :351-450", but that span includes these two functions, and they stay.
+- Modify (Wine tree): `dlls/ntdll/tests/rtl.c`. Delete `todo_wine` at `:3079` and `:3110`. After `test_RtlLeaveCriticalSection`'s closing brace (`:3123`, which is `:3121` once those two lines are gone), add `struct critsect_stress`, four helpers (`critsect_stress_thread`, `critsect_check_idle`, `critsect_run`, `critsect_waiter`) and five tests. Their calls go after `test_RtlLeaveCriticalSection();` (`:5602`).
+- Create: `wine-arm64/winetests.sh`.
+- Modify: `Makefile`. `.PHONY` (`:1`). The `wine-arm64-check` prerequisites (`:167`). A new `wine-arm64-winetests` target after `lanes-check` (`:184-185`).
+- Modify: `wine-arm64/check.sh`. The header (`:3-4`). The comment at `:58`, where "(batch Tasks 4-7)" becomes "(batch Tasks 4-8)". `BATCH` (`:59`). `SYNC_ROWS` (`:729`). `WINETESTS`, `WINETESTS_FAILS` and `winetests_cmd` after `lanes_cmd` (`:730-742`). The case after `fex-vmd)` (`:780`).
+- Modify: `wine-arm64/tests/x64-sync.c`. The header (`:1-12`). The statics (`:25`). `cs_hold_10us` after `contended_4` (`:937-968`). Its call after `auto_pool_8();` (`:1196`). Its time line after `:1210`.
+- Modify: `wine-arm64/README.md`. `:60`, `:62`, `:67`, `:94`, `:115`, a row after `:119`, and an 0033 line after the 0032 entry (`:272-273`).
+- Modify: `docs/testing/acceptance-arm64-release.md`. A new last section, "Critical sections on the Windows encoding (batch Task 8)".
+- Create, by export: `wine-arm64/patches/wine/0033-*.patch`.
+
+**Interfaces:**
+- **Consumes:**
+  - Ruling R37's G0 lines, carried by the dispatch.
+  - Task 2's `check.sh lanes` and `lanes_report.py`.
+  - The runtime Task 8 measures against is Task 4's (`build/lanes/t4/`, acceptance `:1297-1305`): cs-uncontended 6.0 (6.0–6.0) / 6.0 (6.0–7.0) / 81.0 (81.0–82.0); cs-contended-4 105 (102–108) / 100 (97.0–102) / 198 (192–200). Task 3's figures (`:1088-1096`) are history. Task 8's own `t8-before` is the reference.
+  - Task 4's `BATCH`.
+  - Design §9's lanes confirmation for the winner (design.md `:634-638`).
+- **Produces:**
+  - **Wine 0033** in `dlls/ntdll/sync.c`:
+    - `static ULONG cs_spin_budget( const RTL_CRITICAL_SECTION *crit )`.
+    - `static void DECLSPEC_NOINLINE cs_enter_slow( RTL_CRITICAL_SECTION *crit )`.
+    - `static void DECLSPEC_NOINLINE cs_leave_slow( RTL_CRITICAL_SECTION *crit )`.
+    - `#define CS_SPIN_DEFAULT 0`, the only compile-time knob.
+  - **LockCount values:**
+    - −1: free and idle.
+    - −2: held.
+    - −6: held, with one parked.
+    - −3 / −4: a claim in flight.
+    - `0xBFFFFFFE`: a slot spinner (only with an explicit SpinCount, or at SpinCount 0 if C2 ships).
+  - **`make wine-arm64-winetests`** produces `$B/wine-arm64-tests/winetests/{arm64,arm64ec,x64}/{ntdll,kernel32,atl,atl100,msvcirt}_test.exe` (check.sh's `$TESTS/winetests`). They come from two test-only trees:
+    - `$SRC/wine-tests-arm64` (`--enable-archs=aarch64`);
+    - `$SRC/wine-tests-ec` (`--enable-archs=arm64ec,x86_64`).
+  - **Step `winetests`** joins `BATCH`, which becomes `BATCH="fex-vmd winetests"`. Tasks 5-7 keep it there (Global Constraints, "Tasks 5-7 after Task 8").
+    - Each test prints `info winetests <lane> <module>:<test> <summary line> (exit <rc>)`.
+    - Each distinct failing location prints `info winetests-failed <lane> <file>:<line>`.
+    - `WINETESTS_FAILS` lists the failing locations that existed before Wine 0033, as `<lane>:<file>:<line>`.
+  - **x64-sync** gains the time row `cs-hold-10us-p999`. `SYNC_ROWS=17`, so a lanes run prints 99 rows. The `msync` step (Gate S3, `check.sh:301-312`) runs it too, in both modes.
+  - **Lanes folders:** `build/lanes/t8-before/`, `t8-c1/`, `t8-c2/`, and `t8/`, a copy of the shipped variant's.
+    - Task 5 compares against `t8/` (Global Constraints, "Tasks 5-7 after Task 8"). `t4` has 16 sync rows, so `lanes_report.py build/lanes/t4 build/lanes/t5` exits with "hold different rows" (`lanes_report.py:114`).
+
+- [ ] **Step 0: STOP (controller): G0 (Ruling R37).**
+  - Go on only if the dispatch carries PASS for all four runs:
+    - `bin-stop/stop-C1 -r 1000 -s 0 g0`
+    - `bin-stop/stop-C1 -r 1000 -s 4000 g0`
+    - `bin-stop/stop-C2-b1000 -r 1000 -s 0 g0`
+    - `bin-stop/stop-C2-b1000 -r 1000 -s 4000 g0`
+  - The added `STOP_HOOK` counter (a stopped woken waiter that took the slot) must be in place.
+  - Every reachable point must be nonzero: points 0, 1 and 4 for C1 at `-s 0`, all five otherwise (`analysis-result.json` `conclusion`, "G0 finalists").
+  - Anything else: NEEDS_CONTEXT. The implementer runs no `bin-stop` binary.
+
+- [ ] **Step 1: The harness: build Wine's tests and run them as a step.**
+  - **`wine-arm64/winetests.sh`** (`set -eu`).
+    - Its preamble is build.sh's (`:18-19`): `ROOT="$(cd "$(dirname "$0")/.." && pwd)"`, then `. "$ROOT/wine-arm64/lib.sh"`, `B="${BUILD_DIR:-$ROOT/build}"`, `SRC="$B/wine-arm64-src"`. lib.sh defines none of these.
+    - Its header says why it exists:
+      - `wine-build` is configured `--disable-tests` (`build.sh:329`).
+      - An ARM64X tree links each test as one ARM64X exe, which runs only its ARM64 view (`tools/makedep.c:5151-5156`, `:659-668`).
+      - So there are two test-only trees on `wine-build`'s tools, neither staged into `wine.app`. To configure one again, remove its folder.
+    - `PATH` gets `$(sh "$ROOT/dxmt/toolchain.sh")`. The script `die`s unless `$SRC/wine-build/tools/winebuild/winebuild` exists.
+    - Each tree is configured once (`[ -f "$d/Makefile" ] ||`) from `$SRC/wine/configure`, in a subshell with `PKG_CONFIG_PATH CPATH LIBRARY_PATH CFLAGS CXXFLAGS` unset. The log goes to `$d.configure.log`, and the folder is removed on failure. The options:
+      ```sh
+      --enable-archs=<aarch64 | arm64ec,x86_64> --with-mingw=llvm-mingw --with-wine-tools="$SRC/wine-build" \
+        --without-x --without-wayland --without-oss --without-alsa --without-pulse --without-sane --without-usb \
+        --without-v4l2 --without-pcap --without-capi --without-opencl --without-cups --without-gstreamer \
+        --without-freetype --without-gnutls --without-ffmpeg CC=/usr/bin/clang CXX=/usr/bin/clang++
+      ```
+      This is `build.sh:329-331`'s list plus the three libraries `wine-build` takes from `$DEPS`. The test programs keep Wine's default `-g -O2`. configure accepts `arm64ec` without `aarch64`: `x86_64` is then a full PE arch, not ARM64EC's extra one (`configure.ac:406-413`).
+    - Then `make -C "$d" -j"$(sysctl -n hw.ncpu)"` builds only `dlls/<m>/tests/<arch>-windows/<m>_test.exe` for `m` in `ntdll kernel32 atl atl100 msvcirt` (log `$d.make.log`).
+    - The results are copied to `$B/wine-arm64-tests/winetests/<lane>/`:
+      - `wine-tests-arm64`'s `aarch64-windows` → `arm64`;
+      - `wine-tests-ec`'s `arm64ec-windows` → `arm64ec`;
+      - `wine-tests-ec`'s `x86_64-windows` → `x64`.
+    - Last line: `wine-arm64: winetests: 15 test programs in <$B>/wine-arm64-tests/winetests`.
+  - **`Makefile`:**
+    - `wine-arm64-winetests: wine-arm64`, recipe `sh wine-arm64/winetests.sh`, placed after `lanes-check` with the script's header as its comment.
+    - `.PHONY` gains it.
+    - `wine-arm64-check`'s prerequisites (`:167`) gain it.
+  - **`check.sh`**, after `lanes_cmd`:
+    ```sh
+    # Wine's own conformance tests (batch Task 8): each module's test program from `make wine-arm64-winetests`, in all
+    # three lanes (x64 under FEX), crash dialog off, no WINETEST_* variable of the caller's (WINETEST_PLATFORM turns
+    # todo_wine off, WINETEST_DEBUG=0 drops the summary line, WINETEST_REPORT_FLAKY changes the exit code). A test passes
+    # when it prints its summary line, exits with that line's failure count, and every location it fails at is listed in
+    # WINETESTS_FAILS as `<lane>:<file>:<line>`: failures it had before Wine 0033, never a critical-section line, after
+    # the baseline added only by a ruling. Output is kept as winetests-<lane>-<module>.out and .err (Wine's ERRs).
+    WINETESTS="ntdll:rtl kernel32:sync atl:module atl100:atl msvcirt:msvcirt"
+    WINETESTS_FAILS=""
+    winetests_cmd() {
+      for v in $(env | sed -n 's/^\(WINETEST_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+      wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f > /dev/null || return 1
+      fails=
+      for l in arm64 arm64ec x64; do
+        for t in $WINETESTS; do
+          m=${t%%:*} n=${t#*:} o="$WORK/winetests-$l-$m"
+          wine_run "$TESTS/winetests/$l/${m}_test.exe" "$n" > "$o.out" 2> "$o.err" && rc=0 || rc=$?
+          s=$(tr -d '\r' < "$o.out" | sed -n "s/^[0-9a-f]*:$n: \([0-9]* tests executed .*\)/\1/p" | tail -n 1)
+          f=$(echo "$s" | sed -n 's/.* \([0-9]*\) failures*), .*/\1/p')
+          new=
+          for k in $(tr -d '\r' < "$o.out" \
+            | sed -nE 's/^([A-Za-z0-9_]+\.c:[0-9]+): Test (failed|succeeded inside todo block):.*/\1/p' | sort -u); do
+            echo "info winetests-failed $l $k"
+            case " $WINETESTS_FAILS " in *" $l:$k "*) ;; *) new="$new $k" ;; esac
+          done
+          echo "info winetests $l $t ${s:-no summary line} (exit $rc)"
+          [ -n "$f" ] && [ "$rc" = "$f" ] && [ -z "$new" ] \
+            || fails="$fails${fails:+; }$l $t: exit $rc, ${f:-no} failures${new:+, unlisted$new}"
+        done
+      done
+      [ -z "$fails" ] || { echo "FAIL winetests: $fails"; return 1; }
+    }
+    ```
+    - The case after `fex-vmd)`: `winetests) step winetests 1800 winetests_cmd; grep '^info ' "$WORK/winetests.log" ;;`. `step` is the cap (`:131-152`); no cap per program.
+    - `BATCH="fex-vmd winetests"`, and the comment at `:58` reads "(batch Tasks 4-8)".
+    - The header's "Needs" sentence names `make wine-arm64-winetests` for `winetests`.
+    - Unlike `lanes_cmd`, don't set `WINEDEBUG=-all`: Step 7.2 reads Wine's ERRs from the `.err` files.
+  - **Run:**
+    1. `sh -n wine-arm64/check.sh && sh -n wine-arm64/winetests.sh`.
+    2. `sh wine-arm64/check.sh winetests`, before any program is built. Expected: `FAIL winetests: arm64 ntdll:rtl: exit <n>, no failures; …`, naming all 15 lane/test pairs.
+    3. `make wine-arm64-winetests`. Expected: its last line.
+  - **If it goes wrong:**
+    - A configure that stops on a missing library: add that library's `--without-<lib>` and record it.
+    - A configure or make that fails otherwise: stop and report its log's last 20 lines.
+
+- [ ] **Step 2: Baseline before 0033 (RED-0), on today's runtime (Wine 0032).**
+  1. Run `sh wine-arm64/check.sh winetests` three times. After each run `$i`, copy `build/wine-arm64 check/winetests.log` and `winetests-*.out` and `winetests-*.err` to `build/batch-cs/red0-$i/`.
+  2. Expected in every lane's `winetests-<lane>-ntdll.out`:
+     - `rtl.c:3080: Test marked todo: expected LockCount == -2, got 0`
+     - `rtl.c:3111: Test marked todo: expected LockCount == -2, got 0`
+  3. **STOP for a ruling** in any of these cases:
+     - A run ends with `FAIL winetests: timed out after 1800 s`. The last `info winetests` line in its `winetests.log` names the test before the one that hung.
+     - Any lane/test has `no summary line` (a crash).
+     - This prints anything:
+     ```sh
+     awk -F: '/Test failed|Test succeeded inside todo/ && (($1 == "rtl.c" && $2 >= 2943 && $2 <= 3123) ||
+       ($1 == "sync.c" && $2 >= 2937 && $2 <= 3026) || ($1 == "module.c" && $2 == 75) || ($1 == "atl.c" && $2 == 157) ||
+       ($1 == "msvcirt.c" && ($2 == 1201 || $2 == 1207 || $2 == 3078 || ($2 >= 1258 && $2 <= 1278) || ($2 >= 3202 && $2 <= 3206))))' \
+       build/batch-cs/red0-*/winetests-*.out
+     ```
+     The ranges are the critical-section tests: rtl.c `:2943-3123`, kernel32's `test_crit_section` `:2937-3026`, atl's and atl100's LockCount checks (`module.c:75`, `atl.c:157`), and msvcirt's lock checks.
+  4. **Other failures** existed before 0033. `WINETESTS_FAILS` gets every `<lane>:<file>:<line>` from the three runs' `info winetests-failed` lines. Run the step once more. Expected: `PASS winetests`. If there were none, `WINETESTS_FAILS` stays empty and all three runs printed `PASS winetests`.
+  5. Record the step's duration. Over 1200 s: report it, because the cap is 1800.
+
+- [ ] **Step 3: The long-hold lane row, and the before set.**
+  1. In `check.sh` `:729`, set `SYNC_ROWS=17`. Run `make wine-arm64-tests && sh wine-arm64/check.sh lanes`. Expected: `FAIL lanes: arm64-sync printed 16 of 17 time rows`.
+  2. In `x64-sync.c`, add:
+     ```c
+     // cs-hold-10us-p999 (batch Task 8, Ruling R36's long-hold row, the matrix's H10): 4 threads parked on lock_go, then
+     // 500 times each: Enter, 10 µs held, Leave, 10 µs outside (QPC busy-waits); a wait runs from the Enter call to its
+     // return. Per batch the p99.9 of the 2,000 waits, w[2000 - 2000 / 1000 - 1] once sorted; the row is the median of
+     // BATCHES batches, in ns. The section comes from InitializeCriticalSection (SpinCount 0), as in the other CS rows.
+     static double t_hold;                 /* in the :25 list */
+     static DWORD WINAPI holder(void *i);  /* fills hold_wait[i][0..499], hold_counter++ while held */
+     static void cs_hold_10us(void);       /* sets t_hold */
+     ```
+     - It reuses `lock_go`/`lock_ready` and `contended_4`'s start and `stuck` pattern (`:943-960`).
+     - After the batches: `if (hold_counter != 2000 * BATCHES) printf("FAIL cs-hold-10us-p999: counter %ld of %d\n", hold_counter, 2000 * BATCHES), failed = 1;`, else `t_hold = median(v, BATCHES);`.
+     - Call it after `auto_pool_8();`. Print `if (t_hold > 0) printf("time cs-hold-10us-p999 %.0f\n", t_hold);` after the auto-pool-8 line.
+     - The header gains one sentence: this row is a per-batch p99.9 wait, not a time per operation.
+     - The row also runs in the `msync` step (Gate S3, `check.sh:309`), in both modes. A `counter` or `stuck` FAIL there fails `msync`.
+  3. Run item 1's command again. Expected: `PASS lanes`, 99 `info <exe> <row> <ns>` lines, `PASS orphans`.
+  4. **The before set.** This must be measured before any `make wine-arm64` that carries Step 6.
+     - Three idle runs of `caffeinate -i sh wine-arm64/check.sh lanes`. Idle means the Global Constraints' Timing bullet's checks hold, and also `pgrep -lf 'bin-stop|cs-harness|wine-tests-'` prints nothing (a G0 run, the CS harness or a test-tree build).
+     - Each run's wrapper log, `build/batch-cs/lanes-before-run$i.log`, holds `pmset -g batt | head -n 1`, `sysctl -n vm.loadavg`, the idle checks and the console (R18, R23).
+     - Each `lanes.log` is copied to `build/lanes/t8-before/run$i.log`.
+     - Run `python3 wine-arm64/tools/lanes_report.py build/lanes/t8-before`. Expected: cs-contended-4 near Task 4's 105 / 100 / 198 (acceptance `:1303-1305`). Record `cs-hold-10us-p999` in all three lanes.
+
+- [ ] **Step 4: Write the failing tests** in `dlls/ntdll/tests/rtl.c`.
+  - Delete the `todo_wine` lines at `:3079` and `:3110`. Their `ok`s move to `:3079` and `:3109`.
+  - After `test_RtlLeaveCriticalSection`'s closing brace (now `:3121`), add the following. Every test starts with `if (!pRtlInitializeCriticalSectionEx) return; /* Skip winxp */`, uses `pRtlInitializeCriticalSectionEx( &cs, <spin>, RTL_CRITICAL_SECTION_FLAG_NO_DEBUG_INFO )`, and ends with `RtlDeleteCriticalSection( &cs )`.
+  ```c
+  /* The Windows 2003 SP1+ LockCount encoding (batch Task 8, design.md §2.1): ~(waiters << 2 | claim << 1 | locked). */
+  struct critsect_stress { RTL_CRITICAL_SECTION *cs; volatile LONG counter; LONG others; };
+  static DWORD WINAPI critsect_stress_thread( void *arg );
+  /* 20,000 rounds. Round i % 3: 0 = Enter; 1 = TryEnter, else Enter; 2 = Enter twice. Then counter = counter + 1 (no
+     atomic, so a second owner loses a count); others++ (InterlockedIncrement) when OwningThread isn't this thread;
+     then the matching Leaves. */
+  static DWORD WINAPI critsect_waiter( void *arg );  /* Enter, Leave, return 0 */
+  static void critsect_check_idle( RTL_CRITICAL_SECTION *cs, const char *what )
+  {
+      ok( cs->LockCount == -1, "%s: LockCount %ld, expected -1\n", what, cs->LockCount );
+      ok( cs->RecursionCount == 0, "%s: RecursionCount %ld, expected 0\n", what, cs->RecursionCount );
+      ok( !cs->OwningThread, "%s: OwningThread %p\n", what, cs->OwningThread );
+  }
+  static void critsect_run( RTL_CRITICAL_SECTION *cs, unsigned int n, BOOL suspend, const char *what );
+  /* n critsect_stress_threads. With suspend, main suspends and resumes each one in turn, Sleep( 1 ) apart, until all
+     are done; main does nothing else while one is suspended. Then:
+     ok( r == WAIT_OBJECT_0, "%s: the threads weren't done in 60 s\n", what ); and on a timeout, return;
+     ok( s.counter == n * 20000, "%s: counter %ld, expected %u\n", what, s.counter, n * 20000 );
+     ok( !s.others, "%s: a holder saw another owner %ld times\n", what, s.others );
+     critsect_check_idle( cs, what ); */
+  ```
+  1. **`test_critsect_stress`**:
+     - Runs with SpinCount 0 and with 4000, as the Unreal pattern does.
+     - Each run: `critsect_run( &cs, 6, FALSE, what )`, then `ok( !cs.LockSemaphore || broken( cs.LockSemaphore != NULL ) /* Windows may keep its wait object */, "%s: LockSemaphore %p\n", what, cs.LockSemaphore )`. On Wine `broken()` is false, so the check stands.
+  2. **`test_critsect_contention`** (SpinCount 0). This one test covers a parked waiter, a claim in flight, TryEnter during that claim, and a suspended claimed waiter:
+     ```c
+     RtlEnterCriticalSection( &cs );
+     t = CreateThread( NULL, 0, critsect_waiter, &cs, 0, NULL );
+     for (i = 0; i < 500 && cs.LockCount != -6; i++) Sleep( 10 );  /* Windows 8+ may spin before it parks */
+     ok( cs.LockCount == -6, "one parked waiter: LockCount %ld, expected -6\n", cs.LockCount );
+     Sleep( 100 );  /* parked in its wait, outside the futex queue's spin lock (sync.c:893-907) */
+     ok( SuspendThread( t ) == 0, "SuspendThread failed\n" );
+     ctx.ContextFlags = CONTEXT_CONTROL;
+     ok( GetThreadContext( t, &ctx ), "GetThreadContext failed\n" );  /* the suspend has taken effect */
+     RtlLeaveCriticalSection( &cs );
+     ok( cs.LockCount == -3, "a claim in flight: LockCount %ld, expected -3\n", cs.LockCount );
+     ret = RtlTryEnterCriticalSection( &cs );
+     ok( ret, "TryEnter with a claim in flight failed, LockCount %ld\n", cs.LockCount );
+     if (ret)
+     {
+         ok( cs.LockCount == -4, "barged in: LockCount %ld, expected -4\n", cs.LockCount );
+         RtlLeaveCriticalSection( &cs );
+         ok( cs.LockCount == -3, "no second claim: LockCount %ld, expected -3\n", cs.LockCount );
+     }
+     ok( ResumeThread( t ) == 1, "ResumeThread failed\n" );
+     /* 30 s: a lost wake shows as wait_semaphore's 5 s timeout and its ERR, not as a failure on that boundary */
+     ok( WaitForSingleObject( t, 30000 ) == WAIT_OBJECT_0, "the claimed waiter never entered\n" );
+     CloseHandle( t );
+     critsect_check_idle( &cs, "contention" );
+     ```
+  3. **`test_critsect_semaphore`**:
+     - Skips unless `winetest_platform_is_wine`: `skip( "a semaphore in LockSemaphore is Wine's own path\n" )`.
+     - `cs.LockSemaphore = sem = CreateSemaphoreA( NULL, 0, 1, NULL );`, then `critsect_run( &cs, 4, FALSE, "semaphore" )`, then `ok( WaitForSingleObject( sem, 0 ) == WAIT_TIMEOUT, "a token was left in the semaphore\n" );`.
+     - Delete closes `sem` (`sync.c:289`).
+     - A `STATUS_SEMAPHORE_LIMIT_EXCEEDED` raise (a second claim's post) would end the test as a crash.
+  4. **`test_critsect_suspend`**: `critsect_run( &cs, 4, TRUE, "suspend" )`. This is the Mono/Unity GC pattern.
+  5. **`test_critsect_recursion`**:
+     ```c
+     RtlEnterCriticalSection( &cs );
+     RtlEnterCriticalSection( &cs );
+     ok( cs.LockCount == -2 && cs.RecursionCount == 2, "after a recursive Enter: LockCount %ld, RecursionCount %ld, expected -2, 2\n", cs.LockCount, cs.RecursionCount );
+     ok( RtlTryEnterCriticalSection( &cs ), "a recursive TryEnter failed\n" );
+     ok( cs.LockCount == -2 && cs.RecursionCount == 3, "after a recursive TryEnter: LockCount %ld, RecursionCount %ld, expected -2, 3\n", cs.LockCount, cs.RecursionCount );
+     RtlLeaveCriticalSection( &cs );
+     RtlLeaveCriticalSection( &cs );
+     ok( cs.LockCount == -2 && cs.RecursionCount == 1, "after two Leaves: LockCount %ld, RecursionCount %ld, expected -2, 1\n", cs.LockCount, cs.RecursionCount );
+     RtlLeaveCriticalSection( &cs );
+     critsect_check_idle( &cs, "recursion" );
+     ```
+  - `START_TEST(rtl)`: after `test_RtlLeaveCriticalSection();`, call the five tests in the order 1-5.
+  - Tests 2 and 5, and test 1's LockSemaphore check (Wine's 0/1 token), assume the 2003 SP1+ encoding as Microsoft documents it (design §2.1). They aren't run on Windows here; the acceptance section records that.
+
+- [ ] **Step 5: Run the tests and see them fail (RED-1).**
+  1. Run `make wine-arm64-winetests && sh wine-arm64/check.sh winetests`. Copy `winetests.log`, `winetests-*.out` and `winetests-*.err` to `build/batch-cs/red1/`.
+  2. Expected:
+     - `FAIL winetests: arm64 ntdll:rtl: exit <a+8>, <a+8> failures, unlisted <the eight locations below>; arm64ec ntdll:rtl: …; x64 ntdll:rtl: …`, where `a` is the number of `ntdll:rtl` failures at listed locations (0 unless Step 2 listed some).
+     - Every other test passes.
+     - Each lane spends about 5 s in test 2's poll before it prints "LockCount 1, expected -6".
+  3. Each lane's ntdll output shows exactly these eight failures:
+     - `rtl.c:3079: Test failed: expected LockCount == -2, got 0`
+     - `rtl.c:3109: Test failed: expected LockCount == -2, got 0`
+     - `one parked waiter: LockCount 1, expected -6`
+     - `a claim in flight: LockCount 0, expected -3`
+     - `TryEnter with a claim in flight failed, LockCount 0`
+     - `after a recursive Enter: LockCount 1, RecursionCount 2, expected -2, 2`
+     - `after a recursive TryEnter: LockCount 2, RecursionCount 3, expected -2, 3`
+     - `after two Leaves: LockCount 0, RecursionCount 1, expected -2, 1`
+  4. The stress, semaphore and suspend tests are expected to pass on the NT4 encoding, which never has two posts outstanding. They guard design §2.1's I1/I2 once the port lands; Step 7.4 shows they can fail. If one fails here, record its lines.
+  5. If `WINETESTS_FAILS` lists `rtl.c` locations, re-key them now. Step 4 moved them: −1 after `:3079`, −2 after `:3110`, plus the added lines after `:3121`. Take the new locations from RED-1's `info winetests-failed` lines, which carry the same messages. Record old → new.
+
+- [ ] **Step 6: Implement, in `build/wine-arm64-src/wine`.**
+  - **`dlls/ntdll/sync.c`** gets design.md §3's block, design `:180-377` minus the lines removed below. Drop the fences (`:177`, `:379`) and the tests note (`:378`). The block goes before `RtlEnterCriticalSection`'s header, and the three function bodies are replaced in place. Keep their Wine comment headers, and keep `:411-427` between TryEnter and Leave.
+  - **The losing candidates' knobs go**, at their C1 values:
+    - Remove `CS_SPIN_ALL`, `CS_PARKED_RULE`, `CS_ADAPTIVE` and every line they guard (design `:178-179`, `:181-183`, `:212-213`, `:226-241`, `:248-250`, `:268-270`, `:281-283`, `:291-293`, `:302-304`).
+    - Remove `cs_may_spin` (`:254-259`).
+    - `LONG v, nv;` (design `:272`) becomes `LONG v;`.
+    - The spin start (design `:295-299`) becomes:
+      ```c
+              else if (budget && (v & CS_NOSPIN))                   /* take the slot; a woken waiter hands its claim back */
+              {
+                  if (InterlockedCompareExchange( &crit->LockCount, (v | owed) & ~CS_NOSPIN, v ) != v) continue;
+                  owed = CS_NOSPIN;
+      ```
+      The old `nv != v` test is always true once `CS_NOSPIN` is known to be set, so it goes.
+  - **Comments that cite today's sync.c lines** would go stale once the block sits above them:
+    - design `:274` "as :303-307 do today" becomes "as RtlpWaitForCriticalSection does";
+    - `:309` "token CAS (:179)" becomes "wait_semaphore's token CAS";
+    - Enter's "as :383" (`:342`) and Leave's "as :442" (`:373`) are dropped.
+  - **What stays as design.md has it:**
+    - `#define CS_SPIN_DEFAULT 0`, with its comment replaced by: "budget in ns when SpinCount is 0, ARM only: 0 parks at once (C1), 1000 spins 1 µs through the slot (C2-b1000); batch Task 8 rules it (R36)".
+    - `CS_SPIN_MAX 10000`.
+    - The arch guards, design `:194-224`: the ARM branch first under `defined(__aarch64__) || defined(__arm64ec__)` (`ldclral`, `ldsetal`, `mrs cntvct_el0`/`cntfrq_el0`, `isb`); the x86 branch with `#error "ARM64EC must take the ARM branch"`; `#error` for any other architecture (32-bit ARM included).
+    - `cs_spin_budget`'s `SpinCount & 0x00ffffff` and `NtCurrentTeb()->Peb->NumberOfProcessors <= 1`.
+    - Leave's `ERR` text as at `:438`.
+    - Both slow paths `DECLSPEC_NOINLINE` (`include/winnt.h:156`).
+  - **Commit on `macneutron`** with both files.
+    - Subject: `ntdll: Use the Windows 2003 SP1+ LockCount encoding for critical sections.`
+    - Body, one line each:
+      - The NT4/XP encoding registered every contender in the acquiring increment, so a section with a registered waiter never read free and every Leave handed it off with a wake; under LSE that increment always succeeds and contended sections convoy (lanes cs-contended-4 30 → 104 ns).
+      - LockCount is ~(waiters << 2 | claim << 1 | locked), as on Windows since 2003 SP1: a contender takes a free section while others are parked, and a Leave claims one parked waiter only when no claim is in flight.
+      - Enter is one ldclral and Leave one ldsetal on ARM64 and ARM64EC; on x86 they are lock btr and lock xadd (compiled, not run here). The slow paths are out of line.
+      - An explicit SpinCount spins through one slot (advisory bit 30): SpinCount & 0xffffff ns on ARM, at most 10 µs; iterations on x86. SpinCount 0 parks at once.
+      - A recursive Enter no longer counts in LockCount.
+      - Tests: two todo_wine removed; stress, contention with a claim in flight and a suspended waiter, a semaphore handle, SuspendThread/ResumeThread, recursion.
+      - Ours and local only.
+    - Then the Co-Authored-By line.
+
+- [ ] **Step 7: Run the tests and see them pass (GREEN, C1).**
+  1. `make wine-arm64` (incremental). Expected: `wine-arm64: built …/wine.app`.
+     - `pe_baseline_check` passes silently. It gates more than 0 acquire loads and release stores in arm64ec `sync.o` (`lib.sh:179-182`). Acceptance `:1018` recorded 14 / 3; record today's counts, which the slow paths' `ReadAcquire`s raise.
+     - `T="$(sh dxmt/toolchain.sh)"`. Record `H1=$("$T/llvm-objdump" -d --no-show-raw-insn build/wine-arm64/wine.app/Contents/Resources/lib/wine/aarch64-windows/ntdll.dll | shasum -a 256)`.
+  2. `make wine-arm64-winetests && sh wine-arm64/check.sh winetests`. Copy `winetests.log`, `winetests-*.out` and `winetests-*.err` to `build/batch-cs/green-c1/`.
+     - Expected: `PASS winetests` (every failing location is listed) and `PASS orphans`. Record each summary's failure count.
+     - `/usr/bin/grep -c 'Test marked todo: expected LockCount == -2'` prints `0` for each `winetests-*-ntdll.out`.
+     - `/usr/bin/grep -c 'wait timed out' build/batch-cs/green-c1/winetests-*-ntdll.err` prints `0` for each lane. That ERR (`sync.c:298-325`) means a lost or late wake.
+     - Step 2.3's awk, run on `green-c1/`, prints nothing, with rtl.c's range now ending at `test_critsect_recursion`'s closing brace.
+  3. **Codegen.** For `o` in `build/wine-arm64-src/wine-build/dlls/ntdll/{aarch64,arm64ec}-windows/sync.o`:
+     - Per function: `"$T/llvm-objdump" -d --no-show-raw-insn --disassemble-symbols=<f> "$o" | LC_ALL=C /usr/bin/grep -oE '\s(ldaddal|ldclral|ldsetal|casal)\s' | sort | uniq -c`. In the arm64ec object the symbols are `#Rtl…`.
+     - Whole object: `for p in '\sldclral\s' '\sldsetal\s' 'CNTVCT_EL0' '\sisb'; do printf '%s ' "$("$T/llvm-objdump" -d --no-show-raw-insn "$o" | LC_ALL=C /usr/bin/grep -cE "$p")"; done; echo`.
+     - Before = Wine 0032, measured at 012ff2c (the same in both objects):
+
+     | Function / object | before | after |
+     |---|---|---|
+     | `RtlEnterCriticalSection` | 2 casal, 2 ldaddal | 1 ldclral |
+     | `RtlTryEnterCriticalSection` | 1 casal, 1 ldaddal | 1 ldclral |
+     | `RtlLeaveCriticalSection` | 2 ldaddal | 1 ldsetal |
+     | whole object: `ldclral` / `ldsetal` / `CNTVCT_EL0` / `isb` | 0 0 0 0 | ≥ 2 ≥ 1 ≥ 1 ≥ 1 |
+
+     - `ldclral` in the arm64ec object proves that ARM64EC took the first branch. The `#error` in the x86 branch is a tripwire against reordering the guards; it proves nothing here.
+     - **x86, compiled only: no lane runs this branch.** wine.app has only the ARM64X `ntdll.dll`, so the x64 lane runs the ARM64EC branch under FEX. Build `make -C build/wine-arm64-src/wine-tests-ec dlls/ntdll/x86_64-windows/sync.o` (PATH as in the script), then:
+       ```sh
+       X=build/wine-arm64-src/wine-tests-ec/dlls/ntdll/x86_64-windows/sync.o
+       for f in RtlEnterCriticalSection RtlTryEnterCriticalSection RtlLeaveCriticalSection cs_enter_slow cs_leave_slow; do
+         printf '%s: ' $f; "$T/llvm-objdump" -d --no-show-raw-insn --disassemble-symbols=$f "$X" \
+           | LC_ALL=C /usr/bin/grep -oE 'lock\s+(btr|xadd|cmpxchg)' | sort | uniq -c | tr -s ' \n\t' ' '; echo
+       done
+       ```
+       Expected: Enter and TryEnter one `lock btr` each, Leave one `lock xadd`, and `lock cmpxchg` only on the two slow-path lines. Design §3.2 compiled only i686, so if clang emits `lock and` plus a test instead of `lock btr` here, record it; it is not a stop. The scope is these five functions; elsewhere in `sync.o`, `wait_semaphore` and the SRW, RunOnce and futex code use `cmpxchg` too.
+     - The i686 branch isn't built anywhere here. Design §3.2 compiled it from `r2/cs-proto.c` (`r2/asm/C1-i686.s`), not from the patched `sync.c`.
+  4. **Proven red for tests 1, 3 and 4**, which can't fail on the NT4 code. Make an uncommitted mutant, as Step 9 does: in `RtlLeaveCriticalSection` delete `(old & CS_NOCLAIM) && `, and in `cs_leave_slow` delete `!(v & CS_NOCLAIM) || `. A Leave then claims while a claim is in flight, which breaks I2.
+     - Run `make wine-arm64 && sh wine-arm64/check.sh winetests`. Copy the outputs to `build/batch-cs/red-mutant/`.
+     - Expected: `FAIL winetests` naming `ntdll:rtl` in at least one lane. It shows as `no summary line` from test 3's `STATUS_SEMAPHORE_LIMIT_EXCEEDED`, or as a 60 s, counter or idle failure in tests 1 or 4, usually with `wait timed out` in the `.err`.
+     - Restore: `git -C build/wine-arm64-src/wine checkout dlls/ntdll/sync.c`; `git -C build/wine-arm64-src/wine status --short` prints nothing; `make wine-arm64`; the hash equals H1.
+     - If nothing fails, record "the stress tests did not detect a double claim" in the acceptance section, and go on.
+
+- [ ] **Step 8: Measure C1.**
+  - Three idle runs, as in Step 3.4 (wrapper logs `lanes-c1-run$i.log`), into `build/lanes/t8-c1/`.
+  - **Same conditions (R18, R23).** Each wrapper log shows the same `pmset -g batt` source as t8-before's (AC). The median 1-minute `vm.loadavg` of the set is within 2 of t8-before's. A set that fails either check is measured again before Step 10. It is never only flagged, because Step 10 decides on its medians.
+  - Run `python3 wine-arm64/tools/lanes_report.py build/lanes/t8-before build/lanes/t8-c1`, and `lanes_report.py build/lanes/t8-c1`.
+  - **Expected: design §9's lanes confirmation** (design.md `:634-638`):
+    - (a) cs-contended-4 median ≤ 30 (arm64) and ≤ 31 (arm64ec). The conclusion predicts 15-25.
+    - (b) x64 cs-contended-4 median ≤ 1.5 × the x64 cs-uncontended median of the same set (about 122 ns; 90-120 predicted).
+    - (c) cs-uncontended arm64 / arm64ec medians ≤ 6 / 7, or not outside t8-before's band upward.
+    - (d) Every other sync row except `cs-hold-10us-p999` is not outside the band on the worse side. Name each one that is.
+    - `cs-hold-10us-p999` is reported for every lane.
+  - Missing one of these isn't a stop here; Step 10 rules.
+
+- [ ] **Step 9: Build and measure C2-b1000 as an uncommitted variant.**
+  1. In the Wine tree, change `#define CS_SPIN_DEFAULT 0` to `1000` and leave it uncommitted: `git diff --stat` shows `1 file changed, 1 insertion(+), 1 deletion(-)`. Run `make wine-arm64`. Record `H2`, computed as H1 was. It must differ from H1.
+  2. `sh wine-arm64/check.sh winetests`, with the outputs copied to `build/batch-cs/green-c2/` as in Step 7.2: `PASS winetests`, and `wait timed out` counts 0 in each `green-c2/winetests-*-ntdll.err`. This is G0's Wine-test part for C2; a failure takes C2 out of Step 10.
+  3. Three idle runs (wrapper logs `lanes-c2-run$i.log`) into `build/lanes/t8-c2/`, with Step 8's same-conditions check. Then run:
+     - `lanes_report.py build/lanes/t8-c1 build/lanes/t8-c2`;
+     - `lanes_report.py build/lanes/t8-before build/lanes/t8-c2` (Step 8's (a)-(d) for C2);
+     - `lanes_report.py build/lanes/t8-c2`.
+  4. **Restore:**
+     - `git -C build/wine-arm64-src/wine checkout dlls/ntdll/sync.c`;
+     - `git -C build/wine-arm64-src/wine status --short` prints nothing;
+     - `make wine-arm64`;
+     - the hash equals H1: the same disassembly and addresses, the proof the option-(b) restore used (`progress.md:83`).
+  5. **Drift control.** Fill in Step 10's table first. Run this only when C2-b1000 meets every R36 row there, so that "below C1" decides.
+     - Run one more idle lanes run on the restored C1 (wrapper log `lanes-c1-drift.log`).
+     - If its x64 cs-contended-4 is at or below t8-c2's x64 median, C2's lead is within drift. Then measure both again, interleaved: C1, C2, C1, C2, C1, C2. Each switch is item 1's edit or item 4's restore, with its hash. The runs go into fresh `t8-c1/` and `t8-c2/`, and Step 10 rules on those.
+
+- [ ] **Step 10: Rule C1 against C2-b1000 (Ruling R36) and record.** Medians of the three runs:
+
+  | R36 criterion | C1 (`t8-c1`) | C2-b1000 (`t8-c2`) | bar |
+  |---|---|---|---|
+  | cs-contended-4 arm64 / arm64ec | | | ≤ 30 / ≤ 31 |
+  | x64 cs-contended-4 ÷ x64 cs-uncontended | | | ≤ 1.5 |
+  | x64 cs-contended-4 | | | C2 below C1 |
+  | cs-hold-10us-p999, each lane (ns) | | | ≤ 2,000,000 |
+
+  - The x64 rows measure the ARM64EC branch through FEX, at both constants (Step 7.3).
+  - **C2-b1000 meets every row, passed Step 9.2, and survived Step 9.5: ship C2.**
+    - Set the constant to 1000 and `git commit --amend`. The body's spin line gains "SpinCount 0 spins 1 µs through the slot on ARM (C2-b1000, Ruling R36)".
+    - `make wine-arm64`; the hash equals H2.
+    - `cp -R build/lanes/t8-c2/. build/lanes/t8/`.
+  - **Otherwise ship C1, unchanged:** `cp -R build/lanes/t8-c1/. build/lanes/t8/`.
+  - **The shipped variant must pass design §9's lanes confirmation** (Step 8's (a)-(d), against t8-before).
+    - If a (d) row is outside the band, measure that set again once (three runs) before ruling; the new runs replace `t8-<variant>/` and `t8/`. Task 3's own table showed an unrelated row flip on noise.
+    - If it still misses (a), (b) or (c), or still has a (d) row: STOP for a ruling, with both variants' tables.
+  - Where C2's and C1's x64 cs-contended-4 ranges overlap, the record says "within the band"; R36 compares medians.
+  - Copy `build/lanes/t8-*` to `.superpowers/sdd/2026-10-09-msync-waitall-and-pe-baseline/lanes-t8-*/` (R24).
+
+- [ ] **Step 11: Gates, on the build that ships.** These are Task 3 Step 7's.
+  - Check Steam (R16).
+  - `make wine-arm64-check`: every step `PASS`, `fex-vmd` and `winetests` among them, then `PASS orphans`. `msync.log` holds `info msync 1 cs-hold-10us-p999 <ns>` and `info msync 0 cs-hold-10us-p999 <ns>`.
+  - `make test` (252).
+  - `make smoke` (15/15).
+  - `make bridge-check`.
+  - `make media-check`, unchanged (Global Constraints).
+  - Record the full run's minutes for the README.
+
+- [ ] **Step 12: Export and prove.**
+  1. `make wine-arm64-export`. `git status --short wine-arm64/patches` shows one line: `?? wine-arm64/patches/wine/0033-ntdll-Use-the-Windows-2003-SP1-LockCount-encoding-…patch`.
+  2. Run Task 1 Step 7.2's commands with `/33`. Expected: `applied 33/33`, `tree-equal`.
+
+- [ ] **Step 13: Record and commit.**
+  - **README:**
+    - `:60`: "(about 16 min)" becomes Step 11's minutes.
+    - `:62`: add `wine-arm64-winetests` after `wine-arm64-tests`.
+    - `:67`: "the test programs (`make wine-arm64-tests`)" becomes "the test programs (`make wine-arm64-tests`) and Wine's conformance tests (`make wine-arm64-winetests`, two test-only Wine trees)".
+    - `:94`: "prints its 16 time rows" becomes "prints its time rows (17 for `*-sync`, 16 for `*-xcall`)".
+    - `:115`: "The batch's gated step" becomes "The batch's gated steps".
+    - After `:119`, the row: ``| `winetests` | Wine patch 0033 (batch Task 8): Wine's conformance tests `ntdll:rtl`, `kernel32:sync`, `atl:module`, `atl100:atl` and `msvcirt:msvcirt` in all three lanes (x64 under FEX), built by `make wine-arm64-winetests` in two test-only Wine trees; each exits with its failure count, and fails only at locations listed in `WINETESTS_FAILS` |``
+    - After the 0032 entry: `  - 0033 (critical sections on Windows' 2003 SP1+ LockCount encoding: a contender takes a free section even while others wait, and a Leave wakes one waiter only when no wake is in flight, so contended sections no longer convoy; one ldclral to enter and one ldsetal to leave on ARM64 and ARM64EC, lock btr and lock xadd on x86 (compiled, not run here); an explicit SpinCount spins through one slot, in ns on ARM, at most 10 µs; a recursive Enter no longer counts in LockCount) is ours and stays local.` If C2 shipped, add "; at SpinCount 0 it spins 1 µs first" before ") is ours".
+  - **The acceptance section:**
+    - Step 0's G0 lines.
+    - RED-0's summary lines, the two todo lines, `WINETESTS_FAILS` and why each location is there (with Step 5.5's re-keying), and the step's duration.
+    - Step 3's before table rows.
+    - RED-1's eight lines.
+    - GREEN's summaries, the `wait timed out` counts, the codegen tables (ARM and x86), and the `pe_baseline_check` counts.
+    - Step 7.4's mutant result.
+    - The `lanes_report.py` tables, with each set's power and load, and the drift run if there was one.
+    - The R36 table, the variant shipped, H1/H2, and the lanes confirmation (a)-(d).
+    - The gates.
+    - The assumptions:
+      - Tests 2 and 5, and test 1's LockSemaphore check, were not run on Windows (no testbot: no upstream submission).
+      - The x86 branch (x86_64, i686) is compiled, not run. wine.app has only the ARM64X ntdll, so the x64 lane runs the ARM64EC branch under FEX. x86_64 codegen is Step 7.3's; i686 codegen is design §3.2's `cs-proto.c`, not the patched `sync.c`. wow64 i386 is not built, so the conclusion's i386 run can't happen here.
+      - 0033 refuses `__arm__` (ARMv7 PE) with `#error`; MacNeutron never builds it.
+      - DebugInfo's ContentionCount counts consumed claims, including those of claimed waiters that re-park (design §2.2), so it can exceed the contended acquisitions.
+      - `cs-hold-10us-p999` is the median over 21 batches of each batch's p99.9 (the 3rd-largest of 2,000 waits), not the harness's pooled H10 p99.9; R36's 2 ms bar is applied to it as an H10-class estimate.
+      - SRW locks are unchanged (design §10).
+  - **Commit:**
+    - `git add wine-arm64/winetests.sh Makefile wine-arm64/check.sh wine-arm64/tests/x64-sync.c wine-arm64/README.md docs/testing/acceptance-arm64-release.md wine-arm64/patches/wine/0033-*.patch`
+    - `git commit -m "ntdll: critical sections on the Windows 2003 SP1+ encoding (Wine patch 0033), Wine's conformance tests in three lanes, measured"`, with the Co-Authored-By line.
+
+### Task 5: The ARM64EC auxiliary IAT, filled at load and reverted per entry (Wine patch 0034)
 
 **Files:**
 - Modify (Wine tree): `dlls/ntdll/signal_arm64ec.c`: new code after `arm64ec_update_hybrid_metadata` (`:287-327`);
@@ -899,9 +1397,9 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   before its `NtUnmapViewOfSection` (`:4060`).
 - Create: `wine-arm64/tests/arm64ec-hook.c` (built by the `arm64ec-%` rule, `Makefile:133-134`).
 - Modify: `wine-arm64/check.sh`: `BATCH` gains `ec-hook`; the case after `fex-vmd)`.
-- Modify: `wine-arm64/README.md`: a row after `fex-vmd`'s; an 0033 line after the 0032 entry.
+- Modify: `wine-arm64/README.md`: a row after `fex-vmd`'s; an 0034 line after the 0033 entry.
 - Modify: `docs/testing/acceptance-arm64-release.md`: "ARM64EC auxiliary IAT (batch Task 5)".
-- Create, by export: `wine-arm64/patches/wine/0033-*.patch`.
+- Create, by export: `wine-arm64/patches/wine/0034-*.patch`.
 
 **Interfaces:**
 - **Consumes:** Task 4's `build/lanes/t4/` and `BATCH`.
@@ -1119,17 +1617,17 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   through filled entries.
 
 - [ ] **Step 9: Export, prove, commit.**
-  1. `make wine-arm64-export`; one line, `?? wine-arm64/patches/wine/0033-ntdll-Fill-the-ARM64EC-auxiliary-IAT-…patch`.
-  2. Task 1 Step 7.2's commands with `/33`: `applied 33/33`, `tree-equal`.
+  1. `make wine-arm64-export`; one line, `?? wine-arm64/patches/wine/0034-ntdll-Fill-the-ARM64EC-auxiliary-IAT-…patch`.
+  2. Task 1 Step 7.2's commands with `/34`: `applied 34/34`, `tree-equal`.
   3. README: the row
-     ``| `ec-hook` | Wine patch 0033 (batch Task 5): an ARM64EC program's import entries are filled; a hooked export, a hooked IAT entry and an unloaded DLL's reused range behave as without the fill |``;
-     after the 0032 entry, `- 0033 (the ARM64EC auxiliary IAT filled at load, and an entry put back when a page it was resolved through is made writable) is ours and stays local.`
+     ``| `ec-hook` | Wine patch 0034 (batch Task 5): an ARM64EC program's import entries are filled; a hooked export, a hooked IAT entry and an unloaded DLL's reused range behave as without the fill |``;
+     after the 0033 entry, `- 0034 (the ARM64EC auxiliary IAT filled at load, and an entry put back when a page it was resolved through is made writable) is ours and stays local.`
   4. The section: Step 7's report and table, and the gaps.
-     `git add wine-arm64/tests/arm64ec-hook.c wine-arm64/check.sh wine-arm64/README.md docs/testing/acceptance-arm64-release.md wine-arm64/patches/wine/0033-*.patch`;
-     `git commit -m "ARM64EC auxiliary IAT filled at load, reverted per entry on a hook (Wine patch 0033), measured"`
+     `git add wine-arm64/tests/arm64ec-hook.c wine-arm64/check.sh wine-arm64/README.md docs/testing/acceptance-arm64-release.md wine-arm64/patches/wine/0034-*.patch`;
+     `git commit -m "ARM64EC auxiliary IAT filled at load, reverted per entry on a hook (Wine patch 0034), measured"`
      with the Co-Authored-By line.
 
-### Task 6: CRT string routines from Arm Optimized Routines (Wine patch 0034)
+### Task 6: CRT string routines from Arm Optimized Routines (Wine patch 0035)
 
 **Files:**
 - Create (Wine tree): `dlls/msvcrt/aor_string.h`.
@@ -1145,9 +1643,9 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   `ec-hook)`.
 - Modify: `wine-arm64/licenses/NOTICES.md` (a section before `## The MIT licence`, `:411`); `wine-arm64/licenses/README`
   (a line after `:13`); `wine-arm64/tests/licences_test.sh` (the header `:6-7`, after `:40`, after `:142`).
-- Modify: `wine-arm64/README.md` (a row; an 0034 line after the 0033 one).
+- Modify: `wine-arm64/README.md` (a row; an 0035 line after the 0034 one).
 - Modify: `docs/testing/acceptance-arm64-release.md`: "CRT string routines from Arm Optimized Routines (batch Task 6)".
-- Create, by export: `wine-arm64/patches/wine/0034-*.patch`.
+- Create, by export: `wine-arm64/patches/wine/0035-*.patch`.
 
 **Interfaces:**
 - **Consumes:** `build/lanes/t5/`, `BATCH`, the place of Task 3's `pe_baseline_check` call in `build.sh`.
@@ -1343,7 +1841,7 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
     `MISSING NOTICES.md section for Wine's Arm Optimized Routines` and `FAIL licences_test`.
   - `NOTICES.md`, before `## The MIT licence`:
     `## Arm Optimized Routines (in Wine: msvcrt.dll, ucrtbase.dll, msvcr80.dll-msvcr120.dll)`, naming Wine patch
-    0034's `dlls/msvcrt/aor_string.h`, the repository, tag and commit, the seven files, that they are modified, the MIT
+    0035's `dlls/msvcrt/aor_string.h`, the repository, tag and commit, the seven files, that they are modified, the MIT
     election, the LICENSE's MIT copyright line `Copyright (c) 1999-2022, Arm Limited.` and the fetched per-file
     copyright lines in a code block.
   - `licenses/README`, after `:13`:
@@ -1358,14 +1856,14 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   `strlen-1k` and every `memcpy-*` row: `| row (ns), median (min–max) of 3 | arm64 t5 → t6 | arm64ec t5 → t6 | x64 t5 → t6 |`.
 
 - [ ] **Step 11: Gates, export, prove, commit.** Gates as Task 4 Step 7 (`crt` among them). `make wine-arm64-export`;
-  one line, `?? wine-arm64/patches/wine/0034-msvcrt-Use-Arm-Optimized-Routines-…patch`. Task 1 Step 7.2's commands with
-  `/34`: `applied 34/34`, `tree-equal`. README: the row
-  ``| `crt` | Wine patch 0034 (batch Task 6): msvcrt's string routines and memcpy against byte loops in all three lanes: every length to 300, every alignment, overlaps, both sides of a no-access host page |``;
-  after the 0033 entry,
-  `- 0034 (msvcrt's memmove, strlen, strnlen, strchr, strrchr, strcmp and memchr on ARM64 and ARM64EC from Arm Optimized Routines v26.07, MIT: licenses/NOTICES.md) is ours and stays local.`
+  one line, `?? wine-arm64/patches/wine/0035-msvcrt-Use-Arm-Optimized-Routines-…patch`. Task 1 Step 7.2's commands with
+  `/35`: `applied 35/35`, `tree-equal`. README: the row
+  ``| `crt` | Wine patch 0035 (batch Task 6): msvcrt's string routines and memcpy against byte loops in all three lanes: every length to 300, every alignment, overlaps, both sides of a no-access host page |``;
+  after the 0034 entry,
+  `- 0035 (msvcrt's memmove, strlen, strnlen, strchr, strrchr, strcmp and memchr on ARM64 and ARM64EC from Arm Optimized Routines v26.07, MIT: licenses/NOTICES.md) is ours and stays local.`
   The section: Step 5's blob check and SHA-256 list, Step 4's count before and after, Step 10's report and table.
-  `git add wine-arm64/tests/arm64-crt.c Makefile wine-arm64/lib.sh wine-arm64/build.sh wine-arm64/check.sh wine-arm64/licenses/NOTICES.md wine-arm64/licenses/README wine-arm64/tests/licences_test.sh wine-arm64/README.md docs/testing/acceptance-arm64-release.md wine-arm64/patches/wine/0034-*.patch`;
-  `git commit -m "CRT string routines from Arm Optimized Routines on ARM64 and ARM64EC (Wine patch 0034), measured"`
+  `git add wine-arm64/tests/arm64-crt.c Makefile wine-arm64/lib.sh wine-arm64/build.sh wine-arm64/check.sh wine-arm64/licenses/NOTICES.md wine-arm64/licenses/README wine-arm64/tests/licences_test.sh wine-arm64/README.md docs/testing/acceptance-arm64-release.md wine-arm64/patches/wine/0035-*.patch`;
+  `git commit -m "CRT string routines from Arm Optimized Routines on ARM64 and ARM64EC (Wine patch 0035), measured"`
   with the Co-Authored-By line.
 
 ### Task 7: The redistributables' builtins: drift guard and audit (Ruling R14)
@@ -1379,7 +1877,7 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   `configure.ac` after `:3529`, `configure`; `wine-arm64/tests/x64-redist.c`;
   `wine-arm64/tests/fixtures/redist-standin.c` and `wine-arm64/tests/fixtures/redist-standin.rc`; `Makefile` (the
   stand-in's rule, and its target in `wine-arm64-tests`' list, `:130`); `check.sh` (`BATCH` gains `redist`); by export
-  `wine-arm64/patches/wine/0035-*.patch`.
+  `wine-arm64/patches/wine/0036-*.patch`.
 - Modify: `wine-arm64/README.md` (a bullet at the end of "Next Wine rebase", `:198-217`); the acceptance doc,
   "Redistributable builtins (batch Task 7)".
 
@@ -1452,7 +1950,7 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
 
   | The audit shows | Then |
   |---|---|
-  | `xaudio2_9redist.dll … : native` and no `xaudio2_9.dll … : builtin` | Steps 4-6 build the forwarder (Wine 0035), with the game copy's export list (below) |
+  | `xaudio2_9redist.dll … : native` and no `xaudio2_9.dll … : builtin` | Steps 4-6 build the forwarder (Wine 0036), with the game copy's export list (below) |
   | `xaudio2_9redist.dll … : native` and `xaudio2_9.dll … : builtin` | the redist already hands its work to our builtin (builtin-overrides §5.2 rank 4: only its creation entry runs under FEX); the controller asks the maintainer whether to build the forwarder anyway (Ruling R14 allows it) and records the answer; if built, as the row above |
   | `amd_ags_x64.dll … : native` | stop for a ruling: Proton's module isn't ~20 lines, its CompanyName isn't Microsoft so it needs a launcher override (`LaunchEnvironment.swift:10-14`), and it would take the next Wine number |
   | neither | skip Steps 4-6; record "not loaded native in the SMITE 2 lobby log of <date>" |
@@ -1504,10 +2002,10 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
 - [ ] **Step 6 (only if Step 3 says so): STOP (controller, with the maintainer present): the game with the forwarder,
   then export.** SMITE 2's scratch copy on this build, to the lobby with logging on, the log read as in Step 3: its new
   lines show `Loaded L"…xaudio2_9redist.dll" … : builtin`, and the maintainer hears the lobby's audio; both go into
-  the section. No audio, a crash or no builtin line: stop for a ruling, with the 0035 commit unexported. Then
-  `make wine-arm64-export` (only the 0035 file); Task 1 Step 7.2's commands with `/35`: `applied 35/35`, `tree-equal`.
-  README: a step row for `redist`, and after the 0034 entry
-  `- 0035 (dlls/xaudio2_9redist forwards to xaudio2_9, so a game's x64 copy is replaced by the builtin) is ours and stays local.`
+  the section. No audio, a crash or no builtin line: stop for a ruling, with the 0036 commit unexported. Then
+  `make wine-arm64-export` (only the 0036 file); Task 1 Step 7.2's commands with `/36`: `applied 36/36`, `tree-equal`.
+  README: a step row for `redist`, and after the 0035 entry
+  `- 0036 (dlls/xaudio2_9redist forwards to xaudio2_9, so a game's x64 copy is replaced by the builtin) is ours and stays local.`
 
 - [ ] **Step 7: Measure.** Three idle runs into `build/lanes/t7/`; `lanes_report.py build/lanes/t6 build/lanes/t7`.
   Expected: no row outside the band (nothing here changes what the lane programs run); paste the report.
@@ -1516,6 +2014,6 @@ the text it goes beside, which is what counts once Tasks 1-3 have moved lines.
   The section: Step 3's lines and decision, the guard's list, Step 6's outcome if it ran, the report.
   `git add wine-arm64/lib.sh wine-arm64/bundle.sh wine-arm64/tests/prefer_native_test.sh Makefile wine-arm64/README.md docs/testing/acceptance-arm64-release.md`,
   with `wine-arm64/tests/x64-redist.c`, `wine-arm64/tests/fixtures/redist-standin.c`,
-  `wine-arm64/tests/fixtures/redist-standin.rc`, `wine-arm64/check.sh` and `wine-arm64/patches/wine/0035-*.patch` when
+  `wine-arm64/tests/fixtures/redist-standin.rc`, `wine-arm64/check.sh` and `wine-arm64/patches/wine/0036-*.patch` when
   Steps 4-6 ran; `git commit -m "bundle: redistributable builtins guarded against prefer-native drift, R7 audit recorded (batch Task 7)"`
   with the Co-Authored-By line.
