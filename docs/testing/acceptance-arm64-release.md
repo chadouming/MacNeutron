@@ -1205,8 +1205,11 @@ R15):
   FIST/FISTP/FISTTP stores follow VectorTSOEnabled; MOVS/STOS, with or without REP, follow MemcpySetTSOEnabled.
   VectorTSOEnabled is off by default: the JIT's vector TSO loads and stores add their barriers only under it
   (`MemoryOps.cpp:848`), and FIST/FISTP/FISTTP stores are non-TSO without it (`X87.cpp:182`; FISTTP is `FIST` with
-  truncation, `X87Tables.cpp:668`). MOVS/STOS take their ordering from MemcpySetTSOEnabled alone
-  (`OpcodeDispatcher.cpp:3223, 3295`; with REP, `MemoryOps.cpp:1854, 2089`).
+  truncation, `X87Tables.cpp:412`, with the 64-bit and 16-bit forms at `:475` and `:527`). REP MOVS/STOS take their
+  ordering from MemcpySetTSOEnabled alone: the backend reads it and never sees ForceTSO (`MemoryOps.cpp:1854, 2089`).
+  Plain MOVS/STOS are non-TSO while MemcpySetTSOEnabled is off, the default (`Config.json.in:484`); with it on they
+  take the AutoTSO loads and stores (`OpcodeDispatcher.cpp:3223, 3295`), whose `IsTSOEnabled` checks ForceTSO first
+  (`OpcodeDispatcher.h:2431-2441`), so in a covered range the block rule decides: TSO when listed, none when not.
 - **Ranges stay inside their image.** The PE tables' ranges and EVMD's are clamped to the mapping and empty ones
   dropped; PE-listed instructions outside the image are dropped. The image's unmap, when FEX sees it on a thread with
   FEX state, removes the ForceTSO ranges and instructions over its whole view (`HandleImageUnmap` →
@@ -1477,10 +1480,11 @@ sampler (`ps` on the game's process every 5 s) gave:
 
 Both RSS peaks are the sample just before the exit sample; from 30 s on, both stayed at 3.7-3.9 GB until then.
 Without the exit sample (40 % and 20 % CPU) the CPU means are 369 % and 389 %, the same ~5 % gap. The maintainer:
-"Both felt smooth and the FPS was roughly the same". One short run each, with different match content, and the frame
-rate isn't CPU-bound here, so the ~5 % less CPU with 0006 is indicative only. **Step 8 passes**: no regression with
-SMITE 2's metadata on. `FEX_VOLATILEMETADATA=0` after `/usr/bin/env` in a game's launch options stays the escape
-hatch.
+"Both felt smooth and the FPS was roughly the same". That is the only frame-rate evidence: neither run recorded frame
+times, GPU load or per-thread CPU, and the sampler's whole-process CPU can't rule out a main- or render-thread
+bottleneck. One short run each, with different match content, so the ~5 % less CPU with 0006 is indicative only.
+**Step 8 passes**: no regression with SMITE 2's metadata on. `FEX_VOLATILEMETADATA=0` after `/usr/bin/env` in a
+game's launch options stays the escape hatch.
 
 **Export (Step 9).** `make wine-arm64-export` wrote
 `wine-arm64/patches/fex/0006-Core-Run-every-block-a-volatile-metadata-range-cover.patch`, the only new file under
