@@ -1794,7 +1794,7 @@ msync's abandoned mutex on TerminateThread (kernel32 `sync.c:416/:420`), and the
 ## ARM64EC auxiliary IAT (batch Task 5)
 
 2026-10-10. **Wine patch 0034 (`ntdll: Fill the ARM64EC auxiliary IAT and revert an entry when what it was resolved
-through is made writable.`, `macneutron` c2c443d on 79874a0, after fix round 1 and Ruling R47; 6fe9c96 before them) fills an ARM64EC importer's auxiliary IAT at load and puts
+through is made writable.`, `macneutron` 0c40afb on 79874a0, after fix rounds 1 and 2 (Rulings R46-R48); 6fe9c96 before them) fills an ARM64EC importer's auxiliary IAT at load and puts
 an entry back on its check stub when a page it was resolved through is made writable (Ruling R13, option B).** It is
 ours and local only. The arm64ec lane's import calls drop to, or toward, the arm64 lane's cost: get-current-thread-id,
 get-last-error and tls-get-value 1.7-2.5 → 0.7 ns, get-tick-count 1.7 → 1.1, memcpy-16 3.0 → 1.9.
@@ -1815,7 +1815,8 @@ What 0034 does (`dlls/ntdll/signal_arm64ec.c`, `loader.c`, `ntdll_misc.h`):
 - **The order** (each page's bit, then its one query per fill, then a second resolve, under `aux_lock`): a hooker on
   another thread either sees the bit and reverts after the fill, or protected before the query (which then sees the page
   writable), or wrote and restored before it (the second resolve then reads the patched bytes). A page is read only once
-  its query says it is committed and readable, so the fill can't fault under the loader lock and `aux_lock`.
+  its query says it is committed and readable, so the fill skips unreadable pages; a page made no-access between its
+  query and the read can still fault (the known minor under Gaps).
 - **Suspension.** The fill, the forget and the revert hold `aux_lock` as a syscall callback, so a suspend that arrives
   meanwhile waits for the doorbell, as it does for FEX's own lock holders. From the cross-process work list FEX runs the
   revert with InSimulation set, so leaving the callback there leaves the doorbell to FEX.
@@ -1899,9 +1900,11 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
   own syscalls don't drain it, so in a process that never enters FEX the window has no bound. Calls in it skip the hook.
 - The cross-process revert is untested: every `ec-hook` row hooks from inside the process (review finding F3, not in
   fix round 1).
-- Known minor (Ruling R47, recorded, not fixed): a page made `PAGE_NOACCESS` between the fill's query and its read still
-  faults under the loader lock and `aux_lock`. A no-access protect isn't writable, so it never waits on `aux_lock`: no
-  lock cycle.
+- Known minor (Rulings R47, R48; recorded, not fixed): a page made `PAGE_NOACCESS` between the fill's query and its read
+  still faults under the loader lock and `aux_lock`. The fault goes through `pResetToConsistentState` to FEX's
+  access-violation handler, which takes ThreadCreationMutex; a thread that holds that mutex and waits on `aux_lock` (FEX's
+  write-fault untrap, which protects through the wrapper's first path) closes a cycle. So a narrow hang is possible: it
+  needs that no-access protect inside a fill and an untrap of a hashed page at the same moment.
 - Delay-load IATs are not filled; syscall stubs stay on the checker.
 - An entry resolved through a page that was writable at load keeps the checker for the process's lifetime (a fill is
   never retried).
@@ -1955,3 +1958,13 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
   ec-hook`, 1,962 s): all PASS and `PASS orphans` (g4-bench geomean 0.907 / 0.898 / calls 1.103; fex-vmd MP 1,997 with
   EVMD, 0 listed, 0 flags-only, mem_seq 0.49 / 0.38 of default). `make test` 252 passed, `make smoke` 15/15, `make
   bridge-check` passed (15 `ok`), `make media-check` unchanged. Logs `t5-r47-*.log`.
+- **Fix round 2 (Ruling R48).** The cross-process work list's revert ran before the Post entry's own
+  `pNotifyMemoryProtect( …, TRUE, … )`, so it waited for `aux_lock` inside the ThreadCreationMutex the Pre entry's notify
+  took. It now runs after the switch: after FEX's notify for that entry, still when `pNotifyMemoryProtect` is NULL, and
+  with its R47 bracket. The "can't fault" and "no lock cycle" claims were corrected here and in the 0034 commit message
+  (the known minor under Gaps). 0034 amended again (0c40afb), re-exported (only 0034's file changed), `applied 34/34`
+  and `tree-equal` (tree 3fd8e8e3…). `ec-hook` 3/3 with all six rows `ok` (49,391-49,470 rounds, 2,046-3,901 loads);
+  `check.sh winetests`: only the six listed locations; `make smoke` 15/15. `make test`: the first run failed one Swift
+  test, `oneInstallAtATime()` (`AppModelTests.swift:192`, `installer.calls` was `[false, true, true]`); three re-runs
+  passed 252/252. No Swift source has changed since fb0710a, so it is a flaky test, not 0034. The full gate is deferred to
+  the batch's final run (R48). Logs `t5-r48-*.log`.
