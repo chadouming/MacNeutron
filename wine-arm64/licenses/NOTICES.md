@@ -408,6 +408,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
+## Arm Optimized Routines (in Wine: msvcrt.dll, ucrtbase.dll, msvcr80.dll-msvcr120.dll)
+
+Wine patch 0035's `dlls/msvcrt/aor_string.h` carries the ARM64 and ARM64EC memmove (and so memcpy), strlen, strnlen,
+strchr, strrchr, strcmp and memchr of Arm Optimized Routines (`https://github.com/ARM-software/optimized-routines.git`,
+tag `v26.07`, commit `4be260a5117480382690c6d8c300bc784e927d76`): `string/aarch64/memcpy-advsimd.S`, `strlen.S`,
+`strnlen.S`, `strchr-mte.S`, `strrchr-mte.S`, `strcmp.S` and `memchr.S`. We modified them: rewritten as inline assembly
+in C helpers, with x11 for x14 in `memcpy-advsimd.S` (the header lists the changes). Upstream offers them under "MIT OR
+Apache-2.0 WITH LLVM-exception"; we take them under the MIT licence below. The repository's LICENSE gives the MIT
+copyright line, and each file its own:
+
+```
+Copyright (c) 1999-2022, Arm Limited.    (LICENSE)
+Copyright (c) 2019-2023, Arm Limited.    (memcpy-advsimd.S)
+Copyright (c) 2020-2022, Arm Limited.    (strlen.S, strnlen.S, strchr-mte.S)
+Copyright (c) 2020-2023, Arm Limited.    (strrchr-mte.S)
+Copyright (c) 2012-2022, Arm Limited.    (strcmp.S)
+Copyright (c) 2014-2022, Arm Limited.    (memchr.S)
+```
+
 ## The MIT licence
 
 The terms of the MIT entries above, with each entry's copyright line (the text of FEX's `LICENSE`):

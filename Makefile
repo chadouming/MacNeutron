@@ -126,6 +126,7 @@ WA_FLAGS_arm64-x18path = -lntdll
 WA_FLAGS_arm64-media-mf = -lmfplat -lmfreadwrite -lole32
 WA_FLAGS_x64-sync = -lsynchronization
 WA_FLAGS_arm64-xcall = -O2 -fno-builtin -lshlwapi
+WA_FLAGS_arm64-crt = -fno-builtin
 # The media programs (video playback spec §8) built for x64 too, from the same source: games are x64, run under FEX.
 WA_MEDIA_X64 = $(patsubst wine-arm64/tests/arm64-media-%.c,build/wine-arm64-tests/x64-media-%.exe,\
 	$(wildcard wine-arm64/tests/arm64-media-*.c))
@@ -133,7 +134,8 @@ wine-arm64-tests:
 	mkdir -p build/wine-arm64-tests
 	$(MAKE) -s -j$(shell sysctl -n hw.ncpu) $(WA_TESTS) $(WA_MEDIA_X64) build/wine-arm64-tests/x64-x18path.exe build/wine-arm64-tests/winshot \
 		build/wine-arm64-tests/arm64-sync.exe build/wine-arm64-tests/arm64ec-sync.exe \
-		build/wine-arm64-tests/arm64ec-xcall.exe build/wine-arm64-tests/x64-xcall.exe
+		build/wine-arm64-tests/arm64ec-xcall.exe build/wine-arm64-tests/x64-xcall.exe \
+		build/wine-arm64-tests/arm64ec-crt.exe build/wine-arm64-tests/x64-crt.exe
 build/wine-arm64-tests/arm64-%.exe: wine-arm64/tests/arm64-%.c
 	$(MINGW_BIN)/aarch64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_$(basename $(@F)))
 build/wine-arm64-tests/arm64ec-%.exe: wine-arm64/tests/arm64ec-%.c
@@ -155,6 +157,11 @@ build/wine-arm64-tests/arm64ec-xcall.exe: wine-arm64/tests/arm64-xcall.c
 	$(MINGW_BIN)/arm64ec-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-xcall)
 build/wine-arm64-tests/x64-xcall.exe: wine-arm64/tests/arm64-xcall.c
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-xcall)
+# arm64-crt's source in the other two lanes (batch Task 6): msvcrt's string routines on ARM64EC and from x64 code.
+build/wine-arm64-tests/arm64ec-crt.exe: wine-arm64/tests/arm64-crt.c
+	$(MINGW_BIN)/arm64ec-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-crt)
+build/wine-arm64-tests/x64-crt.exe: wine-arm64/tests/arm64-crt.c
+	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-crt)
 build/wine-arm64-tests/x64-media-%.exe: wine-arm64/tests/arm64-media-%.c
 	$(MINGW_BIN)/x86_64-w64-mingw32-clang $(WA_FLAGS) -o $@ $< $(WA_FLAGS_arm64-media-$*)
 build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
@@ -184,10 +191,10 @@ media-check: wine-arm64 wine-arm64-tests
 lanes-check: wine-arm64 wine-arm64-tests
 	sh wine-arm64/check.sh lanes
 
-# Wine's own conformance tests for check.sh's winetests step (batch Task 8): ntdll, kernel32, atl, atl100 and msvcirt's
-# test programs for the arm64, arm64ec and x64 lanes in build/wine-arm64-tests/winetests/. wine-build is configured
-# --disable-tests, and an ARM64X tree links each test as one ARM64X exe, which runs only its ARM64 view, so they come
-# from two test-only trees on wine-build's tools (build/wine-arm64-src/wine-tests-arm64, wine-tests-ec), neither staged
-# into wine.app. To configure one again, remove its folder.
+# Wine's own conformance tests for check.sh's winetests step (batch Task 8): ntdll, kernel32, atl, atl100, msvcirt and
+# (batch Task 6) msvcrt's test programs for the arm64, arm64ec and x64 lanes in build/wine-arm64-tests/winetests/.
+# wine-build is configured --disable-tests, and an ARM64X tree links each test as one ARM64X exe, which runs only its
+# ARM64 view, so they come from two test-only trees on wine-build's tools (build/wine-arm64-src/wine-tests-arm64,
+# wine-tests-ec), neither staged into wine.app. To configure one again, remove its folder.
 wine-arm64-winetests: wine-arm64
 	sh wine-arm64/winetests.sh

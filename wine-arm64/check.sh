@@ -56,7 +56,7 @@ LANES="lanes"
 NEEDS_PREFIX="$NEEDS_PREFIX $LANES"
 NEEDS_FEX="$NEEDS_FEX $LANES"
 # The batch's gated steps (batch Tasks 4-8): each needs the prefix with FEX; they run after the rest.
-BATCH="fex-vmd winetests ec-hook"
+BATCH="fex-vmd winetests ec-hook crt"
 STEPS="$STEPS $BATCH" NEEDS_PREFIX="$NEEDS_PREFIX $BATCH" NEEDS_FEX="$NEEDS_FEX $BATCH"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
@@ -747,7 +747,8 @@ lanes_cmd() {
 # when it prints its summary line, exits with that line's failure count, and every location it fails at is listed in
 # WINETESTS_FAILS as `<lane>:<file>:<line>`: failures it had before Wine 0033, never a critical-section line, after
 # the baseline added only by a ruling. Output is kept as winetests-<lane>-<module>.out and .err (Wine's ERRs).
-WINETESTS="ntdll:rtl kernel32:sync atl:module atl100:atl msvcirt:msvcirt"
+# msvcrt:string (batch Task 6, Wine patch 0035's string routines) had no failure on 0034 in any lane.
+WINETESTS="ntdll:rtl kernel32:sync atl:module atl100:atl msvcirt:msvcirt msvcrt:string"
 # kernel32 test_mutex (batch Task 8 baseline, Wine 0032): a mutex whose owner TerminateThread ends is never abandoned
 # under msync (WINEMSYNC=0 passes), so its waiter times out.
 WINETESTS_FAILS="arm64:sync.c:416 arm64:sync.c:420 arm64ec:sync.c:416 arm64ec:sync.c:420 x64:sync.c:416 x64:sync.c:420"
@@ -780,6 +781,20 @@ winetests_cmd() {
 ec_hook_cmd() {
   wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f > /dev/null || return 1
   exe_cmd arm64ec-hook
+}
+
+# msvcrt's string routines (batch Task 6, Wine patch 0035): arm64-crt in all three lanes (x64 under FEX), each always,
+# crash dialog off (a crash ends a program with its FAIL line); the last line names every program that failed, with its
+# own FAIL line.
+crt_cmd() {
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || return 1
+  fails=
+  for t in arm64-crt arm64ec-crt x64-crt; do
+    out=$(exe_cmd "$t") || fails="$fails${fails:+; }$(echo "$out" | LC_ALL=C /usr/bin/grep -m 1 "^FAIL $t:" \
+      || echo "$t: $(echo "$out" | tail -n 1)")"
+    echo "$out"
+  done
+  [ -z "$fails" ] || { echo "FAIL crt: $fails"; return 1; }
 }
 
 run_step() {
@@ -821,6 +836,7 @@ run_step() {
     fex-vmd) step fex-vmd 900 fex_vmd_cmd; grep '^info ' "$WORK/fex-vmd.log" ;;
     winetests) step winetests 1800 winetests_cmd; grep '^info ' "$WORK/winetests.log" ;;
     ec-hook) step ec-hook 60 ec_hook_cmd ;;
+    crt) step crt 300 crt_cmd ;;
     *) die "no runner for $1" ;;
   esac
 }

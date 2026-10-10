@@ -363,6 +363,7 @@ out=$(sed -n 's/^#define \(SONAME_[A-Z0-9_]*\) .*/\1/p' "$SRC/wine-build/include
 echo "wine-arm64: building (log: $SRC/make.log)" >&2
 make -C "$SRC/wine-build" -j"$(sysctl -n hw.ncpu)" > "$SRC/make.log" 2>&1 || die "make failed; see $SRC/make.log"
 pe_baseline_check "$SRC/wine-build"  # what this make built is on the M1 baseline (lib.sh)
+ec_regs_check "$SRC/wine-build"  # no ARM64EC string routine uses a register x64 code can't hold (lib.sh)
 
 # 6. FEX: the ARM64EC DLL with llvm-mingw's toolchain file (absolute path; TUNE_CPU=none, since the default reads
 #    /proc/cpuinfo; $PE_MARCH as its C and C++ flags, which FEX appends to), the unixlib with Apple clang. Each build

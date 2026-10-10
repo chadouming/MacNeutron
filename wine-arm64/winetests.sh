@@ -1,6 +1,7 @@
 #!/bin/sh
-# Builds Wine's own conformance tests for check.sh's winetests step (batch Task 8): the ntdll, kernel32, atl, atl100
-# and msvcirt test programs of each lane, in build/wine-arm64-tests/winetests/<lane>/ (arm64, arm64ec, x64).
+# Builds Wine's own conformance tests for check.sh's winetests step (batch Task 8): the ntdll, kernel32, atl, atl100,
+# msvcirt and (batch Task 6) msvcrt test programs of each lane, in build/wine-arm64-tests/winetests/<lane>/ (arm64,
+# arm64ec, x64).
 # Why two more trees: wine-build is configured --disable-tests (build.sh), and an ARM64X tree links each test as one
 # ARM64X exe, which runs only its ARM64 view (tools/makedep.c: get_link_arch and the ARM64X setup). So the tests come
 # from two test-only trees on wine-build's tools, neither staged into wine.app: wine-tests-arm64 (aarch64) and
@@ -16,7 +17,7 @@ SRC="$B/wine-arm64-src"
 PATH="$(sh "$ROOT/dxmt/toolchain.sh"):$PATH"
 export PATH
 [ -x "$SRC/wine-build/tools/winebuild/winebuild" ] || die "no $SRC/wine-build/tools/winebuild/winebuild: run make wine-arm64"
-MODULES="ntdll kernel32 atl atl100 msvcirt"
+MODULES="ntdll kernel32 atl atl100 msvcirt msvcrt"
 OUT="$B/wine-arm64-tests/winetests"
 n=0
 # <tree> <--enable-archs> <PE arch>:<lane>...

@@ -4,7 +4,8 @@
 # --app <MacNeutron.app> (arm64 release spec §7.1, gate R4): the app's own licences (MIT, llvm-mingw's for steam.exe,
 # equal to wine.app's copies, a README pointing into wine.app), then the check above on its Contents/Helpers/wine.app.
 # --self-test proves it red on copies in $TMPDIR: a licence file deleted (FEX's, MacNeutron's, CMAA2's), NOTICES.md
-# without its FFmpeg section (the bundle has to ship FFmpeg), an extra FEX external.
+# without its FFmpeg section (the bundle has to ship FFmpeg) or its section for Wine's Arm Optimized Routines (Wine
+# patch 0035's msvcrt string routines), an extra FEX external.
 # ponytail: a flat path list, no manifest format; add one when a second bundle needs the same list.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -40,6 +41,7 @@ check() {  # check <wine.app> <build dir>
   do g -qF "$h" "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md entry for $h"; done
   g -qF 'macneutron/LICENSE' "$L/README" 2> /dev/null || miss "MacNeutron entry (macneutron/LICENSE) in README"
   g -qF 'macneutron/CMAA2-LICENSE.txt' "$L/README" 2> /dev/null || miss "CMAA2 entry (macneutron/CMAA2-LICENSE.txt) in README"
+  g -q '^## Arm Optimized Routines (in Wine' "$L/NOTICES.md" 2> /dev/null || miss "NOTICES.md section for Wine's Arm Optimized Routines"
 
   # 3. Drift: every FEX external the build compiled has a licence above (vixl, zydis, tracy... must stay out).
   for d in "$2"/wine-arm64-src/fex-ec/External/*/; do
@@ -139,6 +141,9 @@ cp -c "$APP/Contents/Resources/licenses/macneutron/CMAA2-LICENSE.txt" "$T/wine.a
 N="$T/wine.app/Contents/Resources/licenses/NOTICES.md"
 sed -i '' 's/^## FFmpeg /## FFmpeg-less /' "$N"
 red "a NOTICES.md without its FFmpeg section" "NOTICES.md section for FFmpeg"
+cp -c "$APP/Contents/Resources/licenses/NOTICES.md" "$N"
+sed -i '' 's/^## Arm Optimized Routines (in Wine/## Arm Optimized Routines-less (in Wine/' "$N"
+red "a NOTICES.md without Wine's Arm Optimized Routines section" "NOTICES.md section for Wine's Arm Optimized Routines"
 cp -c "$APP/Contents/Resources/licenses/NOTICES.md" "$N"
 mkdir "$T/b/wine-arm64-src/fex-ec/External/vixl"
 red "an extra External/vixl" "a licence decision for FEX External/vixl"

@@ -117,8 +117,9 @@ The batch's gated steps (`BATCH`), run last, after `g4-bench`:
 | Step | What |
 |---|---|
 | `fex-vmd` | FEX patch 0006 (batch Task 4): EVMD over x64-litmus shows MP reordering, listed instructions keep TSO (all of `run` and `worker`, or only MP's flag store and load), FEX logs its coverage; x64-bench's scalar-memory kernels run in at most 0.75 of their time with their ranges |
-| `winetests` | Wine patch 0033 (batch Task 8): Wine's conformance tests `ntdll:rtl`, `kernel32:sync`, `atl:module`, `atl100:atl` and `msvcirt:msvcirt` in all three lanes (x64 under FEX), built by `make wine-arm64-winetests` in two test-only Wine trees; each exits with its failure count, and fails only at locations listed in `WINETESTS_FAILS` |
+| `winetests` | Wine patch 0033 (batch Task 8): Wine's conformance tests `ntdll:rtl`, `kernel32:sync`, `atl:module`, `atl100:atl`, `msvcirt:msvcirt` and (batch Task 6) `msvcrt:string` in all three lanes (x64 under FEX), built by `make wine-arm64-winetests` in two test-only Wine trees; each exits with its failure count, and fails only at locations listed in `WINETESTS_FAILS` |
 | `ec-hook` | Wine patch 0034 (batch Task 5): an ARM64EC program's import entries are filled; a hooked export, a hooked IAT entry and an unloaded DLL's reused range behave as without the fill; a thread frozen inside a fill doesn't hold up a hooker's VirtualProtect |
+| `crt` | Wine patch 0035 (batch Task 6): msvcrt's string routines and memcpy against byte loops in all three lanes: every length to 300, every alignment, overlaps, both sides of a no-access host page |
 
 ### FreeType and gnutls
 
@@ -275,6 +276,7 @@ re-clone; that is why they wait for the rebase.
     x86's plain loads and stores) is ours and stays local.
   - 0033 (critical sections on Windows' 2003 SP1+ LockCount encoding: a contender takes a free section even while others wait, and a Leave wakes one waiter only when no wake is in flight, so contended sections no longer convoy; one ldclral to enter and one ldsetal to leave on ARM64 and ARM64EC, lock btr and lock xadd on x86 (compiled, not run here); an explicit SpinCount spins through one slot, in ns on ARM, at most 10 µs; a recursive Enter no longer counts in LockCount) is ours and stays local.
   - 0034 (the ARM64EC auxiliary IAT filled at load, and an entry put back when a page it was resolved through is made writable) is ours and stays local.
+  - 0035 (msvcrt's memmove, strlen, strnlen, strchr, strrchr, strcmp and memchr on ARM64 and ARM64EC from Arm Optimized Routines v26.07, MIT: licenses/NOTICES.md) is ours and stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into

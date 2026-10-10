@@ -1968,3 +1968,155 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
   test, `oneInstallAtATime()` (`AppModelTests.swift:192`, `installer.calls` was `[false, true, true]`); three re-runs
   passed 252/252. No Swift source has changed since fb0710a, so it is a flaky test, not 0034. The full gate is deferred to
   the batch's final run (R48). Logs `t5-r48-*.log`.
+
+## CRT string routines from Arm Optimized Routines (batch Task 6)
+
+2026-10-10. **Wine patch 0035 (`msvcrt: Use Arm Optimized Routines for memmove, strlen, strnlen, strchr, strrchr,
+strcmp and memchr on ARM64.`, `macneutron` 887f9c1 on 0c40afb) replaces those byte loops, and memmove's scalar
+shift-merge, with Arm's AdvSIMD routines on ARM64 and ARM64EC** in every DLL that builds `dlls/msvcrt/string.c`
+(msvcrt, ucrtbase, msvcr80-120). It is ours and local only. `strlen-1k` drops from 232-234 ns to 9.6-9.8 ns in the
+native lanes and from 259 to 32.8 ns from x64 code; the 16-byte copies halve.
+
+What 0035 does:
+- **`dlls/msvcrt/aor_string.h`** (new; `SPDX-License-Identifier: MIT`, then the provenance, the files' copyright
+  lines, the MIT text and the list of changes): seven `static` naked helpers, `__attribute__((naked, aligned(64)))`,
+  each one `asm` statement transcribed mechanically from Arm Optimized Routines v26.07 (commit
+  `4be260a5117480382690c6d8c300bc784e927d76`): `aor_memmove` (`memcpy-advsimd.S`), `aor_strlen` (`strlen.S`),
+  `aor_strnlen` (`strnlen.S`), `aor_strchr` (`strchr-mte.S`), `aor_strrchr` (`strrchr-mte.S`), `aor_strcmp`
+  (`strcmp.S`), `aor_memchr` (`memchr.S`). Register `#define`s are `.req`/`.unreq`, constants `.set`, `L(x)` is
+  `.L<routine>_x`; only the little-endian production branches; ENTRY/END, `.cfi_*`, BTI and `asmdefs.h` dropped, every
+  instruction and `.p2align` kept. The one register change: `memcpy-advsimd.S`'s `tmp1` is x11, not x14 (ARM64EC can't
+  use x13, x14, x23, x24, x28 or v16-v31). strchr/strrchr are the `-mte` versions (v0-v5). No SEH directives.
+- **`string.c`**: under `#if defined(__aarch64__) || defined(__arm64ec__)` strlen, strnlen, strchr, strrchr and memchr
+  return their helper's result, memmove gets an `#elif` after its x86-64 branch (memcpy already calls memmove), and
+  strcmp keeps answering -1/0/1 (`(r > 0) - (r < 0)` of AOR's byte difference). The exports stay C, so ARM64EC keeps
+  their entry thunks: `#strlen` is `b aor_strlen`, `strlen` in the x64 view enters through the thunk.
+- **The transcription check** (`t6-transcription-check.log`, from `t6-aor-check.sh`, independent of the generator
+  `t6-aor-transcribe.py`): per routine, the original's little-endian production lines and the helper's asm strings
+  (minus `.req`/`.unreq`/`.set`) are identical (125, 81, 53, 44, 78, 85 and 59 lines); the `#define`s equal the
+  `.req`/`.set` lines except `tmp1 x14` → `x11`; every `.req` has its `.unreq`. Every helper's section is
+  `IMAGE_SCN_ALIGN_64BYTES`, and in the DLLs each helper sits on a 64-byte boundary.
+
+**The download** (Ruling R22: the maintainer's OK for these files only). From
+`raw.githubusercontent.com/ARM-software/optimized-routines/4be260a5117480382690c6d8c300bc784e927d76/` into a new
+folder outside the repository, read, never built or run (`t6-aor-fetch.log`): every `git hash-object` equals the
+plan's blob SHA-1 and every size its byte count; `LICENSE` begins `MIT OR Apache-2.0 WITH LLVM-exception`. SHA-256:
+
+```
+650afbf29f214451e02241adc42534e82c9d6ae2b38e2444b92b5a1ffcaf9346  LICENSE
+8c910a128f14751fa9708d1c90c1de3ed215b472d294fc882270b377d3889ab5  string/aarch64/asmdefs.h
+f423b85a6afab446252f6533c7398a70f85b4f259e61d1ecbeb70b1373ab784d  string/aarch64/memcpy-advsimd.S
+49ada8b95569d0501539de234d33a879dd79eb1beb87156714488f998b30bff6  string/aarch64/strlen.S
+892c50170bd2c5f3c9019687368d27cc872b54318457b9ea6bebb4f227d78f1a  string/aarch64/strnlen.S
+fc0fb0a03b09ba4d3bbe25c80ba97a370cea9c8823be9ec2a9de385d8b0c355b  string/aarch64/strchr-mte.S
+e0228e76de429ab392e3eac9631a81dfd175550ecfe4daa86906ded7497501ce  string/aarch64/strrchr-mte.S
+11acc3dc966fd98411d46b07abeaea8c53b37c1d6eae2c4792265d9dd574431b  string/aarch64/strcmp.S
+c73139a81e16172db0ac807162ecfeff3e7c711babcbeb5e7ff9bbdb0435f3c3  string/aarch64/memchr.S
+```
+
+**Licences.** Taken under MIT (Apache-2.0 stays out of the LGPL tree). `licenses/NOTICES.md` has the section `## Arm
+Optimized Routines (in Wine: msvcrt.dll, ucrtbase.dll, msvcr80.dll-msvcr120.dll)` (the patch's file, repository, tag,
+commit, the seven files, modified, the MIT election, the LICENSE's `Copyright (c) 1999-2022, Arm Limited.` and the
+per-file lines); `licenses/README`'s Wine entry points to it. `licences_test.sh` checks the section's heading; on the
+0034 bundle it printed `MISSING NOTICES.md section for Wine's Arm Optimized Routines` and `FAIL licences_test`
+(`t6-licences-red.log`); on the 0035 bundle `PASS licences_test` and `PASS licences_test self-test`, whose new red is
+the heading renamed (`t6-licences-green.log`). The release source archive carries the files without a change to
+`release/source-archive.sh`: its `tree wine` is `git archive --prefix=wine/ HEAD` of the applied Wine tree, which holds
+`wine/dlls/msvcrt/aor_string.h` (40,988 bytes, the committed blob; `t6-source-archive.log`), and `MacNeutron.tar` holds
+patch 0035.
+
+**The `crt` step** (`check.sh`, in `BATCH` after `ec-hook`; crash dialog off): `arm64-crt.c`, built `-fno-builtin` as
+`arm64-crt.exe`, `arm64ec-crt.exe` and `x64-crt.exe` (under FEX); all eight routines are imports from
+`api-ms-win-crt-*` (ucrtbase) in all three exes. Each routine is compared with a byte-loop reference; the bytes a
+routine may read but must ignore hold what it looks for (0 before strlen/strnlen strings, `(char)c` before and after
+strchr/strrchr strings and memchr ranges, 0 after `p + maxlen + 1` for strnlen, different bytes around strcmp's two
+strings); string bodies put 0x01, 0x7f, 0x80 and 0xff in every 8 bytes. memmove and memcpy: n 0-300 × source and
+destination offset 0-15 into a 0xee-filled 1 KB buffer compared whole, memmove's overlaps (k −64…64), memmove(NULL,
+NULL, 0); strlen/strnlen: length 0-300 × offset 0-31, maxlen 0, L/2, L, L+1, SIZE_MAX, unterminated at the guard,
+strnlen(NULL, 0); strchr/strrchr: length 0-64 × offset 0-15 × eleven `c`; strcmp: length 0-300 × 16 × 16 offsets,
+equal and with ('a','b'), (0x01,0xff), (0xff,0x01), ('a',0) at 0, L/2, L-1; memchr: n 0-300 × offset 0-31 × five
+bytes × four places, SIZE_MAX with the byte on the guard's last readable byte, memchr(NULL, c, 0). Page edges for every
+routine: two 96 KB allocations, [0, 32K) and [64K, 96K) no access (16K host pages: 4K guards wouldn't fault), data
+ending on `base + 64K − 1` and starting on `base + 32K`, length 0-300, one copy or strcmp operand in each allocation,
+memmove's backward overlaps at both guards. `IsBadReadPtr` confirms all four guards before any case. Cases per lane:
+memmove 155,016, memcpy 77,658, strlen 10,234, strnlen 51,472, strchr and strrchr 17,972 each, strcmp 1,006,458,
+memchr 198,632; the step takes about 7 s.
+- **Oracle, on 0034's byte loops** (`t6-oracle*.log`): all eight `ok` in all three lanes, `PASS crt`.
+- **The test sees faults and mismatches** (scratch mutants of the harness, never in the repository; `t6-mutants.log`):
+  one wrong routine each gave `FAIL arm64-crt: 8 of 8 routines failed`, each routine's first mismatch named (memmove
+  `n 63 src+0 dst+0, byte dst+63: got 0x55, wanted 0xee`, memchr `n 1 +0 c 0x100 at -1: got p+1, wanted NULL`, …); a
+  strlen that reads 16 bytes past its terminator gave `FAIL arm64-crt: strlen end guard, len 0 +63: exception
+  0xc0000005`.
+- **On 0035** (`t6-green*.log`): all eight `ok` with the same counts in all three lanes, `PASS crt`, `PASS orphans`.
+
+**The register gate.** `ec_regs_check` (`lib.sh`, called by `build.sh` after `pe_baseline_check`) disassembles the
+seven ARM64EC `string.o` and dies on x13, x14, x23, x24, x28 or v/q/d/s/b/h16-31. A scratch object with `mov x14, x0`
+(llvm-mingw only warns `register X14 is disallowed on ARM64EC`) stops it with `wine-arm64: msvcrt's ARM64EC string.o
+uses a register x64 code can't hold: mov x14, x0`, exit 1, and one with `mov v16.16b, v0.16b` likewise; 0034's and
+0035's trees pass silently (`t6-red-gate.log`, `t6-codegen-after.log`). **Codegen**: `uminp` in ucrtbase.dll's
+`aor_strlen` counts 0 before (no such symbol; `#strlen` was the 6-instruction byte loop) and 4 after (2 in each half);
+each of the seven DLLs has its 4.
+
+**Wine's own tests.** `msvcrt:string` joins the winetests step (`WINETESTS`, `winetests.sh`'s `MODULES`). On 0034 it ran
+410,075 tests with 0 failures in each lane (`t6-winetests-0034*.log`), so no location was needed; on 0035 the same,
+and the step passed with only the six listed `sync.c:416/:420` locations (`t6-winetests-0035*.log`).
+
+**Lanes** (`build/lanes/t6/`, the 0035 applied build, against `build/lanes/t5/`, Task 5's three-run set; `t5-f1/` has
+two runs). Three runs back to back under `caffeinate -i`, 10:36:47-10:44:45, AC at every start and end, idle checks
+empty, load 2.26 → 3.09; Steam (running, never touched here) held one core at about 100 %
+(`t6-lanes-run{1,2,3}.log`, `lanes_report.py build/lanes/t5 build/lanes/t6` in `t6-lanes-t5-vs-t6.log`):
+
+| row (ns), median (min–max) of 3 | arm64 t5 → t6 | arm64ec t5 → t6 | x64 t5 → t6 |
+|---|---|---|---|
+| `strlen-1k` | 232 (232–232) → 9.8 (9.5–9.9) | 234 (232–241) → 9.6 (9.1–9.7) | 259 (259–259) → 32.8 (32.4–33.4) |
+| `memcpy-16` | 1.9 (1.9–1.9) → 0.9 (0.9–0.9) | 1.9 (1.9–2.2) → 0.9 (0.9–0.9) | 25.6 (25.6–25.8) → 25.7 (25.4–25.9) |
+| `memcpy-16-offset` | 2.6 (2.6–2.8) → 1.1 (0.9–1.1) | 2.8 (2.8–2.8) → 0.9 (0.9–1.1) | 27.2 (27.1–27.3) → 25.8 (25.5–26.1) |
+| `memcpy-256` | 4.1 (3.5–4.1) → 3.0 (3.0–3.1) | 3.9 (3.7–4.1) → 3.2 (3.2–3.3) | 27.6 (27.4–27.8) → 26.4 (26.1–26.8) |
+| `memcpy-256-offset` | 5.0 (4.8–5.0) → 3.3 (3.3–3.3) | 5.0 (4.9–5.3) → 3.3 (3.2–3.4) | 29.0 (28.9–29.1) → 26.4 (26.1–26.4) |
+| `memcpy-4k` | 43.8 (43.8–43.9) → 43.9 (43.9–43.9) | 44.7 (44.6–47.2) → 44.3 (44.3–44.3) | 57.9 (57.5–58.0) → 55.8 (53.2–59.0) |
+| `memcpy-4k-offset` | 45.6 (45.5–45.6) → 44.1 (44.1–44.1) | 39.4 (39.3–45.8) → 44.3 (44.2–44.3) | 74.0 (73.7–89.4) → 62.2 (53.3–68.2) |
+| `memcpy-1m` | 15520 (15500–15620) → 15340 (15330–15360) | 15410 (15380–16350) → 15320 (15300–15420) | 15260 (15230–15260) → 15250 (15230–15280) |
+| `memcpy-1m-offset` | 15310 (15290–15380) → 15370 (14100–15380) | 15660 (14580–16740) → 15360 (15350–15390) | 16280 (16270–16280) → 15280 (15270–15470) |
+| `qsort-4k` | 103600 (101910–106950) → 107740 (105980–111630) | 159180 (157790–164870) → 163130 (162590–164090) | 3290480 (3290250–3295970) → 3360200 (3353320–3362680) |
+
+- `strlen-1k` is lower and outside the band in all three lanes (−96 %, −96 %, −87 %).
+- Outside the band and lower: memcpy-16 and -16-offset, -256 and -256-offset in both native lanes (−18 to −68 %) and
+  in x64 except memcpy-16 (−4 to −9 %); memcpy-4k-offset arm64 and x64; memcpy-4k arm64ec; memcpy-1m arm64;
+  memcpy-1m-offset x64. The others are inside the band. The `-offset` rows move source and destination together (by
+  one byte), so they measure co-aligned copies, not the mutually misaligned case where the C loop was weakest.
+- memcpy-4k-offset arm64ec 39.4 → 44.3 is inside the band against t5 but worse and outside the band against the
+  same-session control (39.5 (39.4–42.1)): AOR copies 4 KB in about 44 ns at any alignment in both native lanes, where
+  the arm64ec build's C loop did the co-aligned 1-byte offset in 39.5 (and the arm64 build's in 45.6-47.8).
+- **A same-session control**: Wine 0c40afb (0034) checked out and built, three runs (10:46:44-10:54:58, AC, idle
+  checks empty, load 3.09 → 2.96, Steam still busy; `build/lanes/t6-control-0034/`, `t6-control-lanes-run*.log`,
+  `t6-lanes-control-vs-t6.log`, `t6-lanes-t5-vs-control.log`), then `macneutron` again and the applied build (same
+  ucrtbase/msvcrt disassembly). Against t5 the control already shows cs-hold-10us-p999 at 70-90 µs (t5 49-50 µs) and
+  x64 qsort-4k at 3.37 ms (t5 3.29 ms): the session's, not 0035's, whose code those rows' timed paths don't call.
+  Against the control, the string rows above keep their moves, and the non-string rows outside the band are
+  cs-hold-10us-p999 x64 (70 → 98 µs, ranges 69-73 and 93-102), auto-handoff-8 arm64ec (571 → 650 ns), create-close
+  x64 (+1.8 %) and uncontended-wait arm64 (+5 %) on the worse side, wait-all-poll and wait-all-wake arm64 on the better
+  side. Their timed paths are kernel32, kernelbase and ntdll calls, and those DLLs are built `-nodefaultlibs`: they
+  never reach msvcrt's routines. Read as this session's noise (one core busy throughout).
+
+**Gates** (0035 = 887f9c1, applied build; Steam up, `pgrep -lx steam_osx` 15329, before each run; AC at every start
+and end):
+- `make wine-arm64-check` (10:56-11:09, `t6-gate-check.log`): the four repo tests PASS, every step from `macos`
+  through `dxmt-present` PASS (`x18`: 0 bad checks, 0 crash reports; `msync`'s cs-hold-10us-p999 95,300 / 57,200 in this
+  busy session; `dxmt-present` with the screen unlocked), then `FAIL dxmt-arm64ec: … FAIL timestamps from any query
+  heap ride the call's encoders: got [:hazard ts-many 0]`: d3d12_hazards' GPU timing check (`heavy 160875 alone
+  383209`; it wants heavy ≥ alone / 2, and `alone` is usually about 134,000 ticks), the row whose flake is recorded
+  under the XeSS plan's follow-ups (`alone` ten times its usual value while other lanes ran). The steps after it, run
+  by name (`check.sh dxmt-arm64ec dxmt-x64 g4-bench fex-vmd winetests ec-hook crt`, 11:12-11:45,
+  `t6-gate-rest.log`): all PASS and `PASS orphans`, ts-many `heavy 133917 alone 133125` (g4-bench geomean 0.940 /
+  0.922 / calls 1.086; fex-vmd MP 28,040 with EVMD, 0 listed, 0 flags-only, mem_seq 0.46 / 0.40 of default;
+  winetests only the six listed locations, msvcrt:string 0 failures in each lane; `crt` PASS).
+- `make test`: 252 tests passed. `make smoke`: 15 PASS. `make bridge-check`: passed (15 `ok`). `make media-check`:
+  unchanged (`FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf:
+  stage=video-type hr=0xc00d5212`). Logs `t6-gate-{test,smoke,bridge-check,media-check}.log`.
+- Export: `make wine-arm64-export` wrote one new file,
+  `wine-arm64/patches/wine/0035-msvcrt-Use-Arm-Optimized-Routines-for-memmove-strlen.patch`; the fresh-fetch proof
+  printed `applied 35/35` and `tree-equal` (tree 7dc06830…; `t6-fresh-fetch.log`). The applied-mode rebuild stages the
+  tested ucrtbase.dll and msvcrt.dll (their disassembly's SHA-256 unchanged, `t6-applied-build.log`).
+- Not covered: the mutually misaligned copy (the lanes' `-offset` rows are co-aligned); a game's own use. The routines
+  read within the 16- or 32-byte aligned chunk that holds a string's last byte, never past its 4 KB page (strlen's
+  unaligned first 32 bytes only when they can't cross one), so they fault nowhere the byte loops didn't.

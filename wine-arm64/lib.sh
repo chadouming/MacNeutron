@@ -191,3 +191,16 @@ pe_baseline_check() {  # pe_baseline_check <wine-build dir>
     [ "$_pb_n" -gt 0 ] || die "ntdll.dll's $_pb_k code: 0 LSE atomics (the PE side isn't on the M1 baseline)"
   done
 }
+
+# ARM64EC code must not use what an x64 context can't hold: x13, x14, x23, x24, x28, v16-v31; a context round trip
+# zeroes them (Wine's dlls/ntdll/unwind.h:147-168). Clang never picks them; hand-written assembly can, and llvm-mingw
+# only warns. The msvcrt family's string.o carries Arm Optimized Routines (batch Task 6).
+ec_regs_check() {  # ec_regs_check <wine-build dir>
+  for _er_m in msvcrt ucrtbase msvcr80 msvcr90 msvcr100 msvcr110 msvcr120; do
+    _er_o="$1/dlls/$_er_m/arm64ec-windows/string.o"
+    [ -f "$_er_o" ] || die "no $_er_o: run ec_regs_check after make"
+    _er_h=$(llvm-objdump -d --no-show-raw-insn --no-leading-addr "$_er_o" | sed -n 's|//.*||; s/<[^>]*>//g; /^[[:space:]]/p' \
+      | LC_ALL=C /usr/bin/grep -m 1 -E '[[:space:],[{]([xw](13|14|23|24|28)|[vqdsbh](1[6-9]|2[0-9]|3[01]))([^0-9]|$)' || true)
+    [ -z "$_er_h" ] || die "$_er_m's ARM64EC string.o uses a register x64 code can't hold:$_er_h"
+  done
+}
