@@ -1938,8 +1938,8 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
   get-last-error and tls-get-value read 0.7 ns as in t5, memcpy-16 1.9. get-tick-count reads 1.5 / 1.6 against t5's 1.1
   and qpc 15.9 / 16.6, while the arm64 lane, which has no auxiliary IAT, moved too (qpc 15.4 → 16.5, memcpy-4k-offset
   45.6 → 55.7 / 48.9). With the filled counts unchanged, qpc and the arm64 lane read as session variance. get-tick-count
-  doesn't: the final 0034 reads 1.5-1.6 in both of its sets (t5-f1; t6-control-0034 1.5/1.6/1.5), so 1.1 was
-  6fe9c96's; later sets mix 0.7-0.9 and 1.5-1.6 runs in one session.
+  doesn't: fix round 1's 0034 (t5-f1) and the final 0034 (t6-control-0034 1.5/1.6/1.5; R47/R48 changed only the revert
+  path) both read 1.5-1.6, so 1.1 was 6fe9c96's; later sets mix 0.7-0.9 and 1.5-1.6 runs in one session.
 - Re-export: `git status --short wine-arm64/patches` shows only ` M …/0034-ntdll-Fill-the-ARM64EC-auxiliary-IAT-and-revert-an-e.patch`;
   the fresh-fetch proof prints `applied 34/34` and `tree-equal` (tree f7b61747…); an applied-mode rebuild stages the
   tested ntdll (disassembly SHA-256 137d8999…).
@@ -2053,7 +2053,8 @@ memchr 198,632; the step takes about 7 s.
 - **On 0035** (`t6-green*.log`): all eight `ok` with the same counts in all three lanes, `PASS crt`, `PASS orphans`.
 
 **The register gate.** `ec_regs_check` (`lib.sh`, called by `build.sh` after `pe_baseline_check`) disassembles the
-seven ARM64EC `string.o` and dies on x13, x14, x23, x24, x28 or v/q/d/s/b/h16-31. A scratch object with `mov x14, x0`
+seven ARM64EC `string.o` with the toolchain's `llvm-objdump` (by path), dies if it fails or prints fewer than 1,000
+instruction lines, and dies on x13, x14, x23, x24, x28 or v/q/d/s/b/h16-31. A scratch object with `mov x14, x0`
 (llvm-mingw only warns `register X14 is disallowed on ARM64EC`) stops it with `wine-arm64: msvcrt's ARM64EC string.o
 uses a register x64 code can't hold: mov x14, x0`, exit 1, and one with `mov v16.16b, v0.16b` likewise; 0034's and
 0035's trees pass silently (`t6-red-gate.log`, `t6-codegen-after.log`). **Codegen**: `uminp` in ucrtbase.dll's
