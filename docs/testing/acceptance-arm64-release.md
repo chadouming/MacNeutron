@@ -1924,7 +1924,8 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
 - `check.sh winetests ec-hook`: `PASS winetests` (only the six listed locations) and `PASS ec-hook`. `make test`: 252
   passed.
 - A diagnostic counting each module's filled entries (arm64ec, version.dll loaded) prints the same counts on 6fe9c96 and
-  on the fix: the exe 38, kernel32 905, kernelbase 297, ucrtbase 160, version.dll 46, xtajit64 5.
+  on the fix: the exe 38, kernel32 905, kernelbase 297, ucrtbase 160, version.dll 46, xtajit64 5
+  (`t5-f1-auxcount-*.txt`, source `t5-f1-auxcount.c`, in the batch workspace).
 - Lanes, two idle runs on AC (load 1.75-2.20; `t5-f1-lanes-run{1,2}.log`): the arm64ec xcall rows get-current-thread-id,
   get-last-error and tls-get-value read 0.7 ns as in t5, memcpy-16 1.9. get-tick-count reads 1.5 / 1.6 against t5's 1.1
   and qpc 15.9 / 16.6, while the arm64 lane, which has no auxiliary IAT, moved too (qpc 15.4 → 16.5, memcpy-4k-offset
