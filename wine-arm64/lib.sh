@@ -204,3 +204,24 @@ ec_regs_check() {  # ec_regs_check <wine-build dir>
     [ -z "$_er_h" ] || die "$_er_m's ARM64EC string.o uses a register x64 code can't hold:$_er_h"
   done
 }
+
+# The CRT and DirectX redistributables' builtins replace a game's own x64 copies: version_heuristics sends a Microsoft
+# DLL to LO_DEFAULT (Wine's dlls/ntdll/unix/loadorder.c:431), and none of these prefers native, Wine's 0x10 in the
+# DllCharacteristics (set by tools/winebuild/build.h:210, read by dlls/ntdll/unix/unix_private.h:430). A rebase that
+# changes either moves them under FEX (native REPORT §3 R7; batch Task 7).
+CRT_BUILTINS="ucrtbase vcruntime140 vcruntime140_1 msvcp140 msvcp140_1 msvcp140_2 msvcp140_atomic_wait msvcp140_codecvt_ids"
+CRT_BUILTINS="$CRT_BUILTINS concrt140 vcomp140 msvcr120 msvcp120 msvcr100 msvcp100 d3dcompiler_43 d3dcompiler_47 d3dx9_43"
+CRT_BUILTINS="$CRT_BUILTINS d3dx10_43 d3dx11_43 xaudio2_7 xaudio2_9 x3daudio1_7 xapofx1_5 xinput1_3 xinput1_4 xinput9_1_0"
+prefer_native_check() {  # prefer_native_check <aarch64-windows dir> <Wine source tree>
+  _pn_ro="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-readobj"
+  for _pn in $CRT_BUILTINS; do
+    _pn_c=$("$_pn_ro" --file-headers "$1/$_pn.dll" \
+      | awk '/ImageOptionalHeader/ { o = 1 } o && /Characteristics \[/ { gsub(/[()]/, "", $3); print $3; exit }')
+    [ -n "$_pn_c" ] || die "can't read $_pn.dll's DllCharacteristics"
+    [ $((_pn_c & 0x10)) = 0 ] || die "$_pn.dll prefers native ($_pn_c): a game's x64 copy would run under FEX"
+  done
+  LC_ALL=C /usr/bin/grep -qE '^#define IMAGE_DLLCHARACTERISTICS_PREFER_NATIVE[[:space:]]+0x0010' "$2/dlls/ntdll/unix/unix_private.h" \
+    || die "ntdll no longer reads prefer-native as 0x0010 (dlls/ntdll/unix/unix_private.h)"
+  LC_ALL=C /usr/bin/grep -qF "{'M','i','c','r','o','s','o','f','t',0}, LO_DEFAULT }" "$2/dlls/ntdll/unix/loadorder.c" \
+    || die "loadorder.c's version_heuristics no longer sends Microsoft DLLs to LO_DEFAULT"
+}

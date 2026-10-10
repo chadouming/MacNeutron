@@ -316,6 +316,8 @@ out=$(for mk in "$S"/wine/dlls/*/Makefile.in "$S"/wine/programs/*/Makefile.in; d
   [ ! -f "$f" ] || LC_ALL=C /usr/bin/grep -qaF "$sig" "$f" || echo "$m"
 done)
 [ -z "$out" ] || die "no version resource in $(echo "$out" | tr '\n' ' ')(their Makefile.in sets VER_)"
+# The CRT and DirectX redistributables' builtins still replace a game's own x64 copies (batch Task 7).
+prefer_native_check "$R/lib/wine/aarch64-windows" "$S/wine"
 
 # 4. Stage.
 rm -rf "$OUT/wine.app"

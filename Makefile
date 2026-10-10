@@ -175,6 +175,7 @@ wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter 
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
 	sh wine-arm64/tests/translator_key_test.sh
+	sh wine-arm64/tests/prefer_native_test.sh build/wine-arm64/wine.app
 	sh wine-arm64/tests/licences_test.sh build/wine-arm64/wine.app
 	sh wine-arm64/tests/licences_test.sh --self-test build/wine-arm64/wine.app
 	sh wine-arm64/check.sh

@@ -231,6 +231,9 @@ re-clone; that is why they wait for the rebase.
   sets `VER_` and that ships without a version resource.
 - Keep patch 0014 even if it looks unneeded: a missing dylib then falls back silently instead of crashing
   (`docs/research/2026-10-04-ship-base/brief.md`).
+- bundle.sh's prefer_native_check fails if a CRT or DirectX redistributable builtin prefers native, ntdll reads another
+  prefer-native bit, or version_heuristics stops sending Microsoft DLLs to LO_DEFAULT: read upstream's reason before
+  changing CRT_BUILTINS.
 
 ## Licences
 

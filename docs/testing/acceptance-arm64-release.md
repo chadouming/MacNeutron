@@ -2120,3 +2120,111 @@ and end):
 - Not covered: the mutually misaligned copy (the lanes' `-offset` rows are co-aligned); a game's own use. The routines
   read within the 16- or 32-byte aligned chunk that holds a string's last byte, never past its 4 KB page (strlen's
   unaligned first 32 bytes only when they can't cross one), so they fault nowhere the byte loops didn't.
+
+## Redistributable builtins (batch Task 7)
+
+2026-10-10. **`bundle.sh` now fails if the CRT and DirectX redistributables' builtins could stop replacing a game's own
+x64 copies** (native REPORT §3 R7, Ruling R14). Wine replaces a Microsoft DLL in a game's folder with its builtin of
+that name because `version_heuristics` sends a DLL whose CompanyName is Microsoft to `LO_DEFAULT`
+(`dlls/ntdll/unix/loadorder.c:431`) and the builtin doesn't prefer native (Wine's 0x10 in the DllCharacteristics,
+`tools/winebuild/build.h:210`, read by `dlls/ntdll/unix/unix_private.h:430`). A builtin that prefers native, or a
+rebase that changes either rule, leaves the game's x64 copy running under FEX, silently. No Wine patch: Wine stays at
+0035 (887f9c1).
+
+**The guard.** `lib.sh`'s `prefer_native_check <aarch64-windows dir> <Wine source tree>`, called by `bundle.sh` after
+the version-resource check, before staging (a failure stages nothing). It dies when one of `CRT_BUILTINS` has 0x10 set
+(or its DllCharacteristics can't be read), when `unix_private.h` no longer defines
+`IMAGE_DLLCHARACTERISTICS_PREFER_NATIVE` as `0x0010`, or when `loadorder.c` no longer has the row
+`{'M','i','c','r','o','s','o','f','t',0}, LO_DEFAULT }`. `CRT_BUILTINS`, 26 names:
+
+```
+ucrtbase vcruntime140 vcruntime140_1 msvcp140 msvcp140_1 msvcp140_2 msvcp140_atomic_wait msvcp140_codecvt_ids
+concrt140 vcomp140 msvcr120 msvcp120 msvcr100 msvcp100 d3dcompiler_43 d3dcompiler_47 d3dx9_43
+d3dx10_43 d3dx11_43 xaudio2_7 xaudio2_9 x3daudio1_7 xapofx1_5 xinput1_3 xinput1_4 xinput9_1_0
+```
+
+On today's bundle all 26 read `0x160` and `mfplat.dll` `0x170` (`t7-guard-messages.log`). `msvcp60` also prefers
+native (`0x170`), upstream's choice, and isn't listed; the README's "Next Wine rebase" says to read upstream's reason
+before changing the list. The guard's messages, from scratch copies (`t7-guard-messages.log`):
+`ucrtbase.dll prefers native (0x170): a game's x64 copy would run under FEX` (mfplat.dll copied over it), `can't read
+xinput9_1_0.dll's DllCharacteristics` (missing), `ntdll no longer reads prefer-native as 0x0010
+(dlls/ntdll/unix/unix_private.h)` (0x0020), `loadorder.c's version_heuristics no longer sends Microsoft DLLs to
+LO_DEFAULT` (the row removed); each exit 1, and today's bundle and tree exit 0.
+
+**The test.** `wine-arm64/tests/prefer_native_test.sh <wine.app>`, in `make wine-arm64-check` after
+`translator_key_test.sh`: the staged bundle and the Wine tree pass; scratch copies of the 26 DLLs with `ucrtbase.dll`
+replaced by `mfplat.dll` fail saying `ucrtbase.dll prefers native`; a scratch `dlls/ntdll/unix` whose `loadorder.c`
+sends Microsoft DLLs to `LO_NATIVE_BUILTIN` (the brief's `sed`, checked to have changed the file) fails saying
+`version_heuristics no longer sends`. Red first, before `lib.sh` had the guard: `prefer_native_check: command not
+found`, `FAIL prefer_native_test: today's bundle and Wine tree`, exit 1 (`t7-red.log`); then `PASS prefer_native_test`
+(`t7-green.log`). `make wine-arm64` staged the bundle with the guard passing (`t7-build.log`); with `msvcp60` added to
+the list for one run, it stopped with `wine-arm64: msvcp60.dll prefers native (0x170): a game's x64 copy would run
+under FEX`, staging nothing (`t7-bundle-red.log`), and the list was put back.
+
+**The audit** (the controller's, Step 3): SMITE 2's lobby, logging on (`MACNEUTRON_LOG=1`), the log of 2026-10-09:
+
+```
+Loaded L"C:\\windows\\system32\\xaudio2_9.dll" … : builtin
+Loaded L"~\\…\\SMITE 2\\Windows\\Engine\\Binaries\\ThirdParty\\Windows\\XAudio2_9\\x64\\xaudio2_9redist.dll" … : native
+```
+
+No `amd_ags_x64.dll`. The game's `xaudio2_9redist.dll` exports XAudio2Create, CreateAudioReverb,
+CreateAudioVolumeMeter, CreateFX, X3DAudioCalculate and X3DAudioInitialize. Wine has no `xaudio2_9redist` builtin, so
+the game's copy stays mapped and runs under FEX, but it hands its work to the builtin `xaudio2_9`: only its creation
+entry runs as x64 code (builtin-overrides §5.2, rank 4). **xaudio2_9redist.dll loads native but delegates
+to the builtin xaudio2_9 (SMITE 2 lobby log, 2026-10-09); the forwarder was not built (maintainer, 2026-10-10).** Steps
+4-6 (Wine 0036, the `redist` step) were skipped; Wine 0036 stays free.
+
+**Lanes** (`build/lanes/t7/` against `build/lanes/t6/`; the same Wine 0035 applied build (887f9c1, clean), FEX and test
+programs as t6, so the only change is `bundle.sh`'s check, which runs before staging and writes nothing into the
+bundle). Three runs back to back under `caffeinate -i`, 12:16:18-12:24:43, AC at every start and end, idle checks empty,
+load 2.33 / 5.28 / 4.16 at the starts and 3.36 at the end; Steam (running, never touched here) was idle at the first
+start and at about 99 % of one core from run 1's end into run 2, idle again by run 2's end (`t7-lanes-run{1,2,3}.log`;
+`lanes_report.py build/lanes/t6 build/lanes/t7` in `t7-lanes-t6-vs-t7.log`, the t7 table in `t7-lanes-table.md`).
+17 of the 99 rows are outside the band, all small:
+
+| row | lane | t6 | t7 | Δ % |
+|---|---|---|---|---|
+| sync uncontended-wait | arm64 | 80.0 (77.0–83.0) | 72.0 (39.0–76.0) | −10.0 |
+| sync wait-any-wake | x64 | 7708 (7532–7836) | 7953 (7923–8037) | +3.2 |
+| sync alertable-wake | arm64ec | 7588 (7380–7630) | 7816 (7650–7822) | +3.0 |
+| sync alertable-wake | x64 | 7684 (7579–7684) | 7878 (7872–7896) | +2.5 |
+| sync auto-pool-8 | arm64ec | 49937 (48955–49946) | 47946 (46972–47959) | −4.0 |
+| sync auto-pool-8 | x64 | 50946 (50944–50954) | 48958 (46970–48961) | −3.9 |
+| xcall qpc | arm64 | 15.4 (15.4–15.4) | 15.8 (15.5–16.5) | +2.6 |
+| xcall qpc | arm64ec | 16.0 (16.0–16.0) | 17.1 (16.1–18.6) | +6.9 |
+| xcall qpc | x64 | 43.2 (43.0–43.7) | 44.9 (43.9–46.1) | +3.9 |
+| xcall istream-addref | x64 | 24.7 (24.7–24.8) | 25.7 (25.6–26.1) | +4.0 |
+| xcall memcpy-16 | x64 | 25.7 (25.4–25.9) | 26.3 (26.2–27.5) | +2.3 |
+| xcall memcpy-256 | arm64ec | 3.2 (3.2–3.3) | 3.5 (3.4–3.6) | +9.4 |
+| xcall memcpy-256 | x64 | 26.4 (26.1–26.8) | 27.4 (26.9–28.4) | +3.8 |
+| xcall memcpy-256-offset | arm64ec | 3.3 (3.2–3.4) | 3.5 (3.5–3.6) | +6.1 |
+| xcall memcpy-256-offset | x64 | 26.4 (26.1–26.4) | 26.8 (26.5–27.9) | +1.5 |
+| xcall memcpy-4k-offset | arm64 | 44.1 (44.1–44.1) | 44.3 (44.2–47.2) | +0.5 |
+| xcall qsort-4k | x64 | 3360200 (3353320–3362680) | 3376750 (3372700–3549350) | +0.5 |
+
+They go both ways, in rows whose code comes from the same sources in both sets; the report's other 82 rows are inside
+the band, `strlen-1k` among them (9.8 / 9.6 / 32.8 → 9.9 / 9.7 / 34.0 ns). **A second set** with Steam quiet
+(`build/lanes/t7b/`, the bundle restaged on the commit, same Wine; 13:12:36-13:20:16, AC, idle checks empty, load 2.08 /
+3.08 / 3.26 at the starts, Steam 0.2-0.3 % until run 3's end; `t7b-lanes-run{1,2,3}.log`) has 6 rows outside the band
+against t6, all within 1.0-2.7 % and both ways: create-close x64 −1.6 %, auto-pool-8 x64 −2.0 %, alertable-wake
+arm64ec +1.7 %, memcpy-16 x64 +2.7 %, memcpy-256-offset x64 +1.9 %, qsort-4k x64 +1.0 % (`t7b-lanes-t6-vs-t7b.log`).
+qpc and the arm64ec memcpy rows are back inside. t7 against t7b, the same build twice, has 5 rows outside
+(`t7b-lanes-t7-vs-t7b.log`): that is this measurement's floor between sessions, so the rows above are noise, not this
+task's, whose change is in no lane's code.
+
+**Gates** (Wine 0035 = 887f9c1, applied build, the bundle staged by `bundle.sh` with the guard; Steam up, `pgrep -lx
+steam_osx` 15329, read-only, before each run; AC at every start and end; the screen unlocked):
+- `make wine-arm64-check`, **one uninterrupted pass** (12:25:49-13:05:59, `t7-gate-check.log`), the batch's final gate:
+  the six repo tests pass (`prefer_native_test` among them), then every step from `macos` through `crt` PASS and
+  `PASS orphans`, exit 0. `g2-litmus` PASS (TSO on); `x18`: 35,598,100,000 checks, 0 bad, 0 crash reports; `msync`'s
+  cs-hold-10us-p999 112,500 / 108,500; `dxmt-present` and `dxmt-arm64ec` PASS on the first run; g4-bench geomean
+  0.949 / 0.908 / calls 1.104; fex-vmd MP 22,158 with EVMD over the module, 0 listed, 0 flags-only, mem_seq 0.46 /
+  0.41 with the ranges (0.95 / 1.03 without); winetests only the six listed `sync.c:416/:420`, msvcrt:string 410,075
+  tests and 0 failures in each lane; `ec-hook` and `crt` PASS.
+- `make test`: 252 tests passed. `make smoke`: 15 PASS. `make bridge-check`: 15 `ok`, exit 0. `make media-check`:
+  unchanged (`FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf:
+  stage=video-type hr=0xc00d5212`). Logs `t7-gate-{test,smoke,bridge-check,media-check}.log`.
+- Not covered: a game that ships one of the 26 DLLs in its folder is not run here (the guard checks the rules that send
+  it to the builtin, not a game's load); `CRT_BUILTINS` is a fixed list, so a redistributable builtin Wine adds later is
+  guarded only once someone lists it.
