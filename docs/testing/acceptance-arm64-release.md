@@ -1790,3 +1790,109 @@ in `os_sync_wake`, ~0.02 claims per op on ARM, 0.14 on x64). A waker that skips 
 halves K4 on the harness but costs CPU in the oversubscribed O1 row; a design that keeps the waker cheap without a timed
 nap, or a nap whose expiries cost less under oversubscription, is the next step, measured on the lanes. Also open:
 msync's abandoned mutex on TerminateThread (kernel32 `sync.c:416/:420`), and the x64 kernel32 "not acquired" ERR.
+
+## ARM64EC auxiliary IAT (batch Task 5)
+
+2026-10-10. **Wine patch 0034 (`ntdll: Fill the ARM64EC auxiliary IAT and revert an entry when what it was resolved
+through is made writable.`, `macneutron` 6fe9c96 on 79874a0) fills an ARM64EC importer's auxiliary IAT at load and puts
+an entry back on its check stub when a page it was resolved through is made writable (Ruling R13, option B).** It is
+ours and local only. The arm64ec lane's import calls drop to, or toward, the arm64 lane's cost: get-current-thread-id,
+get-last-error and tls-get-value 1.7-2.5 → 0.7 ns, get-tick-count 1.7 → 1.1, memcpy-16 3.0 → 1.9.
+
+What 0034 does (`dlls/ntdll/signal_arm64ec.c`, `loader.c`, `ntdll_misc.h`):
+- **The fill.** Once a module's imports are bound (`fixup_imports`, not under `+relay` or `+snoop`), each entry whose
+  auxiliary and `AuxiliaryIATCopy` values are equal and inside the importer (the import's check stub) is resolved as
+  `arm64x_check_call` would: EC code as is, an FFS to its EC target, one `ff 25` hop to either. Only memory inside a
+  loaded image is read; anything else (syscall stubs, `allocate_stub`'s stubs, an alias whose slot isn't bound yet) keeps
+  the checker, and so does anything resolved through a page that is writable. The auxiliary IAT is written through the
+  raw `NtProtectVirtualMemory` syscall, never the wrapper.
+- **What a filled entry records:** the importer's IAT entry, then each code address and `ff 25` slot read (`dep[4]`),
+  and their pages in a 65,536-bit hash, so a protect anywhere else costs a few bit tests and no lock.
+- **The revert.** A protect to a writable protection in this process (the `NtProtectVirtualMemory` wrapper, both paths,
+  after the protect and so before the hooker writes) and, from another process, a writable post-protect, a flush or a
+  write on the cross-process work list put back to its stub every entry with a dependency in the range; an overflowed
+  list puts back everything. Entries resolved through other pages stay filled.
+- **The order** (bits, then the page query, then a second resolve, under `aux_lock`): a hooker on another thread either
+  sees the bits and reverts after the fill, or protected before the query (which then sees the page writable), or wrote
+  and restored before it (the second resolve then reads the patched bytes).
+- **The forget.** `free_modref` drops a module's entries before it unmaps the view, without writing them.
+
+**The `ec-hook` step** (`check.sh`, in `BATCH` after `winetests`; crash dialog off): `arm64ec-hook.exe` (ARM64EC) prints
+`ok`/`FAIL` for five rows: `filled` (GetTickCount, an FFS export, and GetLastError, kernel32's `ff 25` alias to
+kernelbase, hold EC code outside the exe); `ffs-hook` (`mov eax, 0x5eed; ret` written over kernel32's GetTickCount FFS
+after a VirtualProtect: the ARM64EC call gets 0x5eed, and the real value once the bytes are back); `per-entry`
+(GetLastError's entry, on other pages, is still filled after that hook); `iat-hook` (the exe's regular IAT entry for
+TlsGetValue made writable and pointed at an EC function: the ARM64EC call runs it); `unload` (version.dll loaded and
+freed, its old range allocated, filled with 0x5a and protected writable: no byte changes).
+
+**RED → GREEN** (`check.sh ec-hook`, logs `t5-red.log`, `t5-green-step3.log`, `t5-green-step4.log`, `t5-green.log`):
+- On 0033: `FAIL filled` twice (the entries are the exe's stubs, 0x140002C20 and 0x140002BC0), `FAIL ffs-hook` and `FAIL
+  iat-hook` (not filled before the hook), `FAIL per-entry`, `ok unload`: `4 of 5 rows failed (first: filled)`.
+- The fill alone: `ok filled`, `ok per-entry`, `ok unload`; `ffs-hook` (GetTickCount returned 946230175, the real
+  count) and `iat-hook` (TlsGetValue returned 0) fail: hooks applied after load miss ARM64EC callers.
+- With the revert: only `unload` fails, `version.dll's old range changed at +0xb000 after FreeLibrary`: a stale entry's
+  stub written into the new allocation (version.dll's auxiliary IAT is at 0xB000 in this build).
+- With the forget: five `ok`, `PASS arm64ec-hook`, `PASS ec-hook`, `PASS orphans`.
+- `check.sh winetests ec-hook` on the final code: `PASS winetests`, failing only at the six listed `sync.c:416/:420`
+  locations, and `PASS ec-hook`.
+
+**Lanes** (`build/lanes/t5/`, against `build/lanes/t8/`; three runs back to back under `caffeinate -i`, AC at every start
+and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/lanes/t8 build/lanes/t5`):
+
+| Row (ns), median (min–max) of 3 | arm64, t8 | arm64ec, t8 | arm64ec, t5 | arm64ec − arm64, t8 → t5 |
+|---|---|---|---|---|
+| xcall `get-current-thread-id` | 0.7 (0.7–0.7) | 1.7 (1.7–1.7) | 0.7 (0.7–0.7) | +1.0 → 0.0 |
+| xcall `get-last-error` | 0.9 (0.9–0.9) | 2.4 (2.2–2.4) | 0.7 (0.7–0.7) | +1.5 → −0.2 |
+| xcall `tls-get-value` | 0.9 (0.8–0.9) | 2.5 (2.4–2.5) | 0.7 (0.7–0.7) | +1.6 → −0.2 |
+| xcall `get-tick-count` | 0.7 (0.7–0.7) | 1.7 (1.7–1.8) | 1.1 (1.1–1.1) | +1.0 → +0.4 |
+| xcall `qpc` | 15.4 (15.4–15.4) | 16.8 (16.8–16.8) | 15.9 (15.9–15.9) | +1.4 → +0.5 |
+| xcall `memcpy-16` | 1.9 (1.9–2.0) | 3.0 (2.6–3.0) | 1.9 (1.9–2.2) | +1.1 → 0.0 |
+| sync `cs-uncontended` | 6.0 (6.0–6.0) | 7.0 (4.0–7.0) | 6.0 (6.0–6.0) | +1.0 → 0.0 |
+
+- All four target rows are lower and outside the band. So are the arm64ec lane's qpc (−5.4 %), memcpy-16/-256 and their
+  offset forms (−15 to −37 %), waitonaddress-uncontended (15 → 10 ns) and uncontended-signal (42 → 38).
+- The arm64 lane doesn't move (it has no auxiliary IAT); cs-uncontended arm64ec 7 → 6 is inside the band.
+- Outside the band on the worse side: xcall get-tick-count x64 23.8 → 24.6 (+3.4 %), tls-get-value x64 24.4 → 24.6
+  (+0.8 %) and sync alertable-wake arm64ec (+2.1 %). The x64 lane's other xcall rows don't move and alertable-wake is a
+  7 µs wake; not explained, read as session variance.
+
+**Gates** (0034 = 6fe9c96; Steam up, `pgrep -lx steam_osx` 15329, before the run; AC at start and end):
+- `make wine-arm64-check`: every step PASS up to `dxmt`, among them `isec`, `viewec`, `x18` (0 bad x18 checks, 0 crash
+  reports) and `msync` (`info msync 1 cs-hold-10us-p999 49300`, `info msync 0 … 49500`); then `FAIL dxmt-present:
+  arm64ec present_loop: winshot: screencapture of window 62727 failed` with present_loop's 3000 frames done (8.324 ms
+  average) and the console locked (`IOConsoleLocked` Yes): Ruling R17's case, as in Task 8. The steps after it, run by
+  name (`check.sh dxmt-arm64ec dxmt-x64 g4-bench fex-vmd winetests ec-hook`, 1,954 s): all PASS and `PASS orphans`
+  (g4-bench geomean 0.938 / 0.911 / calls 1.076; fex-vmd MP 15,834 with EVMD, 0 listed, 0 flags-only, mem_seq 0.49 /
+  0.39 of default; winetests failing only at the six listed locations).
+- `make test`: 252 tests passed. `make smoke`: 15/15. `make bridge-check`: passed (15 `ok`). `make media-check`:
+  unchanged (`FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf: stage=video-type
+  hr=0xc00d5212`).
+- Export: `make wine-arm64-export` wrote one new file,
+  `wine-arm64/patches/wine/0034-ntdll-Fill-the-ARM64EC-auxiliary-IAT-and-revert-an-e.patch`; the fresh-fetch proof
+  printed `applied 34/34` and `tree-equal` (tree 658f66dc…). An applied-mode rebuild stages the same ntdll (its
+  disassembly's SHA-256 is unchanged).
+
+**Where the code differs from the plan's text**, each for a reason found while building it:
+- `aux_revert`'s lock-free test is the page hash alone, without the plan's "nothing filled" count check: a fill sets the
+  bits before its page query but counts an entry only after it, so a hooker whose protect lands between the two would
+  read a count of 0, skip the revert and then write while the entry is filled. A range over 64 pages takes the lock and
+  scans, whether or not anything is filled.
+- The fill queries pages with the raw syscall: ntdll's `NtQueryVirtualMemory` is hybrid-patchable, and its call from EC
+  code goes through `__os_arm64x_dispatch_call` on the x64 export (`#NtQueryVirtualMemory` → `EXP+#NtQueryVirtualMemory`
+  in the object), so an x64 hook on it would run under `aux_lock`, where a VirtualProtect, or FEX processing the
+  cross-process list before it compiles the hook, would take the lock again. `NtQueryVirtualMemory` becomes a
+  pass-through wrapper over `syscall_NtQueryVirtualMemory`, like `NtQuerySystemInformation`; the x64 view's syscall
+  stub (`signal_x86_64.c`) is unchanged.
+- The `ec-hook` step sets ShowCrashDialog=0 in its prefix before running the program (the rows write x64 code into
+  kernel32 and an IAT entry).
+- The array is sized for all of the module's IAT entries, an upper bound on its candidates, rather than counted first.
+
+**Gaps.**
+- A protect or a write from another process takes effect here before FEX next processes the work list (on its next
+  syscall, FEX's `Source/Windows/ARM64EC/Module.cpp:520`), so calls in that window still skip the hook.
+- Delay-load IATs are not filled; syscall stubs stay on the checker.
+- An entry resolved through a page that was writable at load keeps the checker for the process's lifetime (a fill is
+  never retried).
+- A hooker that writes an auxiliary IAT entry itself (an ARM64EC-aware IAT hook) is not tracked: a later revert through
+  another dependency's page puts the stub back over its value.
+- No Windows primary source says which entries Windows fills or how it detects patching; the per-entry revert is ours.

@@ -56,7 +56,7 @@ LANES="lanes"
 NEEDS_PREFIX="$NEEDS_PREFIX $LANES"
 NEEDS_FEX="$NEEDS_FEX $LANES"
 # The batch's gated steps (batch Tasks 4-8): each needs the prefix with FEX; they run after the rest.
-BATCH="fex-vmd winetests"
+BATCH="fex-vmd winetests ec-hook"
 STEPS="$STEPS $BATCH" NEEDS_PREFIX="$NEEDS_PREFIX $BATCH" NEEDS_FEX="$NEEDS_FEX $BATCH"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
@@ -775,6 +775,13 @@ winetests_cmd() {
   [ -z "$fails" ] || { echo "FAIL winetests: $fails"; return 1; }
 }
 
+# The ARM64EC auxiliary IAT (batch Task 5, Wine 0034): arm64ec-hook's rows, crash dialog off (the rows write x64 code
+# into kernel32 and an IAT entry; a crash ends the run).
+ec_hook_cmd() {
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f > /dev/null || return 1
+  exe_cmd arm64ec-hook
+}
+
 run_step() {
   case $1 in
     macos) step macos 10 macos_cmd ;;
@@ -813,6 +820,7 @@ run_step() {
     lanes) step lanes 900 lanes_cmd; grep '^info ' "$WORK/lanes.log" ;;
     fex-vmd) step fex-vmd 900 fex_vmd_cmd; grep '^info ' "$WORK/fex-vmd.log" ;;
     winetests) step winetests 1800 winetests_cmd; grep '^info ' "$WORK/winetests.log" ;;
+    ec-hook) step ec-hook 60 ec_hook_cmd ;;
     *) die "no runner for $1" ;;
   esac
 }
