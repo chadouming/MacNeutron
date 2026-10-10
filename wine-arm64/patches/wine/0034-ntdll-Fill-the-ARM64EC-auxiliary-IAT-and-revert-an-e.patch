@@ -27,9 +27,10 @@ is the raw syscall: the NtQueryVirtualMemory export is hybrid-patchable, and an 
 aux_lock. The fill reads a page only once the query says it is committed and readable, so it can't fault under the
 loader lock and aux_lock. The revert's lock-free test is the hash alone: an entry is counted only after its query.
 
-The fill and the forget hold aux_lock as a syscall callback, so a suspend waits for the doorbell, as it does for FEX's
-own lock holders: a hooker that freezes every other thread and then protects a page (MinHook) would otherwise wait
-forever for a fill it froze.
+Every aux_lock holder (the fill, the forget and the revert) holds it as a syscall callback, so a suspend waits for the
+doorbell, as it does for FEX's own lock holders: a hooker that freezes every other thread and then protects a page
+(MinHook) would otherwise wait forever for a fill it froze. From the cross-process work list FEX runs the revert with
+InSimulation set, so leaving the callback there leaves the doorbell to FEX.
 
 An unloaded module's entries are dropped before its view is unmapped.
 
@@ -43,8 +44,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  dlls/ntdll/loader.c         |   6 +
  dlls/ntdll/ntdll_misc.h     |   2 +
- dlls/ntdll/signal_arm64ec.c | 304 +++++++++++++++++++++++++++++++++++-
- 3 files changed, 310 insertions(+), 2 deletions(-)
+ dlls/ntdll/signal_arm64ec.c | 310 +++++++++++++++++++++++++++++++++++-
+ 3 files changed, 316 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
 index b0b2392..a993008 100644
@@ -84,7 +85,7 @@ index 2bf3cfa..35efa4e 100644
  
  extern void *__os_arm64x_check_call;
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 923ba88..d73c052 100644
+index 923ba88..ab268c8 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -524,7 +524,7 @@ DEFINE_SYSCALL(NtQuerySystemTime, (LARGE_INTEGER *time))
@@ -96,7 +97,7 @@ index 923ba88..d73c052 100644
  DEFINE_SYSCALL(NtQueryVolumeInformationFile, (HANDLE handle, IO_STATUS_BLOCK *io, void *buffer, ULONG length, FS_INFORMATION_CLASS info_class))
  DEFINE_SYSCALL(NtQueueApcThread, (HANDLE handle, PNTAPCFUNC func, ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3))
  DEFINE_SYSCALL(NtQueueApcThreadEx, (HANDLE handle, HANDLE reserve_handle, PNTAPCFUNC func, ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3))
-@@ -614,6 +614,287 @@ DEFINE_SYSCALL(NtWriteRequestData, (HANDLE handle, LPC_MESSAGE *request, ULONG i
+@@ -614,6 +614,293 @@ DEFINE_SYSCALL(NtWriteRequestData, (HANDLE handle, LPC_MESSAGE *request, ULONG i
  DEFINE_SYSCALL(NtWriteVirtualMemory, (HANDLE process, void *addr, const void *buffer, SIZE_T size, SIZE_T *bytes_written))
  DEFINE_SYSCALL(NtYieldExecution, (void))
  
@@ -347,6 +348,7 @@ index 923ba88..d73c052 100644
 +    ULONG_PTR end = ((ULONG_PTR)addr + size + 0xfff) & ~(ULONG_PTR)0xfff;
 +    ULONG_PTR page;
 +    unsigned int i, k;
++    BOOL callback;
 +
 +    /* no early-out on the entry count: a fill sets the bits before its query but counts an entry only after it,
 +     * so a count read here could miss an entry being filled; the bits are the lock-free test */
@@ -360,6 +362,10 @@ index 923ba88..d73c052 100644
 +        if (page >= end) return;
 +    }
 +
++    /* as in the fill: every aux_lock holder can only be suspended cooperatively. From the NtProtectVirtualMemory
++     * wrapper this is already set; from the cross-process work list FEX runs it with InSimulation set, so the leave
++     * clears the flag and leaves the doorbell to FEX */
++    callback = enter_syscall_callback();
 +    RtlAcquireSRWLockExclusive( &aux_lock );
 +    for (i = aux_count; i--;)
 +    {
@@ -379,12 +385,13 @@ index 923ba88..d73c052 100644
 +        __atomic_store_n( &aux_count, aux_count - 1, __ATOMIC_SEQ_CST );
 +    }
 +    RtlReleaseSRWLockExclusive( &aux_lock );
++    if (callback) leave_syscall_callback();
 +}
 +
  NTSTATUS SYSCALL_API NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR zero_bits,
                                                SIZE_T *size_ptr, ULONG type, ULONG protect )
  {
-@@ -779,7 +1060,11 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+@@ -779,7 +1066,11 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
      NTSTATUS status;
  
      if (!enter_syscall_callback())
@@ -397,7 +404,7 @@ index 923ba88..d73c052 100644
  
      if (!is_current) send_cross_process_notification( process, CrossProcessPreVirtualProtect,
                                                        *addr_ptr, *size_ptr, 2, new_prot, 0 );
-@@ -791,10 +1076,20 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+@@ -791,10 +1082,20 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
                                                        *addr_ptr, *size_ptr, 2, new_prot, status );
      else if (pNotifyMemoryProtect) pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, TRUE, status );
  
@@ -418,7 +425,7 @@ index 923ba88..d73c052 100644
  NTSTATUS SYSCALL_API NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class, void *info, ULONG size, ULONG *ret_size )
  {
      NTSTATUS status = syscall_NtQuerySystemInformation( class, info, size, ret_size );
-@@ -971,6 +1266,7 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
+@@ -971,6 +1272,7 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
  
      if (flush)
      {
@@ -426,7 +433,7 @@ index 923ba88..d73c052 100644
          if (pFlushInstructionCacheHeavy) pFlushInstructionCacheHeavy( NULL, 0 );
          while (entry)
          {
-@@ -983,6 +1279,10 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
+@@ -983,6 +1285,10 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
  
      while (entry)
      {

@@ -1794,7 +1794,7 @@ msync's abandoned mutex on TerminateThread (kernel32 `sync.c:416/:420`), and the
 ## ARM64EC auxiliary IAT (batch Task 5)
 
 2026-10-10. **Wine patch 0034 (`ntdll: Fill the ARM64EC auxiliary IAT and revert an entry when what it was resolved
-through is made writable.`, `macneutron` 7b65406 on 79874a0, after fix round 1; 6fe9c96 before it) fills an ARM64EC importer's auxiliary IAT at load and puts
+through is made writable.`, `macneutron` c2c443d on 79874a0, after fix round 1 and Ruling R47; 6fe9c96 before them) fills an ARM64EC importer's auxiliary IAT at load and puts
 an entry back on its check stub when a page it was resolved through is made writable (Ruling R13, option B).** It is
 ours and local only. The arm64ec lane's import calls drop to, or toward, the arm64 lane's cost: get-current-thread-id,
 get-last-error and tls-get-value 1.7-2.5 → 0.7 ns, get-tick-count 1.7 → 1.1, memcpy-16 3.0 → 1.9.
@@ -1816,8 +1816,9 @@ What 0034 does (`dlls/ntdll/signal_arm64ec.c`, `loader.c`, `ntdll_misc.h`):
   another thread either sees the bit and reverts after the fill, or protected before the query (which then sees the page
   writable), or wrote and restored before it (the second resolve then reads the patched bytes). A page is read only once
   its query says it is committed and readable, so the fill can't fault under the loader lock and `aux_lock`.
-- **Suspension.** The fill and the forget hold `aux_lock` as a syscall callback, so a suspend that arrives meanwhile
-  waits for the doorbell, as it does for FEX's own lock holders.
+- **Suspension.** The fill, the forget and the revert hold `aux_lock` as a syscall callback, so a suspend that arrives
+  meanwhile waits for the doorbell, as it does for FEX's own lock holders. From the cross-process work list FEX runs the
+  revert with InSimulation set, so leaving the callback there leaves the doorbell to FEX.
 - **The forget.** `free_modref` drops a module's entries before it unmaps the view, without writing them.
 
 **The `ec-hook` step** (`check.sh`, in `BATCH` after `winetests`; crash dialog off): `arm64ec-hook.exe` (ARM64EC) prints
@@ -1898,6 +1899,9 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
   own syscalls don't drain it, so in a process that never enters FEX the window has no bound. Calls in it skip the hook.
 - The cross-process revert is untested: every `ec-hook` row hooks from inside the process (review finding F3, not in
   fix round 1).
+- Known minor (Ruling R47, recorded, not fixed): a page made `PAGE_NOACCESS` between the fill's query and its read still
+  faults under the loader lock and `aux_lock`. A no-access protect isn't writable, so it never waits on `aux_lock`: no
+  lock cycle.
 - Delay-load IATs are not filled; syscall stubs stay on the checker.
 - An entry resolved through a page that was writable at load keeps the checker for the process's lifetime (a fill is
   never retried).
@@ -1933,4 +1937,21 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
 - Re-export: `git status --short wine-arm64/patches` shows only ` M …/0034-ntdll-Fill-the-ARM64EC-auxiliary-IAT-and-revert-an-e.patch`;
   the fresh-fetch proof prints `applied 34/34` and `tree-equal` (tree f7b61747…); an applied-mode rebuild stages the
   tested ntdll (disassembly SHA-256 137d8999…).
-- The full gate was not re-run after the fix; the gates above are 6fe9c96's.
+- **Ruling R47:** the revert's own `aux_lock` hold is bracketed too (`enter_syscall_callback` when InSyscallCallback isn't
+  set, the matching leave), so every holder can only be suspended cooperatively. The three acquisition sites: the fill,
+  the forget and `aux_revert`, all bracketed; `aux_revert`'s callers are the wrapper's two paths (InSyscallCallback
+  already set, so the bracket is a no-op there) and the cross-process work list. Read in the code: every way into
+  `KiUserEmulationDispatcher`, and so into FEX's BeginSimulation → SyncThreadContext → the work list, sets InSimulation
+  first (`unix/signal_arm64.c:346` restore_context, `:1521` the SIGUSR2 return to emulated code, `signal_arm64ec.c`
+  dispatch_syscall), and FEX's HandleSyscall and PreCompile run inside the JIT, which sets it (`Module.S` enter_jit);
+  InSyscallCallback is not set on those paths. 0034 amended again (c2c443d), re-exported (only 0034's file changed),
+  `applied 34/34`, `tree-equal` (tree af2fbae3…); the applied-mode rebuild stages the tested ntdll (disassembly SHA-256
+  55d29f8a…). `ec-hook` 3/3 with all six rows `ok` (49,211-53,574 rounds, 1,984-2,046 loads); `check.sh winetests
+  ec-hook`: only the six listed locations.
+- **The full gate on c2c443d** (Steam up, `pgrep -lx steam_osx` 15329; AC at start and end): `make wine-arm64-check`
+  every step PASS up to `dxmt` (`msync` cs-hold-10us-p999 48,500 / 50,200; x18 0 bad, 0 crash reports), then `FAIL
+  dxmt-present: arm64ec present_loop: winshot: screencapture of window 63272 failed` with present_loop's 3000 frames done
+  (8.325 ms) and the console locked (R17). The steps after it by name (`dxmt-arm64ec dxmt-x64 g4-bench fex-vmd winetests
+  ec-hook`, 1,962 s): all PASS and `PASS orphans` (g4-bench geomean 0.907 / 0.898 / calls 1.103; fex-vmd MP 1,997 with
+  EVMD, 0 listed, 0 flags-only, mem_seq 0.49 / 0.38 of default). `make test` 252 passed, `make smoke` 15/15, `make
+  bridge-check` passed (15 `ok`), `make media-check` unchanged. Logs `t5-r47-*.log`.
