@@ -1510,3 +1510,283 @@ batch's `t4-final-gate-wine-arm64-check.log`, `t4-final-gate-fex-vmd-step.log`, 
 - `make smoke`: 15/15.
 - `make bridge-check`: 15 `ok`.
 - `make media-check`: not re-run on this build (the first gate's result is above).
+
+
+## Critical sections on the Windows encoding (batch Task 8)
+
+2026-10-10. **Wine patch 0033 (`ntdll: Use the Windows 2003 SP1+ LockCount encoding for critical sections.`, `macneutron`
+79874a0 on 0771adf) ships as C1: `CS_SPIN_DEFAULT 0`, the Windows 2003 SP1+ LockCount encoding, barging, one claim in
+flight, explicit SpinCount spins through one slot.** It is ours and local only. It halves the ARM lanes' contended
+critical section (cs-contended-4 81/96 → 47/47 ns), keeps cs-uncontended at 6/7 ns and leaves the long-hold tail flat,
+but misses design §9's lanes confirmation (a) and (b) (≤ 30/31 ns on ARM, x64 ≤ 1.5 × uncontended). The rulings that
+got here: R36 (C1 unless C2-b1000 meets all three rows), R38 (a test fix in 0033 so ntdll:rtl reports in every lane),
+R39 (kernel32's two failures are listed), R40 (measure where C1's contended cost goes), R42/R44 (try a nap that skips the
+waker's alert; one bounded iteration, then ship C1 if O1 fails). The follow-up is at the end of this section.
+
+**Step 0, G0 (the controller's; the design's stop-a-thread test, AC power, 1000/1000 each):** stop-C1 -s 0 points
+0-5 236/490/0/0/274/0 (points 2, 3 and 5 unreachable at budget 0); stop-C1 -s 4000 75/549/24/292/52/8; stop-C2-b1000
+-s 0 63/555/20/286/64/12; -s 4000 68/559/14/292/58/9. The interleaving model passed at C1 (3,2,2,1) and C2 (2,2,2,1) and
+catches m-woken-takes-slot-keeping-claim (`cs-design/g0/summary.txt`).
+
+**The winetests step.** `make wine-arm64-winetests` builds `ntdll`, `kernel32`, `atl`, `atl100` and `msvcirt`'s test
+programs in two test-only Wine trees on wine-build's tools (`wine-tests-arm64`: aarch64; `wine-tests-ec`: arm64ec with
+x86_64 as a full PE arch), 15 programs in 47 s; `wine-build` stays `--disable-tests` and nothing is staged into
+wine.app. Its configure needs bison ≥ 3, so `winetests.sh` takes build.sh's `need_tool bison bison keg` (macOS ships
+2.3). `check.sh winetests` (in `BATCH` after `fex-vmd`) runs `ntdll:rtl`, `kernel32:sync`, `atl:module`, `atl100:atl` and
+`msvcirt:msvcirt` in all three lanes (x64 under FEX), crash dialog off and no `WINETEST_*` of the caller's; a test passes
+when it prints its summary line, exits with that line's failure count and fails only at locations in `WINETESTS_FAILS`.
+The whole check.sh run (boot, fex, winetests) takes 80-82 s; with the mutant below it hit its 1800 s cap, as designed.
+Before any program existed it failed naming all 15 lane/test pairs (`exit 53, no failures`).
+
+**RED-0, the baseline on Wine 0032** (three runs, 80/81/81 s). Every lane printed `rtl.c:3080` and `:3111: Test marked
+todo: expected LockCount == -2, got 0`, and the critical-section awk (rtl.c `:2943-3123`, kernel32 `test_crit_section`
+`:2937-3026`, `module.c:75`, `atl.c:157`, msvcirt's lock checks) printed nothing. Two pre-existing problems:
+- `ntdll:rtl` printed no summary line (exit 5) in the arm64ec and x64 lanes: `test_RtlDestroyHeap`'s breakpoint handler
+  takes its `__x86_64__` branch (`Rip += 1`) in ARM64EC and x64 builds, but the ARM64X ntdll's `DbgBreakPoint`
+  (`heap.c:1629-1632`) is a 4-byte ARM64 `brk`, so execution resumed at a misaligned PC (`+seh`: EXCEPTION_BREAKPOINT at
+  `…CA44`, then an access violation at `…CA45`). **Ruling R38:** 0033 also changes that line to advance by 1 only over an
+  int3 (`0xcc`), else by 4, a test fix the lanes need to report at all; one line, no key moved. With it (three more runs
+  on 0032): ntdll:rtl 600076 tests, 54 todo, 0 failures in all three lanes, and no further failure exposed.
+- kernel32:sync fails at `sync.c:416` and `:420` in all three lanes and all runs (`test_mutex`: a mutex whose owner
+  TerminateThread ends is never seen abandoned, `got 0x102`). Under `WINEMSYNC=0` the same program has 0 failures, so it is
+  msync's (Ruling R39: listed, a follow-up). **`WINETESTS_FAILS` = `arm64:sync.c:416 arm64:sync.c:420 arm64ec:sync.c:416
+  arm64ec:sync.c:420 x64:sync.c:416 x64:sync.c:420`**; no rtl.c location was listed, so nothing was re-keyed. The fourth
+  run printed `PASS winetests`.
+- Not a failure: `err:sync:RtlLeaveCriticalSection section 00006FFFFA205560 "?" is not acquired` appears in the x64 lane's
+  kernel32:sync stderr in 3 of 8 runs on 0032 and 1 of 2 on 0033, always at that address (some x64-side static section is
+  over-left); recorded, not chased.
+
+**The long-hold row.** x64-sync gains `cs-hold-10us-p999` (Ruling R36's H10-class row): 4 threads, 500 times each Enter,
+10 µs held, Leave, 10 µs outside (QPC busy-waits); per batch the p99.9 of the 2,000 waits (the third largest), the row
+the median of 21 batches. `SYNC_ROWS=17` failed first (`arm64-sync printed 16 of 17 time rows`), then a lanes run passed
+with 99 rows. The msync step runs it in both modes.
+
+**RED-1** (the five new tests in rtl.c, on 0032): exactly the eight expected failures per lane (`rtl.c:3079`, `:3109`:
+`expected LockCount == -2, got 0`; `one parked waiter: LockCount 1, expected -6`; `a claim in flight: LockCount 0,
+expected -3`; `TryEnter with a claim in flight failed, LockCount 0`; `after a recursive Enter: LockCount 1, RecursionCount
+2, expected -2, 2`; `after a recursive TryEnter: LockCount 2, RecursionCount 3, expected -2, 3`; `after two Leaves:
+LockCount 0, RecursionCount 1, expected -2, 1`); the stress, semaphore and suspend tests passed on the NT4 encoding.
+
+**GREEN (C1, H1 = `8d9bc932069ef7070748eeb76e9d06178850c16ee8b5176fc753cdf22275a5a3`):** `PASS winetests`, `PASS
+orphans`; ntdll:rtl 600122 tests, 52 todo, 0 failures in each lane; kernel32:sync 2 failures (the listed ones);
+atl:module 550/0, atl100:atl 229/0, msvcirt 6027/0. `Test marked todo: expected LockCount == -2` 0 times, `wait timed out`
+0 times in every `.err`, and the awk (rtl.c's range now `:2943-3299`) prints nothing. `pe_baseline_check` passes:
+arm64ec `sync.o` has 16 acquire loads and 3 release stores (14 / 3 before, acceptance :1018).
+
+| Function / object (aarch64 and arm64ec `sync.o`, the same) | before (0032) | after (0033) |
+|---|---|---|
+| `RtlEnterCriticalSection` | 2 casal, 2 ldaddal | 1 ldclral |
+| `RtlTryEnterCriticalSection` | 1 casal, 1 ldaddal | 1 ldclral |
+| `RtlLeaveCriticalSection` | 2 ldaddal | 1 ldsetal |
+| `cs_enter_slow` / `cs_leave_slow` | — | 3 casal / 1 casal |
+| whole object `ldclral` / `ldsetal` / `CNTVCT_EL0` / `isb` | 0 0 0 0 | 7 8 2 1 (the extra ldclral/ldsetal are Enter/Leave inlined into `RtlAcquireResource*`, `RtlReleaseResource`, `RtlDeleteResource`, `RtlSleepConditionVariableCS`) |
+
+x86_64, compiled only (`wine-tests-ec/dlls/ntdll/x86_64-windows/sync.o`): Enter 1 `lock btrl`, TryEnter 1 `lock btrl`,
+Leave 1 `lock xaddl`, `cs_enter_slow` 3 `lock cmpxchgl`, `cs_leave_slow` 1 `lock cmpxchgl` (llvm-objdump prints `lock` on
+its own line; counted with the lines joined).
+
+**The mutant** (uncommitted: Leave claims while a claim is in flight): `FAIL winetests: timed out after 1800 s; info
+winetests arm64 ntdll:rtl no summary line (exit 71)`, `rtl.c:3183: Test failed: stress, SpinCount 0: the threads weren't
+done in 60 s` (and SpinCount 4000), 12 `wait timed out` in ntdll's stderr and 60 in kernel32's. The stress tests detect
+a double claim. Restored: hash = H1.
+
+**The lanes.** Every set is three back-to-back `caffeinate -i sh wine-arm64/check.sh lanes` runs, AC at every start and
+end, `pgrep` idle checks (wineserver, check.sh, `bin-stop|cs-harness|wine-tests-`) empty, ntdll's disassembly hash in each
+wrapper log: t8-before (H0, 01:28-01:36, one-minute load at start 1.66/2.60/2.80), t8-c1-first (H1, 2.16 median), t8-c2
+(C2-b1000 uncommitted, H2 `de39b044…`, 2.46), t8-c1 (H1, the re-measure Step 10 asks for, 2.13), all within 2 of before's.
+`build/lanes/t8/` is t8-c1 (the shipped variant). Before (0032) against t8 (0033, C1):
+
+| row | lane | before | after | Δ % | outside the band |
+|---|---|---|---|---|---|
+| sync uncontended-wait | arm64 | 77.0 (67.0–83.0) | 83.0 (77.0–131) | +7.8 | no |
+| sync uncontended-wait | arm64ec | 76.0 (76.0–84.0) | 77.0 (76.0–77.0) | +1.3 | no |
+| sync uncontended-wait | x64 | 126 (125–142) | 124 (122–127) | -1.6 | no |
+| sync uncontended-signal | arm64 | 37.0 (32.0–38.0) | 38.0 (37.0–63.0) | +2.7 | no |
+| sync uncontended-signal | arm64ec | 42.0 (42.0–44.0) | 42.0 (42.0–42.0) | +0.0 | no |
+| sync uncontended-signal | x64 | 99.0 (93.0–100) | 92.0 (86.0–93.0) | -7.1 | no |
+| sync cross-process-wake | arm64 | 4109 (4108–4110) | 4122 (4099–4144) | +0.3 | no |
+| sync cross-process-wake | arm64ec | 4202 (3528–4215) | 3842 (3481–4088) | -8.6 | no |
+| sync cross-process-wake | x64 | 4210 (3736–4570) | 4318 (4210–4394) | +2.6 | no |
+| sync create-close | arm64 | 26476 (26044–26957) | 26872 (26608–26927) | +1.5 | no |
+| sync create-close | arm64ec | 26538 (24041–27328) | 27093 (26892–27179) | +2.1 | no |
+| sync create-close | x64 | 27614 (27094–28112) | 27712 (27652–27898) | +0.4 | no |
+| sync wait-all-wake | arm64 | 5383 (3188–5958) | 6014 (3950–6140) | +11.7 | no |
+| sync wait-all-wake | arm64ec | 5914 (5490–5988) | 6062 (5770–6118) | +2.5 | no |
+| sync wait-all-wake | x64 | 5600 (5228–5637) | 5643 (5088–5690) | +0.8 | no |
+| sync wait-all-poll | arm64 | 78.0 (58.0–85.0) | 85.0 (62.0–85.0) | +9.0 | no |
+| sync wait-all-poll | arm64ec | 87.0 (79.0–88.0) | 87.0 (87.0–87.0) | +0.0 | no |
+| sync wait-all-poll | x64 | 118 (117–118) | 117 (117–117) | -0.8 | no |
+| sync auto-handoff-8 | arm64 | 583 (575–593) | 589 (498–616) | +1.0 | no |
+| sync auto-handoff-8 | arm64ec | 598 (582–608) | 587 (585–616) | -1.8 | no |
+| sync auto-handoff-8 | x64 | 653 (628–658) | 657 (649–693) | +0.6 | no |
+| sync cs-uncontended | arm64 | 6.0 (3.0–6.0) | 6.0 (6.0–6.0) | +0.0 | no |
+| sync cs-uncontended | arm64ec | 7.0 (7.0–8.0) | 7.0 (4.0–7.0) | +0.0 | no |
+| sync cs-uncontended | x64 | 90.0 (65.0–102) | 91.0 (83.0–92.0) | +1.1 | no |
+| sync srw-uncontended | arm64 | 14.0 (8.0–15.0) | 15.0 (13.0–15.0) | +7.1 | no |
+| sync srw-uncontended | arm64ec | 15.0 (13.0–15.0) | 15.0 (8.0–15.0) | +0.0 | no |
+| sync srw-uncontended | x64 | 103 (73.0–115) | 103 (91.0–103) | +0.0 | no |
+| sync cs-contended-4 | arm64 | 81.0 (56.0–89.0) | 47.0 (43.0–49.0) | -42.0 | yes |
+| sync cs-contended-4 | arm64ec | 96.0 (95.0–99.0) | 47.0 (43.0–47.0) | -51.0 | yes |
+| sync cs-contended-4 | x64 | 178 (177–187) | 175 (173–177) | -1.7 | no |
+| sync srw-contended-4 | arm64 | 134 (117–135) | 144 (141–144) | +7.5 | yes |
+| sync srw-contended-4 | arm64ec | 135 (131–135) | 141 (138–144) | +4.4 | yes |
+| sync srw-contended-4 | x64 | 204 (203–205) | 203 (202–205) | -0.5 | no |
+| sync waitonaddress-uncontended | arm64 | 12.0 (11.0–12.0) | 12.0 (12.0–12.0) | +0.0 | no |
+| sync waitonaddress-uncontended | arm64ec | 15.0 (14.0–15.0) | 15.0 (14.0–15.0) | +0.0 | no |
+| sync waitonaddress-uncontended | x64 | 56.0 (56.0–56.0) | 58.0 (56.0–60.0) | +3.6 | no |
+| sync waitonaddress-contended-4 | arm64 | 4392 (4299–4435) | 4452 (4406–4471) | +1.4 | no |
+| sync waitonaddress-contended-4 | arm64ec | 4432 (4416–4465) | 4455 (4418–4473) | +0.5 | no |
+| sync waitonaddress-contended-4 | x64 | 4442 (4424–4482) | 4469 (4440–4512) | +0.6 | no |
+| sync wait-any-wake | arm64 | 7196 (7044–7515) | 7190 (7059–7734) | -0.1 | no |
+| sync wait-any-wake | arm64ec | 7131 (7062–7255) | 7046 (6776–7094) | -1.2 | no |
+| sync wait-any-wake | x64 | 7152 (6986–7440) | 7170 (7167–7261) | +0.3 | no |
+| sync alertable-wake | arm64 | 7162 (7156–8215) | 7418 (7222–7684) | +3.6 | no |
+| sync alertable-wake | arm64ec | 6944 (6928–7301) | 7150 (6744–7172) | +3.0 | no |
+| sync alertable-wake | x64 | 7190 (7108–7404) | 7260 (7233–7437) | +1.0 | no |
+| sync auto-pool-8 | arm64 | 45949 (42990–51937) | 51936 (51933–51939) | +13.0 | no |
+| sync auto-pool-8 | arm64ec | 45944 (44952–50932) | 50962 (50950–51931) | +10.9 | yes |
+| sync auto-pool-8 | x64 | 46970 (45947–51932) | 51931 (50936–51934) | +10.6 | no |
+| sync cs-hold-10us-p999 | arm64 | 48700 (48200–50600) | 50700 (49500–51100) | +4.1 | no |
+| sync cs-hold-10us-p999 | arm64ec | 49000 (46900–49300) | 50300 (49400–51200) | +2.7 | yes |
+| sync cs-hold-10us-p999 | x64 | 49100 (48500–50600) | 50000 (49700–55800) | +1.8 | no |
+| xcall get-current-thread-id | arm64 | 0.7 (0.7–0.7) | 0.7 (0.7–0.7) | +0.0 | no |
+| xcall get-current-thread-id | arm64ec | 1.7 (1.5–1.7) | 1.7 (1.7–1.7) | +0.0 | no |
+| xcall get-current-thread-id | x64 | 24.2 (24.1–24.2) | 24.2 (24.1–24.6) | +0.0 | no |
+| xcall get-last-error | arm64 | 0.9 (0.9–0.9) | 0.9 (0.9–0.9) | +0.0 | no |
+| xcall get-last-error | arm64ec | 2.4 (2.4–2.8) | 2.4 (2.2–2.4) | +0.0 | no |
+| xcall get-last-error | x64 | 24.3 (24.2–24.4) | 25.7 (25.1–25.9) | +5.8 | yes |
+| xcall tls-get-value | arm64 | 0.9 (0.8–0.9) | 0.9 (0.8–0.9) | +0.0 | no |
+| xcall tls-get-value | arm64ec | 2.4 (2.3–2.8) | 2.5 (2.4–2.5) | +4.2 | no |
+| xcall tls-get-value | x64 | 24.4 (24.4–24.6) | 24.4 (24.3–24.4) | +0.0 | no |
+| xcall get-tick-count | arm64 | 0.7 (0.7–0.7) | 0.7 (0.7–0.7) | +0.0 | no |
+| xcall get-tick-count | arm64ec | 1.7 (1.7–1.7) | 1.7 (1.7–1.8) | +0.0 | no |
+| xcall get-tick-count | x64 | 23.8 (23.8–24.5) | 23.8 (23.7–23.8) | +0.0 | no |
+| xcall qpc | arm64 | 15.4 (15.4–15.4) | 15.4 (15.4–15.4) | +0.0 | no |
+| xcall qpc | arm64ec | 16.8 (16.8–16.8) | 16.8 (16.8–16.8) | +0.0 | no |
+| xcall qpc | x64 | 43.2 (43.2–45.7) | 43.0 (42.9–43.1) | -0.5 | yes |
+| xcall istream-addref | arm64 | 1.5 (1.5–1.5) | 1.5 (1.5–1.5) | +0.0 | no |
+| xcall istream-addref | arm64ec | 1.5 (1.5–1.5) | 1.5 (1.5–1.5) | +0.0 | no |
+| xcall istream-addref | x64 | 24.3 (24.3–24.5) | 24.4 (24.2–24.7) | +0.4 | no |
+| xcall memcpy-16 | arm64 | 1.9 (1.9–2.1) | 1.9 (1.9–2.0) | +0.0 | no |
+| xcall memcpy-16 | arm64ec | 2.6 (2.6–2.8) | 3.0 (2.6–3.0) | +15.4 | no |
+| xcall memcpy-16 | x64 | 25.4 (25.4–25.4) | 25.6 (25.4–25.6) | +0.8 | no |
+| xcall memcpy-16-offset | arm64 | 3.0 (3.0–3.0) | 3.0 (2.8–3.0) | +0.0 | no |
+| xcall memcpy-16-offset | arm64ec | 3.5 (3.4–3.9) | 3.5 (3.4–3.9) | +0.0 | no |
+| xcall memcpy-16-offset | x64 | 26.9 (26.7–27.3) | 26.9 (26.6–27.2) | +0.0 | no |
+| xcall memcpy-256 | arm64 | 3.9 (3.5–4.1) | 4.1 (3.5–4.1) | +5.1 | no |
+| xcall memcpy-256 | arm64ec | 5.0 (4.4–5.4) | 5.2 (4.6–5.4) | +4.0 | no |
+| xcall memcpy-256 | x64 | 27.6 (27.2–27.8) | 27.6 (27.5–27.6) | +0.0 | no |
+| xcall memcpy-256-offset | arm64 | 5.0 (4.6–5.0) | 5.4 (4.8–5.4) | +8.0 | no |
+| xcall memcpy-256-offset | arm64ec | 6.2 (5.9–6.2) | 5.9 (5.9–6.2) | -4.8 | no |
+| xcall memcpy-256-offset | x64 | 28.8 (28.8–29.2) | 29.1 (28.8–29.1) | +1.0 | no |
+| xcall memcpy-4k | arm64 | 43.6 (43.1–43.7) | 43.5 (42.8–44.1) | -0.2 | no |
+| xcall memcpy-4k | arm64ec | 45.1 (44.9–46.2) | 44.9 (44.9–44.9) | -0.4 | no |
+| xcall memcpy-4k | x64 | 57.4 (57.3–80.8) | 57.8 (57.8–58.1) | +0.7 | no |
+| xcall memcpy-4k-offset | arm64 | 45.7 (45.6–53.8) | 45.6 (45.6–45.6) | -0.2 | no |
+| xcall memcpy-4k-offset | arm64ec | 39.9 (39.5–44.5) | 39.8 (39.7–40.2) | -0.3 | no |
+| xcall memcpy-4k-offset | x64 | 88.8 (83.4–90.7) | 73.7 (73.5–90.3) | -17.0 | no |
+| xcall memcpy-1m | arm64 | 15500 (15480–15610) | 15620 (15600–15640) | +0.8 | no |
+| xcall memcpy-1m | arm64ec | 15350 (15330–15440) | 15340 (15320–15410) | -0.1 | no |
+| xcall memcpy-1m | x64 | 15220 (15190–15230) | 15240 (15240–15270) | +0.1 | yes |
+| xcall memcpy-1m-offset | arm64 | 15330 (15300–15350) | 15320 (15240–15350) | -0.1 | no |
+| xcall memcpy-1m-offset | arm64ec | 15680 (15660–15700) | 15700 (15620–15710) | +0.1 | no |
+| xcall memcpy-1m-offset | x64 | 16280 (16240–16290) | 16270 (16250–16270) | -0.1 | no |
+| xcall strlen-1k | arm64 | 231 (231–231) | 232 (231–243) | +0.4 | yes |
+| xcall strlen-1k | arm64ec | 233 (233–234) | 234 (234–234) | +0.1 | no |
+| xcall strlen-1k | x64 | 260 (258–261) | 259 (259–259) | -0.3 | no |
+| xcall qsort-4k | arm64 | 103350 (99580–106600) | 107060 (103180–111800) | +3.6 | no |
+| xcall qsort-4k | arm64ec | 158790 (157810–160070) | 158950 (156530–159350) | +0.1 | no |
+| xcall qsort-4k | x64 | 3324030 (3321660–3329380) | 3328250 (3317700–3455620) | +0.1 | no |
+
+- cs-contended-4: 81/96/178 → **47/47/175** (C1's first set read 48/43/174). Task 4's figures were 105/100/198; the
+  before set's arm64 had one fast run (56).
+- The rows outside the band on the worse side are srw-contended-4 arm64/arm64ec, auto-pool-8 arm64ec and cs-hold
+  arm64ec (+2.7 %); in C1's first set they were create-close arm64 and srw-contended-4 arm64ec. Only srw-contended-4
+  arm64ec repeats, and 0033 touches neither SRW locks nor the event pool; auto-pool-8 is quantised in ~1 ms steps
+  (45.9k/50.9k/51.9k) and the before set's median sits on its low runs. Read as noise; xcall get-last-error x64 (+5.8 %)
+  reads the same in both C1 sets and is not a critical-section path.
+
+**R36: C1 against C2-b1000** (medians; C2 is `CS_SPIN_DEFAULT 1000`, uncommitted, `PASS winetests` with 0 `wait timed
+out` first):
+
+| R36 criterion | C1 (`t8-c1`) | C2-b1000 (`t8-c2`) | bar |
+|---|---|---|---|
+| cs-contended-4 arm64 / arm64ec | 47 / 47 | 90 / 92 | ≤ 30 / ≤ 31 |
+| x64 cs-contended-4 ÷ x64 cs-uncontended | 175 / 91 = 1.92 | 181 / 92 = 1.97 | ≤ 1.5 |
+| x64 cs-contended-4 | 175 | 181 | C2 below C1: no |
+| cs-hold-10us-p999 (ns) | 50700 / 50300 / 50000 | 57100 / 51300 / 63000 | ≤ 2,000,000 |
+
+C1 ships. Design §9's confirmation for it: (a) **missed** (47/47 against 30/31), (b) **missed** (1.92 against 1.5), (c)
+met (6/7), (d) the rows above, read as noise. The x64 lane barely moved (178 → 175).
+
+**Where C1's contended cost goes (Ruling R40,** an instrumented ntdll, uncommitted, counters per lock dumped at each
+`DeleteCriticalSection` behind `WINE_CS_STATS=1`; the fast path's instructions identical to C1's; three lanes runs per
+build; full figures in task-8-report.md's Phase 1). Per lock operation in cs-contended-4 (arm64 / arm64ec / x64):
+claims (= wakes issued) 0.0185 / 0.0170 / 0.142; 34-40 % of them futile (the woken waiter finds a barger and parks
+again); 91 / 91 / 74 % of holds taken while a claim was in flight; owner changes 0.047 / 0.047 / 0.258; the unwait (token
+xchg + RtlWakeAddressSingle) 1.09 / 1.15 / 0.76 µs mean, of which the `NtAlertThreadByThreadId` round trip is ≥ 98 %
+XNU's `os_sync_wake` (a null Wine syscall through the same dispatcher, x18 toggles and q0-q31 saves costs 8.8 / 9.4 ns).
+So on ARM about 20 of the 43-47 ns (an upper bound, thread time) is the releasing thread inside the kernel's wake; on
+x64 0.14 × 0.76 µs ≈ 107 ns of thread time covers the whole 93 ns above the 92 ns FEX-transition base. A thread woken
+from a real sleep runs 4.7-4.9 µs after its claim (the hold row), which sets that row's ~50 µs p99.9. Every contending
+lane thread ran on CPUs 12-17 (the 6-core Super cluster); 20 % of contended wakes resume on another core.
+
+**A cheaper waker (Rulings R42-R44), measured, not shipped.** The design round (cs-wake, `cs-design/wake-design-result.json`)
+picked N: a critical-section waiter's first wait is a 3 µs timed nap that no waker interrupts, and a Leave that claims
+a napping waiter only marks its futex entry woken and skips the alert syscall (ARM only; public RtlWaitOnAddress/Wake*
+unchanged; it also closes the unlocked `entry.addr` read). SN added a 20 µs fresh-contender poll. On the native harness
+(design §8 rows, ABAB against C1, -e 10 and -e 287, 3-4 rounds; `t8-p2-*` in the workspace):
+
+| row | N (fixed nap) | NT (adaptive nap, per thread) |
+|---|---|---|
+| K4 ns/op | 0.46-0.71 × C1 | 0.54-0.74 × C1 |
+| XQ-K4 / XQ-B40-4 ns/op | 0.71-0.98 / 0.68-0.92 | 0.82-1.00 / 0.65-0.87 |
+| F: frame thread p99.9 (≤ 250 µs) | 61-74 µs | 74 µs |
+| H10 p99.9 (≤ 1.10 × C1) / CPU | 0.88-1.29 / +11-16 % | 1.00-1.04 / +0-2 % |
+| O1 (36 threads, 1 µs hold): throughput / overhead CPU / p99.9 | 0.85-0.89 / 2.6-3.2 × / 0.93-1.29 | 1.01-1.07 / 1.17-1.31 × / 0.86-1.09 |
+
+- G0: stop-N, stop-SN and stop-NA (the per-lock adaptive variant) each PASS 1000/1000 at -s 0 and -s 4000 with every
+  reachable point nonzero (stop-NA -s 4000's point 5 needed -r 5000: 8 of 5000).
+- N's nap is pure cost wherever waits outlast it: in O1 99 % of naps expire, and every one is an extra timer wakeup and
+  reschedule (2 µs, 3 µs and 4 µs naps alike). **NT** (Ruling R44): after two expiries in a row a thread skips its nap for
+  its next 2^k parks (k ≤ 6), and a woken nap clears that. A per-lock history lagged behind the run queue under
+  oversubscription (30 % of O1's parks still napped); per thread, O1 naps 3 % of parks.
+- **O1 still fails design §9's CPU gate (G3(c): extra overhead CPU needs half as much throughput gain; a nap is not a
+  spin budget):** NT +17-31 % overhead CPU for +1-7 % throughput at both dispatcher values; a 2^10 cap passes at -e 10
+  only. Even rare naps change O1's dynamics (token thefts +40 %, idle −10 %, owner changes up). Per R44, 0033 stays C1;
+  the N/NT patches are kept (`t8-p2-n.patch`, `t8-p2-nt.patch`) for the follow-up.
+
+**Gates** (C1 = 79874a0, staged ntdll H1; Steam up, `pgrep -lx steam_osx` 15329, before the run; AC):
+- `make wine-arm64-check`: every step PASS up to `dxmt`, with `msync` printing `info msync 1 cs-hold-10us-p999 48100` and
+  `info msync 0 cs-hold-10us-p999 49900`; then `FAIL dxmt-present: arm64ec present_loop: winshot: screencapture of window
+  62235 failed` with present_loop's 3000 frames done (8.3 ms average) and the console locked (`IOConsoleLocked` true):
+  Ruling R17's case, to be re-run by name once the screen is unlocked. The steps after it, run by name
+  (`check.sh dxmt-arm64ec dxmt-x64 g4-bench fex-vmd winetests`): all PASS (dxmt-arm64ec 449 s, dxmt-x64 903 s; fex-vmd's
+  litmus MP 11,194 with EVMD, 0 listed, mem_seq 0.46 / 0.41 of default; winetests as in GREEN), `PASS orphans`. The
+  full run takes about 38 min (326 s to dxmt-present, then 1,971 s), which README `:60` now says; the winetests step adds
+  ~80 s.
+- `make test`: 252 tests passed. `make smoke`: 15/15. `make bridge-check`: passed. `make media-check`: unchanged
+  (`FAIL media-mf: FAIL arm64-media-mf: stage=video-type hr=0xc00d5212; FAIL x64-media-mf: stage=video-type
+  hr=0xc00d5212`).
+- Export: `make wine-arm64-export` wrote one new file, `wine-arm64/patches/wine/0033-ntdll-Use-the-Windows-2003-SP1-LockCount-encoding-fo.patch`;
+  the fresh-fetch proof (a shallow clone of the pin, `git am` of the 33 patches) printed `applied 33/33` and
+  `tree-equal` (tree 0df0c0b2…). A rebuild in applied mode stages H1 again.
+
+**Assumptions.**
+- The contention test (−6, −3, −4), the recursion test and the stress test's LockSemaphore check assume the 2003 SP1+
+  encoding as Microsoft documents it. They were not run on Windows (no testbot: no upstream submission).
+- The x86 branch (x86_64, i686) is compiled, not run: wine.app has only the ARM64X ntdll, so the x64 lane runs the
+  ARM64EC branch under FEX. x86_64 codegen is above; i686 codegen is design §3.2's `cs-proto.c`, not the patched sync.c.
+  wow64 i386 is not built, so the conclusion's i386 run can't happen here.
+- 0033 refuses `__arm__` (ARMv7 PE) with `#error`; MacNeutron never builds it.
+- DebugInfo's ContentionCount counts consumed claims, including those of claimed waiters that re-park (design §2.2), so
+  it can exceed the contended acquisitions.
+- `cs-hold-10us-p999` is the median over 21 batches of each batch's p99.9 (the 3rd-largest of 2,000 waits), not the
+  harness's pooled H10 p99.9; R36's 2 ms bar is applied to it as an H10-class estimate.
+- SRW locks are unchanged (design §10).
+
+**Follow-up.** C1 misses §9 (a)/(b) at 47/47/175 ns. The measured cause is the releasing thread's kernel wake (≈ 1 µs
+in `os_sync_wake`, ~0.02 claims per op on ARM, 0.14 on x64). A waker that skips the alert for a napping waiter (N/NT)
+halves K4 on the harness but costs CPU in the oversubscribed O1 row; a design that keeps the waker cheap without a timed
+nap, or a nap whose expiries cost less under oversubscription, is the next step, measured on the lanes. Also open:
+msync's abandoned mutex on TerminateThread (kernel32 `sync.c:416/:420`), and the x64 kernel32 "not acquired" ERR.

@@ -1,9 +1,9 @@
 #!/bin/sh
 # The arm64 Wine runtime on the maintainer's Mac (native arm64 spec §7.3): `make wine-arm64-check`.
-# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`, and the
-# dxmt steps `make dxmt-tests presenter dxmt-tests-arm64ec`. g4-bench, for its Rosetta baseline, and the dxmt-* steps,
-# for their D3DMetal reference, need the frozen Rosetta reference (tools/freeze-rosetta-reference.sh;
-# MACNEUTRON_REFERENCE names another), run by its own launcher. dxmt-x64's FSR 3 check needs SMITE 2 installed
+# Usage: check.sh [step...]   no step = all, in STEPS' order. Needs `make build wine-arm64 wine-arm64-tests`, the
+# dxmt steps `make dxmt-tests presenter dxmt-tests-arm64ec`, and winetests `make wine-arm64-winetests`. g4-bench, for
+# its Rosetta baseline, and the dxmt-* steps, for their D3DMetal reference, need the frozen Rosetta reference
+# (tools/freeze-rosetta-reference.sh; MACNEUTRON_REFERENCE names another), run by its own launcher. dxmt-x64's FSR 3 check needs SMITE 2 installed
 # (Steam): its amd_fidelityfx_dx12.dll, read from the game's install, never copied. steam-bridge needs `make bridge`,
 # Steam running and logged in, and SMITE 2 installed (its steam_api64.dll, read in place).
 # Every run starts fresh: a new clone of the staged bundle, a new prefix. The clone sits at a path with a space, as the
@@ -55,8 +55,8 @@ NEEDS_FEX="$NEEDS_FEX $MEDIA"
 LANES="lanes"
 NEEDS_PREFIX="$NEEDS_PREFIX $LANES"
 NEEDS_FEX="$NEEDS_FEX $LANES"
-# The batch's gated steps (batch Tasks 4-7): each needs the prefix with FEX; they run after the rest.
-BATCH="fex-vmd"
+# The batch's gated steps (batch Tasks 4-8): each needs the prefix with FEX; they run after the rest.
+BATCH="fex-vmd winetests"
 STEPS="$STEPS $BATCH" NEEDS_PREFIX="$NEEDS_PREFIX $BATCH" NEEDS_FEX="$NEEDS_FEX $BATCH"
 
 # The processes running the runtime's executables. Wine rewrites argv, so `pkill -f <path>` finds nothing; the kernel
@@ -726,7 +726,7 @@ media_mf_cmd() {
 # The measurement lanes (batch Task 2): x64-sync and arm64-xcall as ARM64, ARM64EC and x64 programs, the x64 ones under
 # FEX with its defaults, in mode 1 against the prefix's server. Each has to pass and print all its time rows; each row
 # becomes `info <program> <row> <ns>` (lanes_report.py's input), and the programs' own info lines `info <program>: ...`.
-SYNC_ROWS=16 XCALL_ROWS=16
+SYNC_ROWS=17 XCALL_ROWS=16
 lanes_cmd() {
   export WINEDEBUG=-all
   for v in $(env | sed -n 's/^\(FEX_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
@@ -739,6 +739,40 @@ lanes_cmd() {
     [ "$n" = "$want" ] || { echo "$out"; echo "FAIL lanes: $t printed $n of $want time rows"; return 1; }
     echo "$out" | sed -e "s/^info /info $t: /" -e "s/^time /info $t /"
   done
+}
+
+# Wine's own conformance tests (batch Task 8): each module's test program from `make wine-arm64-winetests`, in all
+# three lanes (x64 under FEX), crash dialog off, no WINETEST_* variable of the caller's (WINETEST_PLATFORM turns
+# todo_wine off, WINETEST_DEBUG=0 drops the summary line, WINETEST_REPORT_FLAKY changes the exit code). A test passes
+# when it prints its summary line, exits with that line's failure count, and every location it fails at is listed in
+# WINETESTS_FAILS as `<lane>:<file>:<line>`: failures it had before Wine 0033, never a critical-section line, after
+# the baseline added only by a ruling. Output is kept as winetests-<lane>-<module>.out and .err (Wine's ERRs).
+WINETESTS="ntdll:rtl kernel32:sync atl:module atl100:atl msvcirt:msvcirt"
+# kernel32 test_mutex (batch Task 8 baseline, Wine 0032): a mutex whose owner TerminateThread ends is never abandoned
+# under msync (WINEMSYNC=0 passes), so its waiter times out.
+WINETESTS_FAILS="arm64:sync.c:416 arm64:sync.c:420 arm64ec:sync.c:416 arm64ec:sync.c:420 x64:sync.c:416 x64:sync.c:420"
+winetests_cmd() {
+  for v in $(env | sed -n 's/^\(WINETEST_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+  wine_run reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f > /dev/null || return 1
+  fails=
+  for l in arm64 arm64ec x64; do
+    for t in $WINETESTS; do
+      m=${t%%:*} n=${t#*:} o="$WORK/winetests-$l-$m"
+      wine_run "$TESTS/winetests/$l/${m}_test.exe" "$n" > "$o.out" 2> "$o.err" && rc=0 || rc=$?
+      s=$(tr -d '\r' < "$o.out" | sed -n "s/^[0-9a-f]*:$n: \([0-9]* tests executed .*\)/\1/p" | tail -n 1)
+      f=$(echo "$s" | sed -n 's/.* \([0-9]*\) failures*), .*/\1/p')
+      new=
+      for k in $(tr -d '\r' < "$o.out" \
+        | sed -nE 's/^([A-Za-z0-9_]+\.c:[0-9]+): Test (failed|succeeded inside todo block):.*/\1/p' | sort -u); do
+        echo "info winetests-failed $l $k"
+        case " $WINETESTS_FAILS " in *" $l:$k "*) ;; *) new="$new $k" ;; esac
+      done
+      echo "info winetests $l $t ${s:-no summary line} (exit $rc)"
+      [ -n "$f" ] && [ "$rc" = "$f" ] && [ -z "$new" ] \
+        || fails="$fails${fails:+; }$l $t: exit $rc, ${f:-no} failures${new:+, unlisted$new}"
+    done
+  done
+  [ -z "$fails" ] || { echo "FAIL winetests: $fails"; return 1; }
 }
 
 run_step() {
@@ -778,6 +812,7 @@ run_step() {
     media-mf) step media-mf 120 media_mf_cmd ;;
     lanes) step lanes 900 lanes_cmd; grep '^info ' "$WORK/lanes.log" ;;
     fex-vmd) step fex-vmd 900 fex_vmd_cmd; grep '^info ' "$WORK/fex-vmd.log" ;;
+    winetests) step winetests 1800 winetests_cmd; grep '^info ' "$WORK/winetests.log" ;;
     *) die "no runner for $1" ;;
   esac
 }

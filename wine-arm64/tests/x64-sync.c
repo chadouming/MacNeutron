@@ -4,6 +4,7 @@
 // arm64-sync.exe. One line per gated row, `ok <row>` or `FAIL <row>: <why>`; then the reported rows: `info pulse-event`
 // (PulseEvent can miss a waiter under msync) and `time <row> <ns>` (the median of the batches, per operation); then
 // `PASS <program>` (the exe's file name without .exe) when every gated row passed, else `FAIL <program>`.
+// cs-hold-10us-p999 (batch Task 8) is a per-batch p99.9 wait, not a time per operation.
 // The wait-all rows (Wine patch 0031) print their own `info` lines before their verdict: `info wait-all-duplicate`, each
 // duplicate's answer (check.sh gates mode 1's), and the two races' counts. A time row whose wait times out prints
 // `FAIL <row>: stuck` instead of its time and fails the run. Blocking waits in those rows run on worker threads with
@@ -23,6 +24,7 @@ static char self[MAX_PATH], name[MAX_PATH], why[256];  // name: the program's, s
 static double ns_per_tick;
 static double t_wait, t_signal, t_wake, t_churn, t_all_wake, t_all_poll, t_handoff;  // the time rows, 0: not measured
 static double t_cs, t_srw, t_cs4, t_srw4, t_woa, t_woa4, t_any_wake, t_alert_wake, t_pool;  // the lanes' (batch Task 2)
+static double t_hold;  // the lanes' long-hold row (batch Task 8)
 static int failed;  // a gated row or a time row failed
 
 // Sets the row's failure reason; returns 0, so a row can `return bad(...)`.
@@ -967,6 +969,58 @@ static void contended_4(int srw) {
   else *(srw ? &t_srw4 : &t_cs4) = median(v, BATCHES);
 }
 
+// cs-hold-10us-p999 (batch Task 8, Ruling R36's long-hold row, the matrix's H10): 4 threads parked on lock_go, then
+// 500 times each: Enter, 10 µs held, Leave, 10 µs outside (QPC busy-waits); a wait runs from the Enter call to its
+// return. Per batch the p99.9 of the 2,000 waits, w[2000 - 2000 / 1000 - 1] once sorted; the row is the median of
+// BATCHES batches, in ns. The section comes from InitializeCriticalSection (SpinCount 0), as in the other CS rows.
+static double hold_wait[4][500];  // ns
+static long hold_counter;
+static DWORD WINAPI holder(void *i) {
+  LONGLONG ten_us = (LONGLONG)(10000 / ns_per_tick), until;
+  InterlockedIncrement(&lock_ready);
+  if (WaitForSingleObject(lock_go, 10000) != WAIT_OBJECT_0) return 1;
+  for (int j = 0; j < 500; j++) {
+    LONGLONG t0 = ticks();
+    EnterCriticalSection(&lock_cs);
+    hold_wait[(INT_PTR)i][j] = (ticks() - t0) * ns_per_tick;
+    hold_counter++;
+    for (until = ticks() + ten_us; ticks() < until;) {}
+    LeaveCriticalSection(&lock_cs);
+    for (until = ticks() + ten_us; ticks() < until;) {}
+  }
+  return 0;
+}
+static void cs_hold_10us(void) {
+  double v[BATCHES], w[2000];
+  hold_counter = 0;
+  InitializeCriticalSection(&lock_cs);
+  for (int b = 0; b < BATCHES; b++) {
+    HANDLE t[4];
+    LONGLONG t0;
+    DWORD r;
+    lock_go = CreateEventA(NULL, TRUE, FALSE, NULL);
+    lock_ready = 0;
+    for (int i = 0; i < 4; i++) t[i] = start(holder, (void *)(INT_PTR)i);
+    for (t0 = ticks(); lock_ready < 4 && ms_since(t0) < 10000;) Sleep(1);
+    Sleep(1);  // parked on go
+    SetEvent(lock_go);
+    r = WaitForMultipleObjects(4, t, TRUE, 10000);
+    for (int i = 0; i < 4; i++) CloseHandle(t[i]);
+    CloseHandle(lock_go);
+    if (r != WAIT_OBJECT_0) {  // the threads may still hold the lock: lock_cs is left alone
+      stuck("cs-hold-10us-p999");
+      return;
+    }
+    for (int i = 0; i < 4; i++) memcpy(w + 500 * i, hold_wait[i], sizeof hold_wait[i]);
+    qsort(w, 2000, sizeof *w, cmp_double);
+    v[b] = w[2000 - 2000 / 1000 - 1];
+  }
+  DeleteCriticalSection(&lock_cs);
+  if (hold_counter != 2000 * BATCHES)
+    printf("FAIL cs-hold-10us-p999: counter %ld of %d\n", hold_counter, 2000 * BATCHES), failed = 1;
+  else t_hold = median(v, BATCHES);
+}
+
 // waitonaddress-uncontended: a WaitOnAddress that returns at once (the values differ) and a WakeByAddressSingle with
 // no waiter, per pair.
 static void waitonaddress_uncontended(void) {
@@ -1194,6 +1248,7 @@ int main(int argc, char **argv) {
   t_any_wake = wake_row("wait-any-wake", WAKE_ANY);
   t_alert_wake = wake_row("alertable-wake", WAKE_ALERTABLE);
   auto_pool_8();
+  cs_hold_10us();
   printf("time uncontended-wait %.0f\ntime uncontended-signal %.0f\n", t_wait, t_signal);
   if (t_wake > 0) printf("time cross-process-wake %.0f\n", t_wake);
   if (t_churn > 0) printf("time create-close %.0f\n", t_churn);
@@ -1208,6 +1263,7 @@ int main(int argc, char **argv) {
   if (t_any_wake > 0) printf("time wait-any-wake %.0f\n", t_any_wake);
   if (t_alert_wake > 0) printf("time alertable-wake %.0f\n", t_alert_wake);
   if (t_pool > 0) printf("time auto-pool-8 %.0f\n", t_pool);
+  if (t_hold > 0) printf("time cs-hold-10us-p999 %.0f\n", t_hold);
   if (failed) {
     printf("FAIL %s\n", name);
     return 1;

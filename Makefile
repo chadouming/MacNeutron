@@ -1,4 +1,4 @@
-.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check media-check lanes-check
+.PHONY: build test smoke app release bridge bridge-check presenter presenter-check dxmt-tests dxmt-tests-arm64ec dxmt-check dxil-corpus wine-arm64 wine-arm64-export wine-arm64-tests wine-arm64-check media-check lanes-check wine-arm64-winetests
 
 APP = build/MacNeutron.app
 # Every Windows-side binary is built with the pinned llvm-mingw (Clang); dxmt/toolchain.sh fetches it once.
@@ -164,7 +164,7 @@ build/wine-arm64-tests/winshot: wine-arm64/tools/winshot.c
 # MACNEUTRON_SIGN_IDENTITY and MACNEUTRON_PROVISIONING_PROFILE (the build signs the runtime), and the frozen Rosetta
 # reference (MACNEUTRON_REFERENCE, tools/freeze-rosetta-reference.sh): gate G4's baseline runs on its own launcher,
 # and the dxmt-* steps' D3DMetal reference is its GPTK (dxmt/check.sh).
-wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter dxmt-tests-arm64ec
+wine-arm64-check: build bridge wine-arm64 wine-arm64-tests dxmt-tests presenter dxmt-tests-arm64ec wine-arm64-winetests
 	sh wine-arm64/tests/mode_test.sh
 	sh wine-arm64/tests/profile_test.sh
 	sh wine-arm64/tests/translator_key_test.sh
@@ -183,3 +183,11 @@ media-check: wine-arm64 wine-arm64-tests
 # `info <program> <row> <ns>` line is a median; wine-arm64/tools/lanes_report.py turns three runs into a table.
 lanes-check: wine-arm64 wine-arm64-tests
 	sh wine-arm64/check.sh lanes
+
+# Wine's own conformance tests for check.sh's winetests step (batch Task 8): ntdll, kernel32, atl, atl100 and msvcirt's
+# test programs for the arm64, arm64ec and x64 lanes in build/wine-arm64-tests/winetests/. wine-build is configured
+# --disable-tests, and an ARM64X tree links each test as one ARM64X exe, which runs only its ARM64 view, so they come
+# from two test-only trees on wine-build's tools (build/wine-arm64-src/wine-tests-arm64, wine-tests-ec), neither staged
+# into wine.app. To configure one again, remove its folder.
+wine-arm64-winetests: wine-arm64
+	sh wine-arm64/winetests.sh

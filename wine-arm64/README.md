@@ -57,14 +57,14 @@ profile.
 ```sh
 make wine-arm64        # fetch Wine, FEX and DXMT at the pins, patch, build, sign; build/wine-arm64/wine.app (a few minutes the first time)
                        # a cold first build includes the arm64 LLVM (about 2 min here) and the deps (about 3 min)
-make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, D2-D4 and S1-S7 (about 16 min)
+make wine-arm64-check  # boot, 4K pages, native ARM64, FEX, gates G1-G5, D2-D4 and S1-S7 (about 38 min)
 
-make build bridge wine-arm64-tests dxmt-tests dxmt-tests-arm64ec presenter  # what check.sh needs besides the runtime
+make build bridge wine-arm64-tests wine-arm64-winetests dxmt-tests dxmt-tests-arm64ec presenter  # what check.sh needs besides the runtime
 sh wine-arm64/check.sh g2-litmus   # named steps only (and the steps they need); see STEPS in check.sh
 ```
 
 `make wine-arm64-check` builds the launcher (`make build`), the Steam bridge (`make bridge`: `steam-bridge` needs
-`build/bridge/arm64/steam.exe` and `build/bridge/steamprobe.exe`), the test programs (`make wine-arm64-tests`) and what the
+`build/bridge/arm64/steam.exe` and `build/bridge/steamprobe.exe`), the test programs (`make wine-arm64-tests`) and Wine's conformance tests (`make wine-arm64-winetests`, two test-only Wine trees) and what the
 DXMT steps run (`make dxmt-tests dxmt-tests-arm64ec presenter`: the x64 and ARM64EC D3D test programs and `present_loop`) itself, but `make wine-arm64` does not, and `check.sh` run on its own needs them all (G4
 runs the launcher). Gate G4's Rosetta baseline runs the frozen reference tool (`tools/freeze-rosetta-reference.sh` makes it from the
 last Rosetta-era tool folder; `MACNEUTRON_REFERENCE` names another). Each run starts from a clean prefix under `build/wine-arm64 check/`, and ends by checking that
@@ -91,7 +91,7 @@ one with an extra FEX external (gate S1). The ship-base steps (ship-base spec §
 | `fonts-tls` | Gate S2: Tahoma's metrics and dialog base units (win32u's FreeType), DirectWrite's font families, schannel credentials and a PFX import (gnutls) |
 | `steam-bridge` | Gate S7: the arm64 Steam bridge, below |
 
-`lanes` (`make lanes-check`), run by name and not in the full run, measures rather than gates: `x64-sync` and `arm64-xcall` as ARM64, ARM64EC and x64 (FEX) programs in mode 1, passing when each program passes and prints its 16 time rows; `tools/lanes_report.py` turns three runs' `lanes.log` into the table of `docs/testing/acceptance-arm64-release.md` (batch Task 2's baseline).
+`lanes` (`make lanes-check`), run by name and not in the full run, measures rather than gates: `x64-sync` and `arm64-xcall` as ARM64, ARM64EC and x64 (FEX) programs in mode 1, passing when each program passes and prints its time rows (17 for `*-sync`, 16 for `*-xcall`); `tools/lanes_report.py` turns three runs' `lanes.log` into the table of `docs/testing/acceptance-arm64-release.md` (batch Task 2's baseline).
 
 The DXMT steps, after `steam-bridge`:
 
@@ -112,11 +112,12 @@ need what it needs: the frozen reference (`MACNEUTRON_REFERENCE`).
 from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`, then `fex-vmd`) don't
 run.
 
-The batch's gated step (`BATCH`), run last, after `g4-bench`:
+The batch's gated steps (`BATCH`), run last, after `g4-bench`:
 
 | Step | What |
 |---|---|
 | `fex-vmd` | FEX patch 0006 (batch Task 4): EVMD over x64-litmus shows MP reordering, listed instructions keep TSO (all of `run` and `worker`, or only MP's flag store and load), FEX logs its coverage; x64-bench's scalar-memory kernels run in at most 0.75 of their time with their ranges |
+| `winetests` | Wine patch 0033 (batch Task 8): Wine's conformance tests `ntdll:rtl`, `kernel32:sync`, `atl:module`, `atl100:atl` and `msvcirt:msvcirt` in all three lanes (x64 under FEX), built by `make wine-arm64-winetests` in two test-only Wine trees; each exits with its failure count, and fails only at locations listed in `WINETESTS_FAILS` |
 
 ### FreeType and gnutls
 
@@ -271,6 +272,7 @@ re-clone; that is why they wait for the rebase.
     stays local.
   - 0032 (`include/winnt.h`: ReadAcquire and WriteRelease are acquire loads and release stores in ARM64EC code too, not
     x86's plain loads and stores) is ours and stays local.
+  - 0033 (critical sections on Windows' 2003 SP1+ LockCount encoding: a contender takes a free section even while others wait, and a Leave wakes one waiter only when no wake is in flight, so contended sections no longer convoy; one ldclral to enter and one ldsetal to leave on ARM64 and ARM64EC, lock btr and lock xadd on x86 (compiled, not run here); an explicit SpinCount spins through one slot, in ns on ARM, at most 10 µs; a recursive Enter no longer counts in LockCount) is ours and stays local.
 - **FreeType** (2.14.3) is used under the FreeType License (FTL); the bundle carries its credit in
   `licenses/README` and its texts in `licenses/freetype/`. **gnutls** (3.8.13, with its included libtasn1) is
   LGPL-2.1+ and its included libunistring LGPL-3+; **nettle** (4.0) and **GMP** (6.3.0), linked into
