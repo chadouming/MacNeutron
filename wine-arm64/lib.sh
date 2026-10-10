@@ -194,21 +194,29 @@ pe_baseline_check() {  # pe_baseline_check <wine-build dir>
 
 # ARM64EC code must not use what an x64 context can't hold: x13, x14, x23, x24, x28, v16-v31; a context round trip
 # zeroes them (Wine's dlls/ntdll/unwind.h:147-168). Clang never picks them; hand-written assembly can, and llvm-mingw
-# only warns. The msvcrt family's string.o carries Arm Optimized Routines (batch Task 6).
+# only warns. The msvcrt family's string.o carries Arm Optimized Routines (batch Task 6). Fails closed: each string.o
+# disassembles to 6,700-9,700 instruction lines today, so a failed llvm-objdump or a format the filter no longer
+# matches dies instead of passing on nothing.
 ec_regs_check() {  # ec_regs_check <wine-build dir>
+  _er_od="$(sh "$ROOT/dxmt/toolchain.sh")/llvm-objdump"
   for _er_m in msvcrt ucrtbase msvcr80 msvcr90 msvcr100 msvcr110 msvcr120; do
     _er_o="$1/dlls/$_er_m/arm64ec-windows/string.o"
     [ -f "$_er_o" ] || die "no $_er_o: run ec_regs_check after make"
-    _er_h=$(llvm-objdump -d --no-show-raw-insn --no-leading-addr "$_er_o" | sed -n 's|//.*||; s/<[^>]*>//g; /^[[:space:]]/p' \
+    _er_d=$("$_er_od" -d --no-show-raw-insn --no-leading-addr "$_er_o") \
+      || die "$_er_m's ARM64EC string.o: llvm-objdump failed"
+    _er_d=$(printf '%s\n' "$_er_d" | sed -n 's|//.*||; s/<[^>]*>//g; /^[[:space:]]/p')
+    _er_n=$(printf '%s\n' "$_er_d" | wc -l)
+    [ "$_er_n" -ge 1000 ] || die "$_er_m's ARM64EC string.o: no disassembly ($((_er_n)) of 1000+ lines)"
+    _er_h=$(printf '%s\n' "$_er_d" \
       | LC_ALL=C /usr/bin/grep -m 1 -E '[[:space:],[{]([xw](13|14|23|24|28)|[vqdsbh](1[6-9]|2[0-9]|3[01]))([^0-9]|$)' || true)
     [ -z "$_er_h" ] || die "$_er_m's ARM64EC string.o uses a register x64 code can't hold:$_er_h"
   done
 }
 
 # The CRT and DirectX redistributables' builtins replace a game's own x64 copies: version_heuristics sends a Microsoft
-# DLL to LO_DEFAULT (Wine's dlls/ntdll/unix/loadorder.c:431), and none of these prefers native, Wine's 0x10 in the
-# DllCharacteristics (set by tools/winebuild/build.h:210, read by dlls/ntdll/unix/unix_private.h:430). A rebase that
-# changes either moves them under FEX (native REPORT §3 R7; batch Task 7).
+# DLL to LO_DEFAULT (Wine's dlls/ntdll/unix/loadorder.c:431), and none of those listed below prefers native, Wine's
+# 0x10 in the DllCharacteristics (set by tools/winebuild/build.h:210, read by dlls/ntdll/unix/unix_private.h:430). A
+# rebase that changes either moves them under FEX (native REPORT §3 R7; batch Task 7).
 CRT_BUILTINS="ucrtbase vcruntime140 vcruntime140_1 msvcp140 msvcp140_1 msvcp140_2 msvcp140_atomic_wait msvcp140_codecvt_ids"
 CRT_BUILTINS="$CRT_BUILTINS concrt140 vcomp140 msvcr120 msvcp120 msvcr100 msvcp100 d3dcompiler_43 d3dcompiler_47 d3dx9_43"
 CRT_BUILTINS="$CRT_BUILTINS d3dx10_43 d3dx11_43 xaudio2_7 xaudio2_9 x3daudio1_7 xapofx1_5 xinput1_3 xinput1_4 xinput9_1_0"

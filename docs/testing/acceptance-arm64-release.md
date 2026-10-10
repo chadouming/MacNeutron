@@ -1797,7 +1797,8 @@ msync's abandoned mutex on TerminateThread (kernel32 `sync.c:416/:420`), and the
 through is made writable.`, `macneutron` 0c40afb on 79874a0, after fix rounds 1 and 2 (Rulings R46-R48); 6fe9c96 before them) fills an ARM64EC importer's auxiliary IAT at load and puts
 an entry back on its check stub when a page it was resolved through is made writable (Ruling R13, option B).** It is
 ours and local only. The arm64ec lane's import calls drop to, or toward, the arm64 lane's cost: get-current-thread-id,
-get-last-error and tls-get-value 1.7-2.5 → 0.7 ns, get-tick-count 1.7 → 1.1, memcpy-16 3.0 → 1.9.
+get-last-error and tls-get-value 1.7-2.5 → 0.7 ns, get-tick-count 1.7 → 1.5 on the final 0034 (1.1 on 6fe9c96 before
+the fix rounds; 0.7-1.6 with 0035, bimodal within a set, cause not found), memcpy-16 3.0 → 1.9.
 
 What 0034 does (`dlls/ntdll/signal_arm64ec.c`, `loader.c`, `ntdll_misc.h`):
 - **The fill.** Once a module's imports are bound (`fixup_imports`, not under `+relay` or `+snoop`), each entry whose
@@ -1936,7 +1937,9 @@ and end, idle checks empty, load 1.76-1.99, 167 s each; `lanes_report.py build/l
 - Lanes, two idle runs on AC (load 1.75-2.20; `t5-f1-lanes-run{1,2}.log`): the arm64ec xcall rows get-current-thread-id,
   get-last-error and tls-get-value read 0.7 ns as in t5, memcpy-16 1.9. get-tick-count reads 1.5 / 1.6 against t5's 1.1
   and qpc 15.9 / 16.6, while the arm64 lane, which has no auxiliary IAT, moved too (qpc 15.4 → 16.5, memcpy-4k-offset
-  45.6 → 55.7 / 48.9). With the filled counts unchanged, read as session variance.
+  45.6 → 55.7 / 48.9). With the filled counts unchanged, qpc and the arm64 lane read as session variance. get-tick-count
+  doesn't: the final 0034 reads 1.5-1.6 in both of its sets (t5-f1; t6-control-0034 1.5/1.6/1.5), so 1.1 was
+  6fe9c96's; later sets mix 0.7-0.9 and 1.5-1.6 runs in one session.
 - Re-export: `git status --short wine-arm64/patches` shows only ` M …/0034-ntdll-Fill-the-ARM64EC-auxiliary-IAT-and-revert-an-e.patch`;
   the fresh-fetch proof prints `applied 34/34` and `tree-equal` (tree f7b61747…); an applied-mode rebuild stages the
   tested ntdll (disassembly SHA-256 137d8999…).
@@ -2123,13 +2126,13 @@ and end):
 
 ## Redistributable builtins (batch Task 7)
 
-2026-10-10. **`bundle.sh` now fails if the CRT and DirectX redistributables' builtins could stop replacing a game's own
-x64 copies** (native REPORT §3 R7, Ruling R14). Wine replaces a Microsoft DLL in a game's folder with its builtin of
-that name because `version_heuristics` sends a DLL whose CompanyName is Microsoft to `LO_DEFAULT`
-(`dlls/ntdll/unix/loadorder.c:431`) and the builtin doesn't prefer native (Wine's 0x10 in the DllCharacteristics,
-`tools/winebuild/build.h:210`, read by `dlls/ntdll/unix/unix_private.h:430`). A builtin that prefers native, or a
-rebase that changes either rule, leaves the game's x64 copy running under FEX, silently. No Wine patch: Wine stays at
-0035 (887f9c1).
+2026-10-10. **`bundle.sh` now fails if the CRT and DirectX redistributables' builtins (the 26 in `CRT_BUILTINS`) could
+stop replacing a game's own x64 copies** (native REPORT §3 R7, Ruling R14). Wine replaces a Microsoft DLL in a game's
+folder with its builtin of that name because `version_heuristics` sends a DLL whose CompanyName is Microsoft to
+`LO_DEFAULT` (`dlls/ntdll/unix/loadorder.c:431`) and the builtin doesn't prefer native (Wine's 0x10 in the
+DllCharacteristics, `tools/winebuild/build.h:210`, read by `dlls/ntdll/unix/unix_private.h:430`). A builtin that
+prefers native, or a rebase that changes either rule, leaves the game's x64 copy running under FEX, silently. No Wine
+patch: Wine stays at 0035 (887f9c1).
 
 **The guard.** `lib.sh`'s `prefer_native_check <aarch64-windows dir> <Wine source tree>`, called by `bundle.sh` after
 the version-resource check, before staging (a failure stages nothing). It dies when one of `CRT_BUILTINS` has 0x10 set
@@ -2143,9 +2146,9 @@ concrt140 vcomp140 msvcr120 msvcp120 msvcr100 msvcp100 d3dcompiler_43 d3dcompile
 d3dx10_43 d3dx11_43 xaudio2_7 xaudio2_9 x3daudio1_7 xapofx1_5 xinput1_3 xinput1_4 xinput9_1_0
 ```
 
-On today's bundle all 26 read `0x160` and `mfplat.dll` `0x170` (`t7-guard-messages.log`). `msvcp60` also prefers
-native (`0x170`), upstream's choice, and isn't listed; the README's "Next Wine rebase" says to read upstream's reason
-before changing the list. The guard's messages, from scratch copies (`t7-guard-messages.log`):
+On today's bundle all 26 read `0x160` and `mfplat.dll` `0x170` (`t7-guard-messages.log`). `msvcp60`, `msvcm80` and
+`msvcm90` also prefer native (`0x170`), upstream's choice, and aren't listed; the README's "Next Wine rebase" says to
+read upstream's reason before changing the list. The guard's messages, from scratch copies (`t7-guard-messages.log`):
 `ucrtbase.dll prefers native (0x170): a game's x64 copy would run under FEX` (mfplat.dll copied over it), `can't read
 xinput9_1_0.dll's DllCharacteristics` (missing), `ntdll no longer reads prefer-native as 0x0010
 (dlls/ntdll/unix/unix_private.h)` (0x0020), `loadorder.c's version_heuristics no longer sends Microsoft DLLs to

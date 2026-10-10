@@ -109,8 +109,8 @@ With an app in native full screen on the main display, Wine's windows open on th
 The lanes compare our DXMT with D3DMetal on the frozen reference's Rosetta runtime, as `make dxmt-check` does, so they
 need what it needs: the frozen reference (`MACNEUTRON_REFERENCE`).
 `dxmt-x64`'s FSR 3 swap chain check also needs SMITE 2 installed in Steam's default library (its `amd_fidelityfx_dx12.dll` is read
-from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`, then `fex-vmd`) don't
-run.
+from `~/Library/Application Support/Steam/steamapps/common/SMITE 2`, never copied): without it `dxmt-x64` fails naming the skip, and the steps after it (`g4-bench`, then the batch's `fex-vmd`,
+`winetests`, `ec-hook` and `crt`) don't run.
 
 The batch's gated steps (`BATCH`), run last, after `g4-bench`:
 
@@ -231,9 +231,10 @@ re-clone; that is why they wait for the rebase.
   sets `VER_` and that ships without a version resource.
 - Keep patch 0014 even if it looks unneeded: a missing dylib then falls back silently instead of crashing
   (`docs/research/2026-10-04-ship-base/brief.md`).
-- bundle.sh's prefer_native_check fails if a CRT or DirectX redistributable builtin prefers native, ntdll reads another
-  prefer-native bit, or version_heuristics stops sending Microsoft DLLs to LO_DEFAULT: read upstream's reason before
-  changing CRT_BUILTINS.
+- bundle.sh's prefer_native_check fails if one of lib.sh's CRT_BUILTINS (26 CRT and DirectX redistributables; the
+  families' other versions are not checked) prefers native, ntdll reads another prefer-native bit, or
+  version_heuristics stops sending Microsoft DLLs to LO_DEFAULT: read upstream's reason before changing CRT_BUILTINS.
+  msvcp60, msvcm80 and msvcm90 prefer native upstream (0x170) and aren't listed.
 
 ## Licences
 
