@@ -90,7 +90,7 @@ one with an extra FEX external (gate S1). The ship-base steps (ship-base spec §
 | `x18` | Gate S5: 16 threads checking x18 (T1), every path to unix code and back in both lanes (T2), a double enable that must reach the toggle's trap, which exits 133 in self-test mode without a crash report (T3), a suspend stress (T4), and where `ntdll.so` names x18 |
 | `fonts-tls` | Gate S2: Tahoma's metrics and dialog base units (win32u's FreeType), DirectWrite's font families, schannel credentials and a PFX import (gnutls) |
 | `steam-bridge` | Gate S7: the arm64 Steam bridge, below |
-| `fex-vmd` | FEX patch 0006 (batch Task 4): EVMD over x64-litmus shows MP reordering, listed instructions keep TSO (all of `run` and `worker`, or only MP's flag store and load), FEX logs its coverage; x64-bench's scalar-memory kernels run in at most 0.75 of their time with their ranges |
+| `fex-vmd` | FEX patch 0006 (batch Task 4): EVMD over x64-litmus shows MP reordering, listed instructions keep TSO (all of `run` and `worker`, or only MP's flag store and load), FEX logs its coverage; x64-bench's scalar-memory kernels run in at most 0.75 of their time with their ranges; a batch step (`BATCH`), run last, after G4 |
 
 `lanes` (`make lanes-check`), run by name and not in the full run, measures rather than gates: `x64-sync` and `arm64-xcall` as ARM64, ARM64EC and x64 (FEX) programs in mode 1, passing when each program passes and prints its 16 time rows; `tools/lanes_report.py` turns three runs' `lanes.log` into the table of `docs/testing/acceptance-arm64-release.md` (batch Task 2's baseline).
 
@@ -289,9 +289,9 @@ re-clone; that is why they wait for the rebase.
     (the others it lists, `83e12849f`, `87b40c220` and `db4f32768`, are named there as not taken).
   - 0002 is ours.
   - 0006 (volatile-metadata ranges, clamped to their image, run every block they cover without TSO; listed GPR accesses
-    and MonoHacks-flagged accesses keep it; vector accesses follow VectorTSOEnabled; x87 FIST/FISTP stores follow
-    VectorTSOEnabled; REP MOVS/STOS follow MemcpySetTSOEnabled; in EVMD only a bare module name covers a whole module;
-    the VolatileMetadata switch is read again; a coverage line per image) is ours and stays local.
+    and MonoHacks-flagged accesses keep it; vector accesses follow VectorTSOEnabled; x87 FIST/FISTP/FISTTP stores follow
+    VectorTSOEnabled; MOVS/STOS, with or without REP, follow MemcpySetTSOEnabled; in EVMD only a bare module name covers
+    a whole module; the VolatileMetadata switch is read again; a coverage line per image) is ours and stays local.
   - Madeira's commits we use are dated before 2026-08-28. Its `LICENSE-MADEIRA.md` says modifications published before
     then were granted under MIT, irrevocably. A Madeira commit published on or after that date would be GPL-3, so check
     the date before importing another. This is not legal advice.
