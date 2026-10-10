@@ -2231,3 +2231,28 @@ steam_osx` 15329, read-only, before each run; AC at every start and end; the scr
 - Not covered: a game that ships one of the 26 DLLs in its folder is not run here (the guard checks the rules that send
   it to the builtin, not a game's load); `CRT_BUILTINS` is a fixed list, so a redistributable builtin Wine adds later is
   guarded only once someone lists it.
+
+## SMITE 2 on Wine 0033-0035 (batch final review)
+
+2026-10-10, the first real-game run of Wine 0033 (critical sections on the Windows 2003 SP1+ encoding), 0034 (the
+ARM64EC auxiliary IAT) and 0035 (Arm Optimized Routines in msvcrt), together with 0031, 0032 and FEX 0006. The final
+whole-branch review asked for it before the next tag.
+
+- **Runtime:** a development `build/MacNeutron.app` from `make app` at c7afa42 (`runtime=dev (128b17e148e7)` in
+  `launcher.log`; its ntdll is `wine-11.19-35-g887f9c1`). Built-in display, AC power, Steam bridge on.
+- **Launch line:** `/usr/bin/env DXMT_D3D12_SM6=1 MACNEUTRON_LOG=1 FEX_SILENTLOG=0 %command%`; the maintainer played the
+  lobby and a practice match (game process 14:31:29-14:33:44, 2 min 15 s).
+- **Result:** `exit=0`. The new log section has no `wait timed out`, no unhandled exception, no page fault and no
+  `err:seh` line; it ends with the normal RPC shutdown and `AppPolicyGetProcessTerminationMethod`.
+  - `exception outside of stack limits` warnings appear as in the earlier runs (3,998 here; 3,350 and 12,619 in the
+    2026-10-09 FEX 0006 runs A and B), so they predate these patches.
+- **FEX 0006** applied the same 16 images' tables as run A (`Hemingway-Win64-Shipping.exe`: 18 ranges, 119,767,488
+  bytes).
+- **DLLs loaded native:** the same set as run A (the game's x64 libraries, DXMT's `d3d12`/`dxgi`, the bridge's
+  `steam.exe`, `xaudio2_9redist.dll`).
+- **Load:** mean process CPU 381% over the in-game samples (after the first 30 s), peak RSS 5.0 GB; run A read 360%
+  and 4.2 GB. The maintainer reported that the frame rate felt higher ("I feel like we won FPS"); no frame counter was
+  recorded, so a higher CPU share at a higher frame rate is not a regression signal. One short session: treat the
+  numbers as indicative.
+- **Not covered:** a third-party hooking overlay (Discord, MinHook-style mods) loading during start-up, which is 0034's
+  suspend case; an oversubscribed CPU; a long session.
